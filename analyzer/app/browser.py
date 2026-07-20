@@ -1,0 +1,629 @@
+"""Playwright orkestrasyonu: SSRF-guvenli gezinme, pasif ozellik cikarma,
+axe-core erisilebilirlik on kontrolu.
+
+Guvenlik modeli (bkz. docs/security.md "SSRF tehdit modeli"):
+
+1. Hedef URL, `app.url_safety.validate_public_url` ile **bir kez** DNS
+   cozumlemesinden gecirilir; tum cozumlenen IP'ler herkese acik olmalidir.
+2. Chromium, bu dogrulanan hostname->IP eslesmesine
+   `--host-resolver-rules` ile **sabitlenerek** (pinned) baslatilir; boylece
+   dogrulama ile gercek baglanti arasinda hostname tekrar cozumlenmez
+   (klasik DNS rebinding penceresi kapatilir) - ana navigasyon hedefi icin.
+3. Sayfadaki tum istekler (`page.route`) izlenir: pinlenmemis (ana
+   hostname'den farkli) her yeni hostname, istek gonderilmeden once ayni
+   sekilde dogrulanir (sema + DNS + engellenmis IP kontrolu); basarisiz
+   olursa istek `abort()` edilir. Bu ikincil hostname'ler (ör. yönlendirme
+   hedefleri, alt kaynaklar) Chromium'un kendi coz -umlemesini kullanir;
+   dolayisiyla bunlar icin sabitleme yapilamaz ve cok kisa bir TOCTOU
+   penceresi kalir - bu, bilinen ve dokumante edilmis bir kalan risktir.
+4. Redirect (yeni hostname'e navigasyon) sayisi `max_redirects` ile
+   sinirlanir.
+5. Yanit boyutu, `Content-Length` basligi uzerinden `max_response_bytes`
+   ile sinirlanir (en iyi caba: `Content-Length` gondermeyen "chunked"
+   yanitlar yalnizca navigasyon zaman asimiyla sinirlanir).
+6. Form gonderme, giris yapma veya herhangi bir tiklama/etkilesim
+   **yapilmaz**; yalnizca navigasyon + pasif okuma (DOM, screenshot,
+   performance, axe-core) gerceklestirilir.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+
+from axe_playwright_python.async_playwright import Axe
+from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import Route
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright
+
+from app.config import settings
+from app.schemas import (
+    DeviceNetworkAnalysisResponse,
+    DeviceNetworkProfileResult,
+    DeviceNetworkTimings,
+    PageFeatureSnapshotV1,
+)
+from app.url_safety import UnsafeUrlError, is_blocked_ip, resolve_host_ips, validate_public_url, validate_url_syntax
+
+logger = logging.getLogger("analyzer.browser")
+
+_semaphore = asyncio.Semaphore(settings.max_concurrent_analyses)
+
+
+class AnalysisError(Exception):
+    """SSRF disi, calisma zamani analiz hatalari (timeout, yanit boyutu, motor hatasi)."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+async def _validate_and_cache_host(hostname: str, validated_hosts: dict[str, bool]) -> None:
+    if hostname in validated_hosts:
+        if not validated_hosts[hostname]:
+            raise UnsafeUrlError(f"Host onceden guvensiz bulunmustu: {hostname}")
+        return
+    try:
+        ips = await asyncio.to_thread(resolve_host_ips, hostname)
+    except UnsafeUrlError:
+        validated_hosts[hostname] = False
+        raise
+    if any(is_blocked_ip(ip) for ip in ips):
+        validated_hosts[hostname] = False
+        raise UnsafeUrlError(f"Host engellenmis bir IP'ye cozumleniyor: {hostname}")
+    validated_hosts[hostname] = True
+
+
+def _make_route_handler(pinned_hostname: str, validated_hosts: dict[str, bool], redirect_state: dict[str, int]):
+    async def handler(route: Route) -> None:
+        request = route.request
+        url = request.url
+        try:
+            _, hostname = validate_url_syntax(url)
+        except UnsafeUrlError as exc:
+            logger.warning("istek engellendi (sema/hostname gecersiz): %s", exc.reason)
+            await route.abort()
+            return
+
+        if hostname != pinned_hostname:
+            if request.resource_type == "document":
+                redirect_state["count"] += 1
+                if redirect_state["count"] > settings.max_redirects:
+                    logger.warning("redirect siniri asildi (%s): %s", settings.max_redirects, url)
+                    await route.abort()
+                    return
+            try:
+                await _validate_and_cache_host(hostname, validated_hosts)
+            except UnsafeUrlError as exc:
+                logger.warning("istek engellendi (SSRF): %s", exc.reason)
+                await route.abort()
+                return
+
+        await route.continue_()
+
+    return handler
+
+
+_FEATURE_EXTRACTION_JS = """
+() => {
+  function isVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function relativeLuminance(r, g, b) {
+    const chan = (c) => {
+      c /= 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b);
+  }
+
+  function parseColor(str) {
+    const m = (str || '').match(/rgba?\\(([^)]+)\\)/);
+    if (!m) return null;
+    const parts = m[1].split(',').map((s) => parseFloat(s.trim()));
+    return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+  }
+
+  function effectiveBackground(el) {
+    let node = el;
+    while (node) {
+      const style = window.getComputedStyle(node);
+      const color = parseColor(style.backgroundColor);
+      if (color && color.a > 0) return color;
+      node = node.parentElement;
+    }
+    return { r: 255, g: 255, b: 255, a: 1 };
+  }
+
+  function contrastRatio(fg, bg) {
+    const l1 = relativeLuminance(fg.r, fg.g, fg.b) + 0.05;
+    const l2 = relativeLuminance(bg.r, bg.g, bg.b) + 0.05;
+    return l1 > l2 ? l1 / l2 : l2 / l1;
+  }
+
+  const title = document.title || '';
+  const headingEls = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6')).filter(isVisible);
+  const headings = headingEls.slice(0, 50).map((el, i) => ({
+    level: parseInt(el.tagName.substring(1), 10),
+    text: (el.innerText || '').trim().slice(0, 200),
+    order: i,
+  }));
+
+  const bodyText = (document.body ? document.body.innerText : '') || '';
+  const words = bodyText.trim().split(/\\s+/).filter(Boolean);
+  const sentences = bodyText.split(/[.!?]+/).map((s) => s.trim()).filter(Boolean);
+  const sentenceWordCounts = sentences.map((s) => s.split(/\\s+/).filter(Boolean).length);
+  const avgSentenceWordCount = sentenceWordCounts.length
+    ? sentenceWordCounts.reduce((a, b) => a + b, 0) / sentenceWordCounts.length
+    : 0;
+
+  const links = Array.from(document.querySelectorAll('a[href]')).filter(isVisible);
+  const buttons = Array.from(
+    document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')
+  ).filter(isVisible);
+  const forms = Array.from(document.querySelectorAll('form'));
+  const formFields = Array.from(
+    document.querySelectorAll('form input, form select, form textarea')
+  ).filter((el) => !['hidden', 'submit', 'button'].includes((el.getAttribute('type') || '').toLowerCase()) && isVisible(el));
+
+  const boxCandidates = [];
+  headingEls.slice(0, 5).forEach((el) => boxCandidates.push(['heading', el]));
+  buttons.slice(0, 8).forEach((el) => boxCandidates.push(['button', el]));
+  forms.slice(0, 5).forEach((el) => boxCandidates.push(['form', el]));
+  links.slice(0, 7).forEach((el) => boxCandidates.push(['link', el]));
+
+  const elementBoxes = boxCandidates.slice(0, 20).map(([role, el]) => {
+    const rect = el.getBoundingClientRect();
+    return { role, x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+
+  // Sentetik dikkat isi haritasi icin sinirli (bounded) yerlesim bolgeleri:
+  // yalnizca gorunur (viewport) alanla kesisen, GERCEK bir DOM elemanina
+  // karsilik gelen bolgeler viewport yuzdesi olarak donulur; element metni
+  // ASLA okunmaz/saklanmaz. Eslesen bir eleman yoksa (ör. <footer> yok) o
+  // bolge icin null donulur - rastgele/tahmini koordinat uretilmez.
+  function boundedBoxPercent(el) {
+    if (!el || !isVisible(el)) return null;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const x = Math.max(0, rect.x);
+    const y = Math.max(0, rect.y);
+    const width = Math.min(rect.x + rect.width, vw) - x;
+    const height = Math.min(rect.y + rect.height, vh) - y;
+    if (width <= 0 || height <= 0) return null;
+    return {
+      x_pct: Math.round((x / vw) * 10000) / 100,
+      y_pct: Math.round((y / vh) * 10000) / 100,
+      width_pct: Math.round((width / vw) * 10000) / 100,
+      height_pct: Math.round((height / vh) * 10000) / 100,
+    };
+  }
+
+  const navEl = document.querySelector('nav, header');
+  const heroEl = headingEls[0] || null;
+  const ctaEl = buttons[0] || null;
+  const contentEl = document.querySelector('main, article');
+  const footerEl = document.querySelector('footer');
+
+  const layoutRegions = {
+    ust_navigasyon: boundedBoxPercent(navEl),
+    hero_baslik: boundedBoxPercent(heroEl),
+    birincil_cta: boundedBoxPercent(ctaEl),
+    govde_metni: boundedBoxPercent(contentEl),
+    alt_bilgi: boundedBoxPercent(footerEl),
+  };
+
+  const textCandidates = Array.from(document.querySelectorAll('body *')).filter((el) => {
+    if (!isVisible(el)) return false;
+    const ownText = Array.from(el.childNodes)
+      .filter((n) => n.nodeType === Node.TEXT_NODE)
+      .map((n) => n.textContent.trim())
+      .join('');
+    return ownText.length >= 3;
+  });
+
+  const sampleStep = Math.max(1, Math.floor(textCandidates.length / 15));
+  const contrastCandidates = [];
+  for (let i = 0; i < textCandidates.length && contrastCandidates.length < 15; i += sampleStep) {
+    const el = textCandidates[i];
+    const style = window.getComputedStyle(el);
+    const fg = parseColor(style.color);
+    if (!fg) continue;
+    const bg = effectiveBackground(el);
+    const ratio = contrastRatio(fg, bg);
+    const classPart = el.className && typeof el.className === 'string'
+      ? '.' + el.className.split(' ').filter(Boolean).slice(0, 2).join('.')
+      : '';
+    contrastCandidates.push({
+      selector: (el.tagName.toLowerCase() + classPart).slice(0, 100),
+      foreground: style.color,
+      background: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,
+      ratio: Math.round(ratio * 100) / 100,
+      meets_aa: ratio >= 4.5,
+    });
+  }
+
+  const timing = performance.timing;
+  const navStart = timing.navigationStart;
+  const domContentLoadedMs = timing.domContentLoadedEventEnd > 0 ? timing.domContentLoadedEventEnd - navStart : null;
+  const loadEventMs = timing.loadEventEnd > 0 ? timing.loadEventEnd - navStart : null;
+  const paintEntries = performance.getEntriesByType ? performance.getEntriesByType('paint') : [];
+  const fcpEntry = paintEntries.find((e) => e.name === 'first-contentful-paint');
+
+  return {
+    title,
+    headings,
+    text_stats: {
+      word_count: words.length,
+      avg_sentence_word_count: Math.round(avgSentenceWordCount * 100) / 100,
+      visible_text_char_count: bodyText.length,
+      heading_count: headingEls.length,
+    },
+    controls: {
+      link_count: links.length,
+      button_count: buttons.length,
+      form_count: forms.length,
+      form_field_count: formFields.length,
+    },
+    element_boxes: elementBoxes,
+    layout_regions: layoutRegions,
+    performance: {
+      dom_content_loaded_ms: domContentLoadedMs,
+      load_event_ms: loadEventMs,
+      first_contentful_paint_ms: fcpEntry ? Math.round(fcpEntry.startTime * 100) / 100 : null,
+      total_navigation_ms: loadEventMs,
+    },
+    contrast_candidates: contrastCandidates,
+  };
+}
+"""
+
+
+def _build_snapshot(
+    *,
+    url: str,
+    final_url: str,
+    redirect_count: int,
+    features: dict,
+    screenshot_bytes: bytes,
+    axe_response: dict,
+    warnings: list[str],
+) -> PageFeatureSnapshotV1:
+    accessibility = {
+        "violations": [
+            {
+                "rule_id": v["id"],
+                "impact": v.get("impact"),
+                "help": v.get("help", ""),
+                "nodes_count": len(v.get("nodes", [])),
+            }
+            for v in axe_response.get("violations", [])
+        ],
+        "passes_count": len(axe_response.get("passes", [])),
+        "incomplete_count": len(axe_response.get("incomplete", [])),
+    }
+
+    payload = {
+        "url": url,
+        "final_url": final_url,
+        "redirect_count": redirect_count,
+        "title": features["title"],
+        "headings": features["headings"],
+        "text_stats": features["text_stats"],
+        "controls": features["controls"],
+        "element_boxes": features["element_boxes"],
+        "layout_regions": features["layout_regions"],
+        "performance": features["performance"],
+        "contrast_candidates": features["contrast_candidates"],
+        "accessibility_precheck": accessibility,
+        "screenshot": {
+            "width": settings.viewport_width,
+            "height": settings.viewport_height,
+            "base64_data": base64.b64encode(screenshot_bytes).decode("ascii"),
+        },
+        "warnings": warnings,
+    }
+    return PageFeatureSnapshotV1.model_validate(payload)
+
+
+async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
+    context = await browser.new_context(
+        viewport={"width": settings.viewport_width, "height": settings.viewport_height}
+    )
+    page = await context.new_page()
+    page.set_default_navigation_timeout(settings.navigation_timeout_seconds * 1000)
+    page.set_default_timeout(settings.navigation_timeout_seconds * 1000)
+
+    validated_hosts: dict[str, bool] = {validated.hostname: True}
+    redirect_state = {"count": 0}
+    oversized = {"flag": False}
+    warnings: list[str] = []
+
+    async def _on_response(response) -> None:
+        try:
+            length = response.headers.get("content-length")
+            if length and int(length) > settings.max_response_bytes:
+                oversized["flag"] = True
+                await context.close()
+        except Exception:  # yanit basligi ayristirma hatalari analiz basarisizligina donusmemeli
+            logger.debug("content-length kontrolu basarisiz oldu", exc_info=True)
+
+    page.on("response", _on_response)
+    await page.route("**/*", _make_route_handler(validated.hostname, validated_hosts, redirect_state))
+
+    try:
+        await page.goto(validated.url, wait_until="load")
+    except PlaywrightTimeoutError as exc:
+        raise AnalysisError(f"Sayfa zaman asimina ugradi ({settings.navigation_timeout_seconds}s)") from exc
+    except PlaywrightError as exc:
+        if oversized["flag"]:
+            raise AnalysisError(f"Yanit boyutu sinirini asti (>{settings.max_response_bytes} bayt)") from exc
+        raise AnalysisError(f"Sayfa yuklenemedi: {exc}") from exc
+
+    if oversized["flag"]:
+        raise AnalysisError(f"Yanit boyutu sinirini asti (>{settings.max_response_bytes} bayt)")
+
+    final_url = page.url
+    try:
+        _, final_hostname = validate_url_syntax(final_url)
+    except UnsafeUrlError as exc:
+        raise AnalysisError(f"Nihai URL guvensiz: {exc.reason}") from exc
+    if not validated_hosts.get(final_hostname):
+        raise AnalysisError("Nihai URL guvenlik dogrulamasindan gecemedi")
+
+    if redirect_state["count"] > 0:
+        warnings.append(f"{redirect_state['count']} yonlendirme takip edildi")
+
+    screenshot_bytes = await page.screenshot(full_page=False, type="png")
+    features = await page.evaluate(_FEATURE_EXTRACTION_JS)
+
+    axe = Axe()
+    axe_results = await axe.run(page, options={"resultTypes": ["violations", "passes", "incomplete"]})
+
+    await context.close()
+
+    return _build_snapshot(
+        url=validated.url,
+        final_url=final_url,
+        redirect_count=redirect_state["count"],
+        features=features,
+        screenshot_bytes=screenshot_bytes,
+        axe_response=axe_results.response,
+        warnings=warnings,
+    )
+
+
+# --- Ag ve cihaz testi (network_device_test) --------------------------------
+#
+# Sabit dort profil: her biri Playwright context secenekleri (viewport, user
+# agent, mobil/dokunma) + CDP `Network.emulateNetworkConditions` parametreleri
+# (bayt/sn, ms) tasir. Degerler Chrome DevTools "Fast 4G"/"Slow 3G"
+# presetlerine yakin secilmistir (yaklasik/onaylanmis degildir - bkz.
+# docs/methodology.md).
+
+DEVICE_NETWORK_PROFILES: dict[str, dict] = {
+    "desktop_broadband": {
+        "device_label": "Masaustu",
+        "network_label": "Genis bant (throttling yok)",
+        "context_options": {
+            "viewport": {"width": 1440, "height": 900},
+            "device_scale_factor": 1,
+            "is_mobile": False,
+            "has_touch": False,
+        },
+        "network": None,
+    },
+    "mobile_4g": {
+        "device_label": "Mobil",
+        "network_label": "4G (~4 Mbps indirme, 20ms gecikme)",
+        "context_options": {
+            "viewport": {"width": 390, "height": 844},
+            "device_scale_factor": 3,
+            "is_mobile": True,
+            "has_touch": True,
+            "user_agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+            ),
+        },
+        "network": {"download_bytes_per_sec": 4 * 1024 * 1024 // 8, "upload_bytes_per_sec": 3 * 1024 * 1024 // 8, "latency_ms": 20},
+    },
+    "mobile_slow_3g": {
+        "device_label": "Mobil",
+        "network_label": "Yavas 3G (~400 Kbps, 400ms gecikme)",
+        "context_options": {
+            "viewport": {"width": 390, "height": 844},
+            "device_scale_factor": 2,
+            "is_mobile": True,
+            "has_touch": True,
+            "user_agent": (
+                "Mozilla/5.0 (Linux; Android 10; SM-G960F) AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Mobile Safari/537.36"
+            ),
+        },
+        "network": {"download_bytes_per_sec": 400 * 1024 // 8, "upload_bytes_per_sec": 400 * 1024 // 8, "latency_ms": 400},
+    },
+    "tablet_wifi": {
+        "device_label": "Tablet",
+        "network_label": "Wi-Fi (throttling yok)",
+        "context_options": {
+            "viewport": {"width": 810, "height": 1080},
+            "device_scale_factor": 2,
+            "is_mobile": True,
+            "has_touch": True,
+        },
+        "network": None,
+    },
+}
+
+_TIMING_EXTRACTION_JS = """
+() => {
+  const timing = performance.timing;
+  const navStart = timing.navigationStart;
+  const domContentLoadedMs = timing.domContentLoadedEventEnd > 0 ? timing.domContentLoadedEventEnd - navStart : null;
+  const loadEventMs = timing.loadEventEnd > 0 ? timing.loadEventEnd - navStart : null;
+  return {
+    dom_content_loaded_ms: domContentLoadedMs,
+    load_event_ms: loadEventMs,
+    total_navigation_ms: loadEventMs,
+  };
+}
+"""
+
+
+async def _measure_device_network_profile(
+    browser, validated, profile_key: str, profile: dict
+) -> DeviceNetworkProfileResult:
+    context = None
+    try:
+        context = await browser.new_context(**profile["context_options"])
+        page = await context.new_page()
+        page.set_default_navigation_timeout(settings.navigation_timeout_seconds * 1000)
+        page.set_default_timeout(settings.navigation_timeout_seconds * 1000)
+
+        validated_hosts: dict[str, bool] = {validated.hostname: True}
+        redirect_state = {"count": 0}
+        await page.route("**/*", _make_route_handler(validated.hostname, validated_hosts, redirect_state))
+
+        network = profile.get("network")
+        if network is not None:
+            cdp = await context.new_cdp_session(page)
+            await cdp.send("Network.enable")
+            await cdp.send(
+                "Network.emulateNetworkConditions",
+                {
+                    "offline": False,
+                    "latency": network["latency_ms"],
+                    "downloadThroughput": network["download_bytes_per_sec"],
+                    "uploadThroughput": network["upload_bytes_per_sec"],
+                },
+            )
+
+        await page.goto(validated.url, wait_until="load")
+
+        timings_raw = await page.evaluate(_TIMING_EXTRACTION_JS)
+        timings = DeviceNetworkTimings.model_validate(timings_raw)
+
+        axe = Axe()
+        axe_results = await axe.run(page, options={"resultTypes": ["violations"]})
+        violation_count = len(axe_results.response.get("violations", []))
+
+        return DeviceNetworkProfileResult(
+            profile_key=profile_key,
+            device_label=profile["device_label"],
+            network_label=profile["network_label"],
+            succeeded=True,
+            timings=timings,
+            accessibility_violation_count=violation_count,
+        )
+    except PlaywrightTimeoutError:
+        return DeviceNetworkProfileResult(
+            profile_key=profile_key,
+            device_label=profile["device_label"],
+            network_label=profile["network_label"],
+            succeeded=False,
+            error=f"Sayfa zaman asimina ugradi ({settings.navigation_timeout_seconds}s)",
+        )
+    except (PlaywrightError, UnsafeUrlError) as exc:
+        return DeviceNetworkProfileResult(
+            profile_key=profile_key,
+            device_label=profile["device_label"],
+            network_label=profile["network_label"],
+            succeeded=False,
+            error=str(exc),
+        )
+    finally:
+        if context is not None:
+            await context.close()
+
+
+async def analyze_device_network(url: str, profile_keys: list[str]) -> DeviceNetworkAnalysisResponse:
+    """Verilen URL'yi sabit cihaz/ag profillerinde gercekten olcer (Playwright + CDP throttling).
+
+    `analyze_url` ile ayni SSRF modelini kullanir (bir kez DNS dogrulamasi +
+    host-resolver-rules pinleme); tek bir profilin basarisiz olmasi (timeout
+    vb.) digerlerinin islenmesini engellemez - o profil `succeeded=False` ile
+    kaydedilir (bkz. `error_rate`).
+    """
+
+    unknown = [key for key in profile_keys if key not in DEVICE_NETWORK_PROFILES]
+    if unknown:
+        raise AnalysisError(f"Bilinmeyen cihaz/ag profili: {', '.join(unknown)}")
+
+    validated = validate_public_url(url)
+    pinned_ip = validated.resolved_ips[0]
+    host_rule = f"MAP {validated.hostname} {pinned_ip}"
+
+    warnings: list[str] = []
+    results: list[DeviceNetworkProfileResult] = []
+
+    async with _semaphore:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=[
+                    f"--host-resolver-rules={host_rule}",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
+            try:
+                for profile_key in profile_keys:
+                    profile = DEVICE_NETWORK_PROFILES[profile_key]
+                    result = await _measure_device_network_profile(browser, validated, profile_key, profile)
+                    if not result.succeeded:
+                        warnings.append(f"Profil basarisiz ({profile_key}): {result.error}")
+                    results.append(result)
+            finally:
+                await browser.close()
+
+    failed_count = sum(1 for r in results if not r.succeeded)
+    error_rate = round(failed_count / len(results), 4) if results else 0.0
+
+    return DeviceNetworkAnalysisResponse(
+        url=validated.url,
+        results=results,
+        error_rate=error_rate,
+        warnings=warnings,
+    )
+
+
+async def analyze_url(url: str) -> PageFeatureSnapshotV1:
+    """Verilen URL'yi guvenlik dogrulamasindan gecirir ve pasif olarak analiz eder.
+
+    `UnsafeUrlError` (SSRF/sema reddi) ve `AnalysisError` (timeout, boyut,
+    motor hatasi) ayri turler olarak firlatilir; cagiran taraf (bkz.
+    `app.main`) bunlari farkli HTTP durum kodlarina esler.
+    """
+
+    validated = validate_public_url(url)
+    pinned_ip = validated.resolved_ips[0]
+    host_rule = f"MAP {validated.hostname} {pinned_ip}"
+
+    async with _semaphore:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=[
+                    f"--host-resolver-rules={host_rule}",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
+            try:
+                return await _run_analysis(browser, validated)
+            finally:
+                await browser.close()
+
+
+__all__ = ["AnalysisError", "analyze_url"]

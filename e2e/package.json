@@ -1,0 +1,13 @@
+{
+  "name": "synthetix-ux-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Playwright tarayici E2E testleri. KASITLI olarak frontend/backend'in production paketlerinden AYRI tutulur; bu klasordeki hicbir bagimlilik frontend build'ine girmez.",
+  "scripts": {
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.49.1"
+  }
+}

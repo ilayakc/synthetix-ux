@@ -1,0 +1,170 @@
+:root {
+  /* Zemin: hafif lavanta tonlu, ferah B2B SaaS gorunumu */
+  --color-bg: #f5f3fb;
+  --color-surface: #ffffff;
+  --color-border: #e5e1f0;
+
+  --color-text: #1c1c22;
+  --color-text-muted: #6b6b76;
+
+  /* Vurgu: mor */
+  --color-accent: #6d28d9;
+  --color-accent-hover: #5b21b6;
+  --color-accent-soft: #ede9fe;
+  --color-accent-contrast: #ffffff;
+
+  --color-warning-bg: #fef3c7;
+  --color-warning-border: #f6d789;
+  --color-warning-text: #7a5b00;
+
+  --color-danger-bg: #fee2e2;
+  --color-danger-border: #fca5a5;
+  --color-danger-text: #991b1b;
+
+  /* Basari vurgusu: turkuaz (yesil degil) */
+  --color-success-bg: #e6fbf7;
+  --color-success-border: #99e6da;
+  --color-success-text: #0f766e;
+
+  --shadow-card: 0 1px 2px rgba(31, 22, 66, 0.04), 0 8px 20px rgba(31, 22, 66, 0.06);
+
+  /* Rapor A/B karsilastirmasi: iki sabit seri rengi (kimlik her zaman ayrica
+     metin etiketiyle de tasinir, bkz. dataviz skill - "renk tek bilgi
+     tasiyici olmasin"). Dogrulanmis: node scripts/validate_palette.js
+     "#6d28d9,#b45309" --mode light */
+  --color-series-a: #6d28d9;
+  --color-series-b: #b45309;
+
+  --sidebar-width: 248px;
+  --topbar-height: 56px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 18px;
+
+  --font-sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+
+  --focus-ring: 0 0 0 3px rgba(109, 40, 217, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  /* `data-theme` ayarli degilse (tema tercihi "system") bu blok gecerli
+     olur. Kullanici acik/koyu temayi elle secince asagidaki
+     `[data-theme="dark"]`/`[data-theme="light"]` kurallari (daha yuksek
+     ozgunlukte, `:root[data-theme=...]`) bu bloku gecersiz kilar. */
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --color-bg: #17171c;
+    --color-surface: #202027;
+    --color-border: #302f38;
+    --color-text: #f2f2f5;
+    --color-text-muted: #a3a3ad;
+    --color-accent: #a78bfa;
+    --color-accent-hover: #c4b5fd;
+    --color-accent-soft: #2f2650;
+    --color-accent-contrast: #17171c;
+    --color-warning-bg: #3a2f0b;
+    --color-warning-border: #5c4a10;
+    --color-warning-text: #f3d477;
+    --color-danger-bg: #3f1616;
+    --color-danger-border: #6b2323;
+    --color-danger-text: #fca5a5;
+    --color-success-bg: #0d2e2b;
+    --color-success-border: #1f5f56;
+    --color-success-text: #5eead4;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 20px rgba(0, 0, 0, 0.25);
+
+    /* Dogrulanmis: node scripts/validate_palette.js "#8b5cf6,#d97706" --mode dark */
+    --color-series-a: #8b5cf6;
+    --color-series-b: #d97706;
+  }
+}
+
+/* Kullanicinin Ayarlar > Gorunum sekmesinde acikca sectigi tema (bkz.
+   theme/ThemeContext.tsx); ayni degerler yukaridaki `prefers-color-scheme`
+   bloguyla birebir aynidir - yeni bir renk icermez, bu yuzden AA kontrasti
+   zaten dogrulanmis paletten miras alinir. */
+:root[data-theme="dark"] {
+  --color-bg: #17171c;
+  --color-surface: #202027;
+  --color-border: #302f38;
+  --color-text: #f2f2f5;
+  --color-text-muted: #a3a3ad;
+  --color-accent: #a78bfa;
+  --color-accent-hover: #c4b5fd;
+  --color-accent-soft: #2f2650;
+  --color-accent-contrast: #17171c;
+  --color-warning-bg: #3a2f0b;
+  --color-warning-border: #5c4a10;
+  --color-warning-text: #f3d477;
+  --color-danger-bg: #3f1616;
+  --color-danger-border: #6b2323;
+  --color-danger-text: #fca5a5;
+  --color-success-bg: #0d2e2b;
+  --color-success-border: #1f5f56;
+  --color-success-text: #5eead4;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 20px rgba(0, 0, 0, 0.25);
+  --color-series-a: #8b5cf6;
+  --color-series-b: #d97706;
+}
+
+:root[data-theme="light"] {
+  --color-bg: #f5f3fb;
+  --color-surface: #ffffff;
+  --color-border: #e5e1f0;
+  --color-text: #1c1c22;
+  --color-text-muted: #6b6b76;
+  --color-accent: #6d28d9;
+  --color-accent-hover: #5b21b6;
+  --color-accent-soft: #ede9fe;
+  --color-accent-contrast: #ffffff;
+  --color-warning-bg: #fef3c7;
+  --color-warning-border: #f6d789;
+  --color-warning-text: #7a5b00;
+  --color-danger-bg: #fee2e2;
+  --color-danger-border: #fca5a5;
+  --color-danger-text: #991b1b;
+  --color-success-bg: #e6fbf7;
+  --color-success-border: #99e6da;
+  --color-success-text: #0f766e;
+  --shadow-card: 0 1px 2px rgba(31, 22, 66, 0.04), 0 8px 20px rgba(31, 22, 66, 0.06);
+  --color-series-a: #6d28d9;
+  --color-series-b: #b45309;
+}
+
+/* Kompakt gorunum: kart/alan bosluklarini azaltan kucuk bir yardimci sinif
+   kumesi (bkz. Ayarlar > Gorunum "Kompakt gorunum" secimi). */
+:root[data-compact="true"] .dashboard-card,
+:root[data-compact="true"] .wizard-field,
+:root[data-compact="true"] .persona-preset-row {
+  padding: 8px 12px;
+  gap: 4px;
+}
+
+:root[data-compact="true"] .dashboard-grid {
+  gap: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}

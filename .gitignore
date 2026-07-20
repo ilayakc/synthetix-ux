@@ -1,0 +1,42 @@
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+coverage.json
+openapi.json
+
+# --- Node / Frontend ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+coverage/
+
+# --- E2E (Playwright) ---
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+
+# --- Docker ---
+*.pid
+
+# --- Editors / OS ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.log

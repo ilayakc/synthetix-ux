@@ -1,0 +1,40 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+# app/engine/engine/: app/engine/ ile birebir ayni (kullanilmayan/import
+# edilmeyen) bir kopya dizin - bu asamanin kapsami disinda, yalnizca statik
+# analiz araclarindan haric tutulur (silinmez).
+exclude = ["migrations/versions", "app/engine/engine"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# E501: satir uzunlugu (format eder, gerek yok). B008: FastAPI'nin `Depends(...)`
+# deseni parametre varsayilaninda fonksiyon cagirmayi kasitli ve idiomatik
+# kullanir; bu kural cerceveyle uyumsuz bir yanlis pozitiftir.
+ignore = ["E501", "B008"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+# app/engine/engine/: app/engine/ ile birebir ayni, kullanilmayan kopya dizin.
+# admin_credit.py/seed.py/worker.py/worker_healthcheck.py: ince CLI/entrypoint
+# sarmalayicilari (asil is mantigi zaten app/services altinda test ediliyor).
+# repository.py: bu asamanin disindaki, hicbir yerden kullanilmayan bir
+# taslak temel sinif.
+omit = [
+    "app/engine/engine/*",
+    "app/admin_credit.py",
+    "app/seed.py",
+    "app/worker.py",
+    "app/worker_healthcheck.py",
+    "app/repository.py",
+]
+
+[tool.coverage.report]
+fail_under = 75
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
