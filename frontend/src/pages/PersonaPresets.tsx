@@ -125,7 +125,7 @@ function CopyPresetModal({ source, onClose, onCopied }: CopyPresetModalProps) {
           />
           {error && <p className="auth-error">{error}</p>}
           <div className="modal__actions">
-            <button type="button" className="auth-google-button" onClick={onClose}>
+            <button type="button" className="btn-secondary" onClick={onClose}>
               Vazgeç
             </button>
             <button type="submit" className="auth-submit" disabled={isSubmitting || !name.trim()}>
@@ -207,7 +207,7 @@ function CreatePresetModal({ dimensions, onClose, onCreated }: CreatePresetModal
           {error && <p className="auth-error">{error}</p>}
 
           <div className="modal__actions">
-            <button type="button" className="auth-google-button" onClick={onClose}>
+            <button type="button" className="btn-secondary" onClick={onClose}>
               Vazgeç
             </button>
             <button type="submit" className="auth-submit" disabled={isSubmitting || !name.trim()}>
@@ -296,14 +296,14 @@ export default function PersonaPresets() {
               <div className="persona-preset-row__actions">
                 <button
                   type="button"
-                  className="auth-google-button"
+                  className="btn-secondary"
                   onClick={() => setDetailSource(preset)}
                 >
                   Detayları gör
                 </button>
                 <button
                   type="button"
-                  className="auth-google-button"
+                  className="btn-secondary"
                   onClick={() =>
                     navigate(`/tests/new?persona_preset=${encodeURIComponent(preset.id)}`)
                   }
@@ -312,7 +312,7 @@ export default function PersonaPresets() {
                 </button>
                 <button
                   type="button"
-                  className="auth-google-button"
+                  className="btn-secondary"
                   onClick={() => setCopySource(preset)}
                 >
                   Kopyala
@@ -320,7 +320,7 @@ export default function PersonaPresets() {
                 {!preset.is_builtin && preset.status === "active" && (
                   <button
                     type="button"
-                    className="auth-google-button"
+                    className="btn-secondary"
                     onClick={() => handleArchive(preset)}
                   >
                     Arşivle
