@@ -1474,16 +1474,6 @@
   border: 1px solid var(--color-border);
 }
 
-.ai-design-generator {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
 .cta-selector {
   display: flex;
   flex-direction: column;
@@ -1578,22 +1568,6 @@
   width: 5rem;
 }
 
-.ai-design-generator-comparison {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.ai-design-generator-comparison img {
-  max-width: 100%;
-  max-height: 320px;
-  width: auto;
-  height: auto;
-  object-fit: contain;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border);
-}
-
 @media (max-width: 640px) {
   .design-source-preview-image {
     max-height: 160px;
@@ -1605,10 +1579,6 @@
 
   .wizard-launch-group {
     align-items: stretch;
-  }
-
-  .ai-design-generator-comparison {
-    grid-template-columns: 1fr;
   }
 }
 

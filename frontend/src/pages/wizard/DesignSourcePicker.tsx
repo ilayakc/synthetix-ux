@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import {
   ApiError,
@@ -32,17 +31,6 @@ function formatExpiresAt(expiresAt: string | null): string | null {
   }
 }
 
-/** Bir üçüncü (isteğe bağlı) kaynak seçeneği - bkz. DesignBSourcePicker.
- * Bu, bileşenin tek `radiogroup`unu (a11y için önemli) bozmadan "AI ile
- * oluştur" gibi ek bir seçenek eklemeyi sağlar; jenerik bileşenin kendisi
- * bu seçeneğin ne anlama geldiğini bilmez, yalnızca radio + panel render eder. */
-export interface DesignSourcePickerExtraOption {
-  value: string;
-  label: string;
-  disabledReason?: string;
-  renderPanel: () => ReactNode;
-}
-
 export interface DesignSourcePickerProps {
   label: string;
   sourceType: string | undefined;
@@ -58,7 +46,6 @@ export interface DesignSourcePickerProps {
   /** Ekran görüntüsü seçeneğinin devre dışı bırakılma nedeni (verilirse seçenek
    * gizlenmez, yalnızca açıklamayla birlikte kullanılamaz gösterilir). */
   screenshotDisabledReason?: string;
-  extraOption?: DesignSourcePickerExtraOption;
 }
 
 export default function DesignSourcePicker({
@@ -74,11 +61,9 @@ export default function DesignSourcePicker({
   urlError,
   assetError,
   screenshotDisabledReason,
-  extraOption,
 }: DesignSourcePickerProps) {
   const effectiveSourceType: string = sourceType ?? "url";
   const screenshotDisabled = Boolean(screenshotDisabledReason);
-  const extraOptionDisabled = Boolean(extraOption?.disabledReason);
 
   const [assetMeta, setAssetMeta] = useState<DesignAssetResponse | null>(null);
   const [assetLoadError, setAssetLoadError] = useState<string | null>(null);
@@ -235,33 +220,7 @@ export default function DesignSourcePicker({
             )}
           </span>
         </label>
-        {extraOption && (
-          <label
-            className={`wizard-radio-option${extraOptionDisabled ? " wizard-radio-option--disabled" : ""}`}
-          >
-            <input
-              type="radio"
-              name={`${urlFieldId}-source-type`}
-              value={extraOption.value}
-              checked={effectiveSourceType === extraOption.value}
-              disabled={extraOptionDisabled}
-              onChange={() => onSourceTypeChange(extraOption.value)}
-            />
-            <span>
-              {extraOption.label}
-              {extraOptionDisabled && extraOption.disabledReason && (
-                <span className="wizard-field-hint" style={{ display: "block" }}>
-                  {extraOption.disabledReason}
-                </span>
-              )}
-            </span>
-          </label>
-        )}
       </div>
-
-      {extraOption && effectiveSourceType === extraOption.value && !extraOptionDisabled && (
-        <div className="wizard-field">{extraOption.renderPanel()}</div>
-      )}
 
       {effectiveSourceType === "url" && (
         <div className="wizard-field">

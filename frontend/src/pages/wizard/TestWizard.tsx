@@ -532,8 +532,7 @@ export default function TestWizard() {
               </button>
               {missingSourceForLaunch && (
                 <p className="wizard-field-hint" role="status">
-                  Devam etmeden önce eksik tasarım kaynağını (ekran görüntüsü veya AI tasarımı)
-                  tamamlamalısınız.
+                  Devam etmeden önce eksik tasarım kaynağını (ekran görüntüsü) tamamlamalısınız.
                 </p>
               )}
             </div>

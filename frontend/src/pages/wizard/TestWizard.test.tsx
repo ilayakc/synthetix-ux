@@ -1503,6 +1503,170 @@ describe("TestWizard", () => {
     );
   });
 
+  it("Tasarim Kaynagi adiminda hicbir yerde 'AI ile oluştur' secenegi gosterilmez ve design-generations uc noktasina istek atilmaz", async () => {
+    const abDraft = {
+      ...emptyDraft,
+      current_step: 2,
+      payload: { test_type: "ab_comparison", current_url: "https://example.com" },
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/design-generations")) {
+          throw new Error(`design-generations uc noktasina istek atilmamali: ${url}`);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    expect(screen.queryByText(/AI ile oluştur/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /AI/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("radio", { name: "URL" })).toHaveLength(2);
+    expect(screen.getAllByRole("radio", { name: /Ekran görüntüsü/ })).toHaveLength(2);
+  });
+
+  it("kabul edilmis eski AI tasarimi olan taslak Tasarim B icin normal bir ekran goruntusu kaynagi gibi hidratlanir", async () => {
+    const legacyAcceptedAiDraft = {
+      ...emptyDraft,
+      current_step: 2,
+      payload: {
+        test_type: "ab_comparison",
+        current_url: "https://example.com",
+        new_source_type: "ai_generated",
+        new_design_asset_id: "asset-legacy-ai",
+        new_ai_generation_id: "job-legacy-1",
+      },
+    };
+    const legacyAsset = {
+      id: "asset-legacy-ai",
+      organization_id: "org-1",
+      content_type: "image/png",
+      byte_size: 2048,
+      width: 100,
+      height: 80,
+      label: null,
+      status: "active",
+      has_image: true,
+      expires_at: null,
+      created_at: "2026-07-20T00:00:00Z",
+      updated_at: "2026-07-20T00:00:00Z",
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/design-generations")) {
+          throw new Error(`design-generations uc noktasina istek atilmamali: ${url}`);
+        }
+        if (url.includes("/api/design-assets/asset-legacy-ai")) {
+          return jsonResponse(200, legacyAsset);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, legacyAcceptedAiDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, legacyAcceptedAiDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    expect(
+      screen.queryByText(/artık desteklenmeyen bir AI tasarım denemesi/),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByText(/100 × 80 px/)).toBeInTheDocument();
+    const screenshotRadios = screen.getAllByRole("radio", { name: /Ekran görüntüsü/ });
+    expect(screenshotRadios[1]).toBeChecked();
+  });
+
+  it("yarim kalmis/kabul edilmemis eski AI denemesi olan taslakta uyari gosterilir ve kaynak onceden secili gelmez", async () => {
+    const legacyUnacceptedAiDraft = {
+      ...emptyDraft,
+      current_step: 2,
+      payload: {
+        test_type: "ab_comparison",
+        current_url: "https://example.com",
+        new_source_type: "ai_generated",
+        new_ai_generation_id: "job-legacy-2",
+      },
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/design-generations")) {
+          throw new Error(`design-generations uc noktasina istek atilmamali: ${url}`);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, legacyUnacceptedAiDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, legacyUnacceptedAiDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    expect(
+      await screen.findByText(/artık desteklenmeyen bir AI tasarım denemesi/),
+    ).toBeInTheDocument();
+    // Eski/gecersiz AI asset kimligi sessizce bir ekran goruntusu onizlemesine
+    // baglanmaz - kaynak secimi kullaniciya birakilir (varsayilan olarak URL
+    // paneli bos bir alanla gosterilir, bkz. DesignSourcePicker `effectiveSourceType`).
+    expect(screen.queryByAltText(/önizlemesi/)).not.toBeInTheDocument();
+    const newUrlInput = document.getElementById("wizard-new-url") as HTMLInputElement;
+    expect(newUrlInput).toHaveValue("");
+  });
+
   it("ozet (5. adim) A/B icin gorsel bir kaynak (Tasarim B ekran goruntusu) varsa baslatma dugmesi acik olur", async () => {
     const abVisualDraft = {
       ...emptyDraft,

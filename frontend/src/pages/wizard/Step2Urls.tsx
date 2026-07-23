@@ -1,12 +1,30 @@
 import DesignSourcePicker from "./DesignSourcePicker";
-import DesignBSourcePicker from "./DesignBSourcePicker";
 import ScreenshotCtaSelector from "./ScreenshotCtaSelector";
 import type { WizardCurrentSourceType, WizardNewSourceType } from "../../api/client";
 import type { StepProps } from "./types";
 
+const LEGACY_AI_DRAFT_WARNING =
+  "Bu taslakta artık desteklenmeyen bir AI tasarım denemesi bulunuyor. Devam etmek için URL veya ekran görüntüsü seçin.";
+
 export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: StepProps) {
   const isAbComparison = payload.test_type === "ab_comparison";
   const isAccessibilityPrecheck = payload.test_type === "accessibility_precheck";
+
+  // Eski taslaklarda "Tasarim B" kaynagi artik kaldirilmis "AI ile oluştur"
+  // secenegiyle ("ai_generated") kaydedilmis olabilir. Kabul edilmis (bir
+  // DesignAsset'e donusmus) sonuclar sessizce normal bir ekran goruntusu
+  // kaynagi gibi gosterilir - asset SILINMEZ/degistirilmez, yalnizca kaynak
+  // turu etiketi yeniden yorumlanir. Henuz kabul edilmemis/yarim kalmis bir
+  // AI denemesi icin ise kullanici acikca yeni bir kaynak (URL/ekran
+  // goruntusu) secene kadar hicbir kaynak onceden secili gosterilmez (bkz.
+  // asagidaki `legacyUnacceptedAiDraft`).
+  const newSourceIsLegacyAi = payload.new_source_type === "ai_generated";
+  const legacyUnacceptedAiDraft = newSourceIsLegacyAi && !payload.new_design_asset_id;
+  const effectiveNewSourceType: WizardNewSourceType | undefined = legacyUnacceptedAiDraft
+    ? undefined
+    : newSourceIsLegacyAi
+      ? "screenshot"
+      : payload.new_source_type;
 
   // A/B karşılaştırması: hem "Tasarım A" (current_*) hem "Tasarım B" (new_*)
   // tarafı bağımsız olarak URL veya ekran görüntüsü kaynağı seçebilir (bkz.
@@ -42,29 +60,27 @@ export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: S
           />
         )}
 
-        <DesignBSourcePicker
+        {legacyUnacceptedAiDraft && (
+          <p className="auth-notice" role="status">
+            {LEGACY_AI_DRAFT_WARNING}
+          </p>
+        )}
+        <DesignSourcePicker
           label="Tasarım B — Alternatif tasarım"
-          sourceType={payload.new_source_type}
+          sourceType={effectiveNewSourceType}
           url={payload.new_url}
-          assetId={payload.new_design_asset_id}
+          assetId={legacyUnacceptedAiDraft ? undefined : payload.new_design_asset_id}
           urlLabel="Yeni tasarım URL'si"
           urlFieldId="wizard-new-url"
           urlError={fieldErrors.new_url}
           assetError={fieldErrors.new_design_asset_id}
-          onSourceTypeChange={(sourceType: WizardNewSourceType) => onChange("new_source_type", sourceType)}
+          onSourceTypeChange={(sourceType) =>
+            onChange("new_source_type", sourceType as WizardNewSourceType)
+          }
           onUrlChange={(value) => onChange("new_url", value)}
           onAssetChange={(assetId) => onChange("new_design_asset_id", assetId ?? undefined)}
-          onAiGenerationAccept={(jobId, assetId) => {
-            onChange("new_source_type", "ai_generated");
-            onChange("new_design_asset_id", assetId);
-            onChange("new_ai_generation_id", jobId);
-          }}
-          referenceSourceType={payload.current_source_type === "screenshot" ? "screenshot" : "url"}
-          referenceAssetId={
-            payload.current_source_type === "screenshot" ? payload.current_design_asset_id : undefined
-          }
         />
-        {(payload.new_source_type === "screenshot" || payload.new_source_type === "ai_generated") && (
+        {effectiveNewSourceType === "screenshot" && (
           <ScreenshotCtaSelector
             slot="new"
             label="Tasarım B"
