@@ -269,7 +269,7 @@ export default function Dashboard() {
       {hasError && (
         <div className="dashboard-error" role="alert">
           <p>Özet veriler yüklenemedi.</p>
-          <button type="button" className="auth-google-button" onClick={load}>
+          <button type="button" className="btn-secondary" onClick={load}>
             Tekrar dene
           </button>
         </div>

@@ -242,7 +242,7 @@ export default function Settings() {
         <div className="settings-action-bar__buttons">
           <button
             type="button"
-            className="auth-google-button"
+            className="btn-secondary"
             onClick={handleDiscard}
             disabled={!isDirty || isSaving}
           >

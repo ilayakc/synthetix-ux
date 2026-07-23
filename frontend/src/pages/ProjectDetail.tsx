@@ -149,7 +149,7 @@ export default function ProjectDetail() {
           <button
             type="button"
             onClick={() => navigate(`/tests/new?project=${project.id}`)}
-            className="auth-google-button"
+            className="btn-secondary"
             disabled={isArchived}
           >
             Bu proje için yeni test başlat
@@ -176,7 +176,7 @@ export default function ProjectDetail() {
               <div className="modal__actions">
                 <button
                   type="button"
-                  className="auth-google-button"
+                  className="btn-secondary"
                   onClick={() => setIsConfirmingArchive(false)}
                 >
                   Vazgeç

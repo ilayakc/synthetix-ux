@@ -94,7 +94,7 @@ export default function ModuleCatalog() {
                 <span>{module.name}</span>
                 <button
                   type="button"
-                  className="auth-google-button"
+                  className="btn-secondary"
                   onClick={() => removeStaged(module.key)}
                 >
                   Kaldır

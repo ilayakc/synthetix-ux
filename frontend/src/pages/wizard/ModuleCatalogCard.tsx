@@ -82,7 +82,7 @@ export default function ModuleCatalogCard(props: ModuleCatalogCardProps) {
       <ModuleCatalogCardBody module={module} />
       <div className="module-card__actions">
         {module.selectable_in_wizard ? (
-          <button type="button" className="auth-google-button" onClick={() => onUseInTest(module.key)}>
+          <button type="button" className="btn-secondary" onClick={() => onUseInTest(module.key)}>
             {queued ? "Test hazırlığından çıkar" : "Yeni testte kullan"}
           </button>
         ) : (

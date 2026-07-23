@@ -102,7 +102,7 @@ function CreateProjectModal({ onClose, onCreated }: CreateProjectModalProps) {
           {error && <p className="auth-error">{error}</p>}
 
           <div className="modal__actions">
-            <button type="button" className="auth-google-button" onClick={onClose}>
+            <button type="button" className="btn-secondary" onClick={onClose}>
               Vazgeç
             </button>
             <button type="submit" className="auth-submit" disabled={isSubmitting || !name.trim()}>

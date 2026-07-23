@@ -165,7 +165,7 @@ export default function PersonaDistributionEditor({
 
                       <button
                         type="button"
-                        className="auth-google-button"
+                        className="btn-secondary"
                         onClick={() => removeBucket(dimension.key, bucket.key)}
                         disabled={buckets.length <= 1}
                         aria-label={`${bucket.label} kovasını kaldır`}
@@ -178,7 +178,7 @@ export default function PersonaDistributionEditor({
 
                 <button
                   type="button"
-                  className="auth-google-button"
+                  className="btn-secondary"
                   onClick={() => addBucket(dimension.key)}
                 >
                   + Kova ekle

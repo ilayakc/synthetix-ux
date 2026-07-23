@@ -133,7 +133,7 @@ function SimulationCard({
         <div className="simulation-card__actions">
           <StatusBadge status={run.status} />
           {isActive && (
-            <button type="button" className="auth-google-button" onClick={() => onCancel(run.id)}>
+            <button type="button" className="btn-secondary" onClick={() => onCancel(run.id)}>
               İptal et
             </button>
           )}
