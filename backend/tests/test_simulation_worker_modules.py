@@ -204,9 +204,9 @@ async def test_module_processing_failure_releases_chip_reservation_without_charg
     # Chip HAKSIZ YERE DUSULMEDI: rezervasyon tamamen serbest birakildi.
     assert await chip_ledger.get_chip_balance(session, organization.id) == 200
 
-    # Idempotency: release'i tekrar cagirmak (ör. reap sonrasi tekrar
-    # finalize edilme senaryosu) bakiyeyi tekrar etkilemez.
-    await simulation_worker._release_reservation_for_run(session, run)
+    # Idempotency: grup cozumlemesini tekrar cagirmak (ör. reap sonrasi
+    # tekrar finalize edilme senaryosu) bakiyeyi tekrar etkilemez.
+    await simulation_worker._resolve_launch_group(session, run)
     assert await chip_ledger.get_chip_balance(session, organization.id) == 200
 
 

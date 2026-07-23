@@ -22,6 +22,7 @@ import math
 from dataclasses import asdict, dataclass
 
 from app.engine import fixtures
+from app.engine.fixtures import PageFeatureSnapshot
 from app.engine.rules_config import get_rules_config
 
 BASELINE_ENGINE_VERSION = "heuristic-baseline-2026.1"
@@ -197,20 +198,57 @@ def run_baseline_simulation(
     input_snapshot: dict,
     deterministic_seed: int,
     rules_version: str | None = None,
+    page_feature_snapshot: PageFeatureSnapshot | None = None,
 ) -> dict:
     """Verilen girdiden deterministik bir sentetik simulasyon sonucu uretir.
 
     Sonuc, `SimulationRun.result` JSON kolonuna dogrudan yazilabilecek, salt
     JSON-uyumlu (str/int/float/bool/list/dict) bir sozluktur.
+
+    `page_feature_snapshot` verilirse (Paket 4B - gercek PageAnalysis DOM
+    verisinden turetilmis, bkz. app.services.page_analysis_adapter), `url`/
+    `role` icin `fixtures.get_page_feature_snapshot` (sha256(url) tabanli
+    sentetik yer tutucu) cagrilmaz; dogrudan bu snapshot kullanilir. Bu
+    parametre verilmedigi surece davranis birebir eskisiyle aynidir (bkz.
+    modul dokstring'i - bu dosya kritik/degistirilmemesi istenen dallara
+    dokunmadan additive bir parametre ekler).
+
+    Kaynak kimligi: `input_snapshot["url"]` (gercek URL) VEYA
+    `input_snapshot["source_reference"]` (URL-DISI kaynaklar icin - ör.
+    DesignAsset/screenshot/AI, bkz. app.services.test_wizard.launch_draft)
+    ikisinden EN AZ biri dolu olmalidir - Paket 4 Final Hardening'den once
+    URL-disi kaynaklarda bu alan `url` icine sahte bir `design-asset:<id>`
+    metniyle DOLDURULUYORDU (workaround); artik `url` yalnizca GERCEK bir
+    URL varsa doludur, aksi halde `None`'dur ve sonuc JSON'unda da
+    boyle acikca yansitilir (`result["url"]`/`result["source_reference"]`
+    - bkz. asagisi). `source_reference` YALNIZCA kimliklendirme/etiketleme
+    icindir; `page_feature_snapshot` saglanmadigi (legacy fixture) yolda
+    yalnizca GERCEK `url` kullanilabilir (asagiya bkz.) - bir DesignAsset
+    kaynagi icin `page_feature_snapshot` HER ZAMAN saglanir (bkz.
+    app.services.simulation_worker._load_page_feature_input), bu yuzden bu
+    kisitlama pratikte hicbir kosulda tetiklenmez.
     """
 
     url = input_snapshot.get("url")
-    if not url or not isinstance(url, str):
-        raise SimulationInputError("input_snapshot.url gereklidir")
+    has_url = isinstance(url, str) and bool(url)
+    source_reference = input_snapshot.get("source_reference")
+    has_source_reference = isinstance(source_reference, str) and bool(source_reference)
+    if not has_url and not has_source_reference:
+        raise SimulationInputError("input_snapshot.url veya input_snapshot.source_reference gereklidir")
     role = input_snapshot.get("role", "primary")
 
     rules = get_rules_config(rules_version)
-    page = fixtures.get_page_feature_snapshot(url, role)
+    if page_feature_snapshot is not None:
+        page = page_feature_snapshot
+    elif has_url:
+        page = fixtures.get_page_feature_snapshot(url, role)
+    else:
+        # Savunma amacli: gercek akiste hicbir zaman tetiklenmez (bkz.
+        # docstring) - `source_reference` tek basina legacy sha256(url)
+        # yer tutucusunu URETEMEZ (URL degildir), bu yuzden acikca reddedilir.
+        raise SimulationInputError(
+            "page_feature_snapshot, yalnizca source_reference (url olmayan) girdilerde zorunludur"
+        )
     persona_sample = input_snapshot.get("persona_sample")
 
     literacy_completion_mult = _digital_literacy_weight(persona_sample, rules.digital_literacy_multiplier)
@@ -303,7 +341,8 @@ def run_baseline_simulation(
         "deterministic_seed": deterministic_seed,
         "input_snapshot_hash": _hash_input_snapshot(input_snapshot, deterministic_seed, rules.version),
         "variant_role": role,
-        "url": url,
+        "url": url if has_url else None,
+        "source_reference": source_reference if has_source_reference else None,
         "page_feature_snapshot": asdict(page),
         "metrics": {
             "task_completion_probability": task_completion_probability,

@@ -128,6 +128,100 @@ def test_missing_url_raises_simulation_input_error():
         baseline.run_baseline_simulation({"role": "primary"}, deterministic_seed=1)
 
 
+# --- Paket 4 Final Hardening: source_reference (pseudo-URL kaldirma) --------
+
+
+def test_source_reference_alone_satisfies_input_requirement_without_page_feature_snapshot_fails():
+    """`source_reference` TEK BASINA (page_feature_snapshot verilmeden) motoru
+    tatmin ETMEZ - DesignAsset kaynagi icin gercek skorlama HER ZAMAN
+    `page_feature_snapshot` gerektirir (legacy sha256(url) yer tutucusu
+    yalnizca GERCEK url ile calisir); bu, motorun "bos degil" sartini
+    URL-DISI bir string ile GECERSIZ bicimde atlatilamayacagini kanitlar."""
+
+    with pytest.raises(baseline.SimulationInputError):
+        baseline.run_baseline_simulation(
+            {"role": "primary", "source_reference": "design-asset:11111111-1111-1111-1111-111111111111"},
+            deterministic_seed=1,
+        )
+
+
+def test_source_reference_with_page_feature_snapshot_succeeds_and_url_is_none():
+    """DesignAsset kaynagi: `page_feature_snapshot` saglandiginda `source_reference`
+    tek basina yeterlidir; sonucta `url` ASLA sahte bir deger tasimaz - acikca
+    `None` kalir, gercek kimlik yalnizca `source_reference` alanindadir."""
+
+    snapshot = engine_fixtures.PageFeatureSnapshot(
+        fixture_version="visual-adapter-1:test",
+        url="design-asset:11111111-1111-1111-1111-111111111111",
+        role="primary",
+        nav_depth=0,
+        primary_cta_count=1,
+        form_field_count=0,
+        above_fold_cta=True,
+        page_word_count=0,
+        avg_sentence_word_count=0.0,
+        heading_count=0,
+        min_contrast_ratio=6.0,
+        avg_contrast_ratio=6.0,
+        mobile_friendly=True,
+        input_hash="b" * 64,
+    )
+    result = baseline.run_baseline_simulation(
+        {"role": "primary", "source_reference": "design-asset:11111111-1111-1111-1111-111111111111"},
+        deterministic_seed=1,
+        page_feature_snapshot=snapshot,
+    )
+    assert result["url"] is None
+    assert result["source_reference"] == "design-asset:11111111-1111-1111-1111-111111111111"
+
+
+def test_visual_result_is_independent_of_source_reference_identity():
+    """'Ayni visual feature verisi FARKLI asset ID ile verilirse analiz sonucu
+    ayni olmalidir' (Paket 4 Final Hardening kurali) - skorlama
+    `page.input_hash`den (gercek feature icerigi) turer, `source_reference`
+    veya asset ID'den DEGIL."""
+
+    def make_snapshot(source_reference: str) -> engine_fixtures.PageFeatureSnapshot:
+        return engine_fixtures.PageFeatureSnapshot(
+            fixture_version="visual-adapter-1:test",
+            url=source_reference,
+            role="primary",
+            nav_depth=0,
+            primary_cta_count=2,
+            form_field_count=0,
+            above_fold_cta=True,
+            page_word_count=0,
+            avg_sentence_word_count=0.0,
+            heading_count=0,
+            min_contrast_ratio=6.0,
+            avg_contrast_ratio=6.0,
+            mobile_friendly=True,
+            input_hash="c" * 64,  # AYNI icerik hash'i - iki farkli "asset" ayni gorseli temsil ediyor
+        )
+
+    result_a = baseline.run_baseline_simulation(
+        {"role": "primary", "source_reference": "design-asset:aaaaaaaa-0000-0000-0000-000000000000"},
+        deterministic_seed=7,
+        page_feature_snapshot=make_snapshot("design-asset:aaaaaaaa-0000-0000-0000-000000000000"),
+    )
+    result_b = baseline.run_baseline_simulation(
+        {"role": "primary", "source_reference": "design-asset:bbbbbbbb-1111-1111-1111-111111111111"},
+        deterministic_seed=7,
+        page_feature_snapshot=make_snapshot("design-asset:bbbbbbbb-1111-1111-1111-111111111111"),
+    )
+    assert result_a["metrics"] == result_b["metrics"]
+
+
+def test_legacy_url_only_behavior_is_byte_identical():
+    """Geriye uyumluluk: yalnizca `url` verilen (Paket 4 Final Hardening
+    ONCESI ile AYNI) girdi, `source_reference` alani hic gonderilmeden
+    tamamen ayni sekilde calismaya devam eder."""
+
+    result = baseline.run_baseline_simulation(_valid_input_snapshot(), deterministic_seed=42)
+    assert result["url"] == "https://example.com/anasayfa"
+    assert result["source_reference"] is None
+
+
 # --- Belirsizlik araligi ----------------------------------------------------
 
 
@@ -288,9 +382,10 @@ async def test_process_run_success_consumes_chip_reservation_without_double_debi
     assert run.status == SimulationStatus.SUCCEEDED
     assert await chip_ledger.get_chip_balance(session, organization.id) == 500
 
-    # Ayni run icin finalize'i tekrar cagirmak (ornegin bir retry/redelivery
-    # senaryosunu simule ederek) bakiyeyi tekrar dusurmemeli (idempotent).
-    await simulation_worker._consume_reservation_for_run(session, run)
+    # Ayni run icin grup cozumlemesini tekrar cagirmak (ornegin bir
+    # retry/redelivery senaryosunu simule ederek) bakiyeyi tekrar
+    # dusurmemeli (idempotent).
+    await simulation_worker._resolve_launch_group(session, run)
     assert await chip_ledger.get_chip_balance(session, organization.id) == 500
 
 
@@ -322,9 +417,9 @@ async def test_process_run_failure_releases_chip_reservation(
     assert run.error is not None
     assert await chip_ledger.get_chip_balance(session, organization.id) == 200
 
-    # Basarisiz calistirma icin release'i tekrar cagirmak hata firlatmamali
-    # (idempotent no-op, cift iade uretmez).
-    await simulation_worker._release_reservation_for_run(session, run)
+    # Basarisiz calistirma icin grup cozumlemesini tekrar cagirmak hata
+    # firlatmamali (idempotent no-op, cift iade uretmez).
+    await simulation_worker._resolve_launch_group(session, run)
     assert await chip_ledger.get_chip_balance(session, organization.id) == 200
 
 

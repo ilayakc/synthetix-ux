@@ -5,6 +5,7 @@ import {
   ApiError,
   type QuoteResponse,
   type WizardDraftPayload,
+  type WizardLaunchWarning,
   createWizardDraft,
   getAnalysisModuleCatalog,
   getQuote,
@@ -47,13 +48,25 @@ function validateStep(step: number, payload: WizardDraftPayload): Record<string,
   }
 
   if (step === 2) {
-    if (!payload.current_url?.trim()) {
+    const isCurrentScreenshotSource = payload.current_source_type === "screenshot";
+
+    if (isCurrentScreenshotSource) {
+      if (!payload.current_design_asset_id) {
+        errors.current_design_asset_id = "Bir tasarım ekran görüntüsü yüklemelisiniz.";
+      }
+    } else if (!payload.current_url?.trim()) {
       errors.current_url = "URL gereklidir.";
     } else if (!isValidHttpUrl(payload.current_url)) {
       errors.current_url = "Geçerli bir http(s) URL girin.";
     }
     if (payload.test_type === "ab_comparison") {
-      if (!payload.new_url?.trim()) {
+      const isNewVisualSource =
+        payload.new_source_type === "screenshot" || payload.new_source_type === "ai_generated";
+      if (isNewVisualSource) {
+        if (!payload.new_design_asset_id) {
+          errors.new_design_asset_id = "Bir tasarım ekran görüntüsü yüklemelisiniz.";
+        }
+      } else if (!payload.new_url?.trim()) {
         errors.new_url = "Yeni tasarım URL'si gereklidir.";
       } else if (!isValidHttpUrl(payload.new_url)) {
         errors.new_url = "Geçerli bir http(s) URL girin.";
@@ -109,6 +122,7 @@ export default function TestWizard() {
   const [launchResult, setLaunchResult] = useState<{
     engineStatusMessage: string;
     usedFreeEntitlement: boolean;
+    warnings: WizardLaunchWarning[];
   } | null>(null);
 
   const hydrated = useRef(false);
@@ -281,7 +295,33 @@ export default function TestWizard() {
       delete next[field];
       return next;
     });
-    setPayload((current) => ({ ...current, [field]: value }));
+    setPayload((current) => {
+      const next: WizardDraftPayload = { ...current, [field]: value };
+      // Erisilebilirlik on kontrolu DOM/sayfa yapisi gerektirdigi icin daima
+      // yalnizca URL kabul eder; kullanici test turunu buna degistirdiginde
+      // ekran goruntusu secili kalmis olsaydı sonraki otomatik kaydetme
+      // (autosave) backend tarafindan 400 ile reddedilirdi - bu yuzden
+      // burada onceden URL'e sifirlanir (bkz. backend/app/services/
+      // test_wizard.validate_source_type_for_test_type). A/B karsilastirmasi
+      // ise artik her iki tarafta da ekran goruntusunu kabul eder, bu
+      // nedenle bu sifirlama A/B'ye GECILDIGINDE artik uygulanmaz.
+      if (
+        field === "test_type" &&
+        value === "accessibility_precheck" &&
+        next.current_source_type === "screenshot"
+      ) {
+        next.current_source_type = "url";
+      }
+      // "Tasarim B" (new_*) alanlari yalnizca A/B karsilastirmasinda anlamlidir;
+      // baska bir test turune gecildiginde sifirlanir ki sonraki bir A/B
+      // taslaginda veya baska bir test turunde eski secim kalintisi kalmasin.
+      if (field === "test_type" && value !== "ab_comparison") {
+        next.new_source_type = "url";
+        next.new_design_asset_id = undefined;
+        next.new_ai_generation_id = undefined;
+      }
+      return next;
+    });
   };
 
   const goToStep = async (nextStep: number) => {
@@ -323,14 +363,26 @@ export default function TestWizard() {
       setLaunchResult({
         engineStatusMessage: result.engine_status_message,
         usedFreeEntitlement: result.used_free_entitlement,
+        warnings: result.warnings,
       });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 402) {
+      // `ApiError.message`, backend'in guvenli (stack trace/SQL/tenant
+      // detayi ICERMEYEN) `detail` alanindan turer - bilinmeyen bir 5xx
+      // icin de `apiFetch` zaten guvenli bir yer tutucu metin uretir (bkz.
+      // app/api/client.ts `rawFetch` - govde yoksa/parse edilemezse `API
+      // istegi basarisiz: <status> <statusText>`). Bu yuzden STATUS KODUNA
+      // BAKMAKSIZIN her ApiError'un gercek mesaji gosterilir - yalnizca
+      // gercekten ApiError OLMAYAN (ag hatasi, beklenmeyen JS istisnasi)
+      // durumlarda jenerik Turkce mesaja dusulur. Eskiden yalnizca 400/402
+      // ozel olarak gosteriliyordu; digger butun durumlar (404/409/422/5xx)
+      // sessizce "Test baslatilamadi" mesajina indirgeniyordu - kullanici
+      // gercek nedeni (ör. "asset artik kullanilamiyor") hic goremiyordu.
+      if (err instanceof ApiError) {
         setBanner(err.message);
-      } else if (err instanceof ApiError && err.status === 400) {
-        setBanner(err.message);
+        console.error("Test baslatma basarisiz (status=%s):", err.status, err.message, err.body);
       } else {
         setBanner("Test başlatılamadı. Lütfen tekrar deneyin.");
+        console.error("Test baslatma basarisiz (bilinmeyen hata):", err);
       }
     } finally {
       setIsLaunching(false);
@@ -359,6 +411,17 @@ export default function TestWizard() {
           </p>
           <p>{launchResult.engineStatusMessage}</p>
         </div>
+        {launchResult.warnings.length > 0 && (
+          <div className="auth-notice" role="status">
+            {launchResult.warnings.map((warning, index) => (
+              <p key={index}>
+                {warning.code === "stale_cta_annotation_cleared"
+                  ? `Tasarım değiştiği için önceki CTA seçiminiz temizlendi (${warning.slot === "current" ? "Tasarım A" : "Tasarım B"}). CTA'ya özel değerlendirmeler bu durumda aday düzeyinde kalır.`
+                  : warning.message}
+              </p>
+            ))}
+          </div>
+        )}
         <div className="modal__actions">
           <button type="button" className="auth-submit" onClick={() => navigate("/projeler")}>
             Projelere dön
@@ -368,9 +431,24 @@ export default function TestWizard() {
     );
   }
 
+  const isAbComparison = payload.test_type === "ab_comparison";
   const launchButtonLabel = quote?.free_entitlement_applicable
     ? "Ücretsiz hakkı kullan ve başlat"
     : "Chip ile başlat";
+
+  // Paket 4 Final: screenshot/AI kaynaklarla launch engeli backend'de
+  // kaldirildi (bkz. app.services.test_wizard.launch_draft -
+  // `_revalidate_launch_sources`) - silinmis/expired/cross-tenant asset veya
+  // kabul edilmemis bir AI sonucu gibi durumlar artik butonu ONCEDEN
+  // KAPATMAZ; bunun yerine launch denemesi sunucu tarafinda reddedilir ve
+  // sonuc, mevcut hata banner'i (asagida `banner` state'i, ApiError 400/402
+  // yakalamasi) uzerinden ayni yolla gosterilir - Chip/entitlement'in
+  // TUKETILMEDIGI acikca belirtilir (bkz. handleLaunch catch bloklari).
+  const missingSourceForLaunch =
+    (payload.current_source_type === "screenshot" && !payload.current_design_asset_id) ||
+    (isAbComparison &&
+      (payload.new_source_type === "screenshot" || payload.new_source_type === "ai_generated") &&
+      !payload.new_design_asset_id);
 
   return (
     <section aria-labelledby="wizard-heading" className="wizard">
@@ -395,7 +473,7 @@ export default function TestWizard() {
           <Step1Details payload={payload} fieldErrors={fieldErrors} onChange={handleChange} />
         )}
         {currentStep === 2 && (
-          <Step2Urls payload={payload} fieldErrors={fieldErrors} onChange={handleChange} />
+          <Step2Urls payload={payload} fieldErrors={fieldErrors} onChange={handleChange} draftId={draftId} />
         )}
         {currentStep === 3 && (
           <Step3Personas payload={payload} fieldErrors={fieldErrors} onChange={handleChange} />
@@ -428,7 +506,7 @@ export default function TestWizard() {
         <div className="wizard-actions">
           <button
             type="button"
-            className="auth-google-button"
+            className="btn-secondary"
             onClick={handleBack}
             disabled={currentStep === 1}
           >
@@ -439,14 +517,26 @@ export default function TestWizard() {
               İleri
             </button>
           ) : (
-            <button
-              type="button"
-              className="auth-submit"
-              onClick={handleLaunch}
-              disabled={isLaunching || payload.authorization_confirmed !== true}
-            >
-              {isLaunching ? "Başlatılıyor…" : launchButtonLabel}
-            </button>
+            <div className="wizard-launch-group">
+              <button
+                type="button"
+                className="auth-submit"
+                onClick={handleLaunch}
+                disabled={
+                  isLaunching ||
+                  payload.authorization_confirmed !== true ||
+                  missingSourceForLaunch
+                }
+              >
+                {isLaunching ? "Başlatılıyor…" : launchButtonLabel}
+              </button>
+              {missingSourceForLaunch && (
+                <p className="wizard-field-hint" role="status">
+                  Devam etmeden önce eksik tasarım kaynağını (ekran görüntüsü veya AI tasarımı)
+                  tamamlamalısınız.
+                </p>
+              )}
+            </div>
           )}
         </div>
       </div>

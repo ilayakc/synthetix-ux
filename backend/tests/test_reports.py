@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.engine import baseline
-from app.models.page_analysis import PageAnalysis, PageAnalysisStatus
+from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.projects import Project
 from app.models.reports import Report
 from app.models.simulations import SimulationRun, SimulationStatus
@@ -162,6 +162,61 @@ async def _make_page_analysis(
             "final_url": url,
             "redirect_count": 0,
             "layout_regions": layout_regions if layout_regions is not None else dict(_FULL_LAYOUT_REGIONS),
+        },
+    )
+    session.add(analysis)
+    await session.flush()
+    return analysis
+
+
+_VISUAL_ATTENTION_CELLS = [
+    {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5, "intensity": 0.9},
+    {"x": 0.5, "y": 0.5, "w": 0.5, "h": 0.5, "intensity": 0.2},
+]
+
+
+async def _make_design_asset_page_analysis(
+    session: AsyncSession,
+    organization: Organization,
+    *,
+    screenshot_data: bytes | None = b"fake-png-bytes",
+    visual_cta_candidates: list[dict] | None = None,
+    attention_cells: list[dict] | None = None,
+    content_sha256: str = "d" * 64,
+) -> PageAnalysis:
+    analysis = PageAnalysis(
+        organization_id=organization.id,
+        source_kind=PageAnalysisSourceKind.DESIGN_ASSET,
+        url=None,
+        authorization_confirmed=True,
+        status=PageAnalysisStatus.SUCCEEDED,
+        screenshot_data=screenshot_data,
+        content_sha256=content_sha256,
+        image_width=800,
+        image_height=600,
+        features={
+            "feature_source": "visual_heuristic",
+            "algorithm_version": "visual-analysis-1",
+            "visual_cta_candidates": (
+                visual_cta_candidates
+                if visual_cta_candidates is not None
+                else [
+                    {
+                        "box": {"x": 0.4, "y": 0.2, "w": 0.2, "h": 0.06},
+                        "heuristic_score": 0.72,
+                    },
+                    {
+                        "box": {"x": 0.1, "y": 0.8, "w": 0.15, "h": 0.05},
+                        "heuristic_score": 0.31,
+                    },
+                ]
+            ),
+            "synthetic_attention_estimate": {
+                "cells": attention_cells if attention_cells is not None else list(_VISUAL_ATTENTION_CELLS),
+                "feature_source": "visual_heuristic",
+                "algorithm_version": "visual-analysis-1",
+                "disclaimer": "test disclaimer",
+            },
         },
     )
     session.add(analysis)
@@ -467,6 +522,134 @@ async def test_heatmap_screenshot_endpoint_rejects_other_organization(
     assert exc_info.value.status_code == 404
 
 
+# --- Paket 4 Final: FK-tabanli cozumleme + rapor-bagli retention ---------------
+
+
+async def test_heatmap_resolves_via_page_analysis_fk_even_when_url_does_not_match(
+    session: AsyncSession, organization: Organization
+):
+    """Paket 4 Final: `SimulationRun.page_analysis_id` FK'si baglandiktan
+    sonra, run'in `input_snapshot.url`'si o PageAnalysis'in `url`'siyle
+    ARTIK EŞLEŞMESE bile (ör. kullanici sonradan draft'ta URL'yi degistirmis
+    olabilir - bu senaryo kasitli kurulur) dogru capture FK uzerinden
+    bulunur; eski URL string eslestirmesi burada YANLIS (baska bir)
+    PageAnalysis'i bulurdu ya da hic bulamazdi."""
+
+    linked_analysis = await _make_page_analysis(
+        session, organization, url="https://fk-linked.example.com/"
+    )
+    # Ayni organizasyonda, run'in KENDI input_snapshot URL'siyle eslesen
+    # BASKA (yanlis) bir PageAnalysis de bilerek olusturulur - eski string
+    # eslestirme yolu bunu (yanlis capture'i) bulurdu.
+    await _make_page_analysis(session, organization, url="https://example.com/anasayfa")
+
+    _project, _definition, variant = await _make_project_and_variant(
+        session, organization, url="https://example.com/anasayfa"
+    )
+    run = await _make_succeeded_run_with_report(
+        session,
+        organization,
+        variant,
+        url="https://example.com/anasayfa",
+        modules=["synthetic_attention_estimate"],
+    )
+    run.page_analysis_id = linked_analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.heatmap.available is True
+    assert detail.heatmap.screenshot_url == f"/api/reports/{report.id}/heatmap-screenshot"
+
+    screenshot_response = await reports_router.get_report_heatmap_screenshot(
+        report.id, organization_id=organization.id, session=session
+    )
+    assert screenshot_response.body == b"fake-png-bytes"
+
+
+@pytest.mark.security
+async def test_report_fk_resolution_rejects_cross_tenant_page_analysis(
+    session: AsyncSession, organization: Organization
+):
+    """FK cozumlemesi bile, hedef PageAnalysis'in `organization_id`si
+    RAPORUN organizasyonuyla eslesmezse (teorik/savunma amacli durum)
+    gorseli ASLA sizdirmamali - erisilebilir tablo gorunumune duser."""
+
+    other_org = Organization(name="Other Org FK", slug=f"other-org-{uuid.uuid4().hex[:8]}")
+    session.add(other_org)
+    await session.flush()
+    foreign_analysis = await _make_page_analysis(session, other_org, url="https://foreign.example.com/")
+
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(
+        session, organization, variant, modules=["synthetic_attention_estimate"]
+    )
+    run.page_analysis_id = foreign_analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.heatmap.screenshot_url is None
+    assert detail.heatmap.coordinates_available is False
+
+    with pytest.raises(HTTPException) as exc_info:
+        await reports_router.get_report_heatmap_screenshot(
+            report.id, organization_id=organization.id, session=session
+        )
+    assert exc_info.value.status_code == 404
+
+
+async def test_report_linked_screenshot_survives_short_ttl_expiry_until_report_retention_elapses(
+    session: AsyncSession, organization: Organization
+):
+    """Paket 4 Final retention: kisa `screenshot_expires_at` gecmis olsa
+    bile, capture TAMAMLANMIS bir Rapor'a bagliysa purge, rapor-bagli
+    (daha uzun) retention penceresi dolana kadar ERTELENIR - aksi halde
+    tamamlanmis bir raporun gorsel katmani sessizce kaybolurdu."""
+
+    from datetime import UTC, datetime, timedelta
+
+    from app.services import page_analysis as page_analysis_service
+
+    linked_analysis = await _make_page_analysis(session, organization, url="https://retained.example.com/")
+    linked_analysis.screenshot_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.flush()
+
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant)
+    run.page_analysis_id = linked_analysis.id
+    await session.flush()
+    await _get_report_for_run(session, run)  # Report var oldugunu dogrular.
+
+    purged_count = await page_analysis_service.purge_expired_screenshots(session)
+    assert purged_count == 0
+
+    await session.refresh(linked_analysis)
+    assert linked_analysis.screenshot_data is not None
+
+
+async def test_unlinked_short_ttl_screenshot_is_purged_normally(
+    session: AsyncSession, organization: Organization
+):
+    """Herhangi bir run'a/rapora baglanmamis bir capture, rapor-bagli
+    retention'dan ETKILENMEZ - mevcut kisa TTL davranisi degismeden
+    calisir."""
+
+    from datetime import UTC, datetime, timedelta
+
+    from app.services import page_analysis as page_analysis_service
+
+    orphan_analysis = await _make_page_analysis(session, organization, url="https://orphan.example.com/")
+    orphan_analysis.screenshot_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.flush()
+
+    purged_count = await page_analysis_service.purge_expired_screenshots(session)
+    assert purged_count == 1
+
+    await session.refresh(orphan_analysis)
+    assert orphan_analysis.screenshot_data is None
+
+
 async def test_old_report_without_matching_page_analysis_opens_without_error(
     session: AsyncSession, organization: Organization
 ):
@@ -627,6 +810,60 @@ async def test_ab_comparison_present_for_two_variant_definition(
     assert detail.ab_comparison["sibling_variant_name"] == "Yeni Tasarim"
     baseline.assert_no_banned_claims(detail.ab_comparison["note"])
 
+    # Paket 4 Final: A/B raporu tek sayfada iki bagimsiz taraf gosterebilsin
+    # diye sibling'in kimligi, kaynak turu ve KENDI heatmap bolumu de tasinir.
+    assert uuid.UUID(detail.ab_comparison["sibling_report_id"])
+    assert detail.ab_comparison["this_source_type"] == "url"
+    assert detail.ab_comparison["sibling_source_type"] == "url"
+    assert "sibling_heatmap" in detail.ab_comparison
+    assert detail.ab_comparison["sibling_heatmap"]["label"] == detail.heatmap.label
+    assert "same_snapshot_sha256" in detail.ab_comparison
+
+
+async def test_ab_comparison_flags_identical_snapshot_hash(
+    session: AsyncSession, organization: Organization
+):
+    """Iki taraf da AYNI PageAnalysis capture'ina (dolayisiyla ayni
+    content_sha256'ya) baglanmissa, bu acikca isaretlenir - byte-duzeyinde
+    ayni snapshot karsilastirildigi anlamina gelir, gorsel farklilik
+    hakkinda hicbir sey KANITLAMAZ."""
+
+    project = Project(organization_id=organization.id, name=f"Proje {uuid.uuid4().hex[:6]}")
+    session.add(project)
+    await session.flush()
+    definition = TestDefinition(organization_id=organization.id, project_id=project.id, name="A/B ayni snapshot")
+    session.add(definition)
+    await session.flush()
+    variant_a = TestVariant(
+        organization_id=organization.id,
+        test_definition_id=definition.id,
+        name="Mevcut Tasarim",
+        config={"role": "existing"},
+    )
+    variant_b = TestVariant(
+        organization_id=organization.id,
+        test_definition_id=definition.id,
+        name="Yeni Tasarim",
+        config={"role": "new"},
+    )
+    session.add_all([variant_a, variant_b])
+    await session.flush()
+
+    shared_analysis = await _make_page_analysis(session, organization, url="https://shared.example.com/")
+    shared_analysis.content_sha256 = "a" * 64
+    await session.flush()
+
+    run_a = await _make_succeeded_run_with_report(session, organization, variant_a, role="existing", seed=1)
+    run_a.page_analysis_id = shared_analysis.id
+    run_b = await _make_succeeded_run_with_report(session, organization, variant_b, role="new", seed=2)
+    run_b.page_analysis_id = shared_analysis.id
+    await session.flush()
+    report_a = await _get_report_for_run(session, run_a)
+
+    detail = await reports_router.get_report(report_a.id, organization_id=organization.id, session=session)
+    assert detail.ab_comparison is not None
+    assert detail.ab_comparison["same_snapshot_sha256"] is True
+
 
 async def test_ab_comparison_absent_for_single_variant_definition(
     session: AsyncSession, organization: Organization
@@ -670,3 +907,238 @@ async def test_export_csv_contains_metric_and_segment_rows(session: AsyncSession
     assert "task_completion_probability" in csv_text
     assert "persona_segment" in csv_text
     assert "kritik_bulgu" in csv_text
+
+
+# --- Paket 4 Final Hardening: gercek visual attention overlay ------------------
+
+
+async def test_heatmap_for_design_asset_source_returns_real_visual_grid(
+    session: AsyncSession, organization: Organization
+):
+    """Screenshot/AI kaynakli raporlar artik DOM'un 5 sabit semantik bolgesini
+    DEGIL, gercek OpenCV 8x6 piksel grid'ini dondurur - modul secimine
+    BAGLI DEGILDIR (bu veri PageAnalysis islenirken her zaman uretilir)."""
+
+    analysis = await _make_design_asset_page_analysis(session, organization)
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant, modules=[])
+    run.page_analysis_id = analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+
+    assert detail.heatmap.available is True
+    assert detail.heatmap.overlay_kind == "synthetic_visual_attention"
+    assert detail.heatmap.feature_source == "visual_heuristic"
+    assert detail.heatmap.regions is None
+    assert detail.heatmap.grid is None
+    assert detail.heatmap.visual_cells is not None
+    assert len(detail.heatmap.visual_cells) == 2
+    assert detail.heatmap.visual_cells[0].intensity == 0.9
+    assert detail.heatmap.image_width == 800
+    assert detail.heatmap.image_height == 600
+    assert detail.heatmap.content_sha256 == "d" * 64
+    assert detail.heatmap.screenshot_url == f"/api/reports/{report.id}/heatmap-screenshot"
+    assert detail.heatmap.disclaimer  # her zaman dolu, sahte bir katman disclaimersiz gosterilmez
+
+
+def test_visual_attention_disclaimer_constant_has_required_scientific_wording():
+    lowered = reports_router.VISUAL_ATTENTION_DISCLAIMER.lower()
+    assert "göz takibi" in lowered or "eye" in lowered
+    assert "gerçek" in lowered
+
+
+async def test_heatmap_for_design_asset_source_unavailable_when_cells_missing(
+    session: AsyncSession, organization: Organization
+):
+    """Grid bossa/gecersizse sahte bir katman ASLA uretilmez."""
+
+    analysis = await _make_design_asset_page_analysis(session, organization, attention_cells=[])
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant, modules=[])
+    run.page_analysis_id = analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.heatmap.available is False
+    assert detail.heatmap.overlay_kind == "synthetic_visual_attention"
+    assert detail.heatmap.visual_cells is None
+
+
+async def test_url_source_heatmap_still_uses_semantic_regions(
+    session: AsyncSession, organization: Organization
+):
+    """URL/DOM raporlarinda mevcut 5-bolge davranisi DEGISMEDI."""
+
+    url = "https://example.com/anasayfa"
+    await _make_page_analysis(session, organization, url=url)
+    _project, _definition, variant = await _make_project_and_variant(session, organization, url=url)
+    run = await _make_succeeded_run_with_report(
+        session, organization, variant, url=url, modules=["synthetic_attention_estimate"]
+    )
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.heatmap.overlay_kind == "semantic_region"
+    assert detail.heatmap.feature_source == "dom"
+    assert detail.heatmap.visual_cells is None
+    assert detail.heatmap.regions is not None
+
+
+# --- Paket 4 Final Hardening: CTA overlay sozlesmesi ---------------------------
+
+
+async def test_cta_overlay_returns_visual_candidates_for_design_asset_source(
+    session: AsyncSession, organization: Organization
+):
+    analysis = await _make_design_asset_page_analysis(session, organization)
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant, modules=[])
+    run.page_analysis_id = analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.cta_overlay.available is True
+    assert detail.cta_overlay.feature_source == "visual_heuristic"
+    classifications = {box.classification for box in detail.cta_overlay.boxes}
+    assert classifications == {"visual_cta_candidate"}
+    assert len(detail.cta_overlay.boxes) == 2
+    assert all(box.heuristic_score is not None for box in detail.cta_overlay.boxes)
+
+
+async def test_cta_overlay_user_confirmed_is_labeled_and_deduped_against_candidate(
+    session: AsyncSession, organization: Organization
+):
+    """Kullanici, aday listesindeki 0. kutuyu onaylamissa - o aday BIR DAHA
+    ayrica cizilmez (dedupe), yalnizca 'user_confirmed_cta' olarak gorunur."""
+
+    analysis = await _make_design_asset_page_analysis(session, organization)
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant, modules=[])
+    run.page_analysis_id = analysis.id
+    run.input_snapshot = {
+        **run.input_snapshot,
+        "user_confirmed_cta": {
+            "design_asset_id": str(uuid.uuid4()),
+            "box": {"x": 0.4, "y": 0.2, "w": 0.2, "h": 0.06},
+            "selection_source": "candidate_confirmation",
+            "source_candidate_index": 0,
+            "verified_content_sha256": "d" * 64,
+        },
+    }
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    classifications = [box.classification for box in detail.cta_overlay.boxes]
+    assert classifications.count("user_confirmed_cta") == 1
+    # Aday listesindeki 2 taneden yalnizca 1'i (dedupe edilmemis olan) kalmali.
+    assert classifications.count("visual_cta_candidate") == 1
+    confirmed = next(box for box in detail.cta_overlay.boxes if box.classification == "user_confirmed_cta")
+    assert confirmed.label == "Sizin seçtiğiniz CTA"
+
+
+async def test_cta_overlay_manual_box_confirmation_does_not_dedupe_candidates(
+    session: AsyncSession, organization: Organization
+):
+    """Manuel cizilen bir onay hicbir adaya karsilik gelmez - dedupe edilmez,
+    tum adaylar + onaylanan kutu birlikte gorunur."""
+
+    analysis = await _make_design_asset_page_analysis(session, organization)
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant, modules=[])
+    run.page_analysis_id = analysis.id
+    run.input_snapshot = {
+        **run.input_snapshot,
+        "user_confirmed_cta": {
+            "design_asset_id": str(uuid.uuid4()),
+            "box": {"x": 0.05, "y": 0.05, "w": 0.1, "h": 0.05},
+            "selection_source": "manual_box",
+            "source_candidate_index": None,
+            "verified_content_sha256": "d" * 64,
+        },
+    }
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    classifications = [box.classification for box in detail.cta_overlay.boxes]
+    assert classifications.count("user_confirmed_cta") == 1
+    assert classifications.count("visual_cta_candidate") == 2
+
+
+async def test_cta_overlay_returns_dom_candidates_normalized_for_url_source(
+    session: AsyncSession, organization: Organization
+):
+    url = "https://example.com/anasayfa"
+    analysis = PageAnalysis(
+        organization_id=organization.id,
+        url=url,
+        authorization_confirmed=True,
+        status=PageAnalysisStatus.SUCCEEDED,
+        screenshot_data=b"fake-png-bytes",
+        image_width=1000,
+        image_height=500,
+        features={
+            "final_url": url,
+            "redirect_count": 0,
+            "element_boxes": [
+                {"role": "button", "x": 100.0, "y": 50.0, "width": 200.0, "height": 40.0},
+                {"role": "link", "x": 0.0, "y": 0.0, "width": 50.0, "height": 20.0},
+                {"role": "div", "x": 10.0, "y": 10.0, "width": 10.0, "height": 10.0},
+            ],
+        },
+    )
+    session.add(analysis)
+    await session.flush()
+
+    _project, _definition, variant = await _make_project_and_variant(session, organization, url=url)
+    run = await _make_succeeded_run_with_report(session, organization, variant, url=url, modules=[])
+    run.page_analysis_id = analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.cta_overlay.feature_source == "dom"
+    assert len(detail.cta_overlay.boxes) == 2  # yalnizca button/link, div haric
+    box = next(b for b in detail.cta_overlay.boxes if b.x == 0.1)
+    assert box.classification == "dom_interactive_candidate"
+    assert box.y == 0.1
+    assert box.w == 0.2
+    assert box.h == 0.08
+
+
+async def test_cta_overlay_unavailable_when_no_boxes(session: AsyncSession, organization: Organization):
+    analysis = await _make_design_asset_page_analysis(session, organization, visual_cta_candidates=[])
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant, modules=[])
+    run.page_analysis_id = analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.cta_overlay.available is False
+    assert detail.cta_overlay.boxes == []
+
+
+@pytest.mark.security
+async def test_cta_overlay_cross_tenant_page_analysis_is_rejected(
+    session: AsyncSession, organization: Organization
+):
+    other_org = Organization(name="Other Org CTA", slug=f"other-org-{uuid.uuid4().hex[:8]}")
+    session.add(other_org)
+    await session.flush()
+    foreign_analysis = await _make_design_asset_page_analysis(session, other_org)
+
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant, modules=[])
+    run.page_analysis_id = foreign_analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.cta_overlay.available is False
+    assert detail.cta_overlay.boxes == []

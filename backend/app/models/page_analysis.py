@@ -16,6 +16,11 @@ class PageAnalysisStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class PageAnalysisSourceKind(str, enum.Enum):
+    URL = "url"
+    DESIGN_ASSET = "design_asset"
+
+
 class PageAnalysis(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Kullanicinin belirttigi bir URL icin tek seferlik, pasif (Playwright
     tabanli) sayfa analizi is kaydi (bkz. app.services.page_analysis).
@@ -31,6 +36,7 @@ class PageAnalysis(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("ix_page_analyses_organization_id", "organization_id"),
         Index("ix_page_analyses_status", "status"),
+        Index("ix_page_analyses_design_asset_id", "design_asset_id"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -40,10 +46,29 @@ class PageAnalysis(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # Ortak kaynak sozlesmesi: tam olarak biri dolu olur (bkz.
+    # app.services.page_analysis.create_analysis). `source_kind` istemciden
+    # degil, sunucu tarafinda gonderilen alandan (url/design_asset_id) turetilir.
+    source_kind: Mapped[PageAnalysisSourceKind] = mapped_column(
+        SqlEnum(PageAnalysisSourceKind, name="page_analysis_source_kind"),
+        nullable=False,
+        default=PageAnalysisSourceKind.URL,
+    )
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    # `design_assets.id` HARD DELETE edilmez (yalnizca soft-delete: status=deleted,
+    # image_data=None - bkz. app.services.design_assets.delete_asset); yine de
+    # kalici bir PageAnalysis snapshot'inin, orijinal DesignAsset satiri ileride
+    # hard-delete edilirse KAYBOLMAMASI icin ondelete="SET NULL" kullanilir (asla
+    # CASCADE degil) - `screenshot_data` zaten bagimsiz bir kopya oldugundan bu
+    # kolon NULL'a dustugunde bile preview calismaya devam eder.
+    design_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("design_assets.id", ondelete="SET NULL"), nullable=True
+    )
     # Kullanicinin bu URL'yi analiz etme yetkisine sahip oldugunu acikca
-    # onayladigi (kendi beyanina dayali) bayrak; `false` iken is olusturulamaz
-    # (bkz. app.routers.page_analysis).
+    # onayladigi (kendi beyanina dayali) bayrak; yalnizca `source_kind=url` icin
+    # anlamlidir - `false` iken URL kaynakli is olusturulamaz (bkz.
+    # app.routers.page_analysis). DesignAsset kaynaginda bu kavram gecerli
+    # degildir (kullanici zaten kendi yukledigi gorseli analiz ediyor).
     authorization_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     status: Mapped[PageAnalysisStatus] = mapped_column(
@@ -64,6 +89,18 @@ class PageAnalysis(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # --- Ekran goruntusu: sureli saklanir, ayri bir purge cron'u ile silinir
     # (bkz. app.services.page_analysis.purge_expired_screenshots); metadata
-    # satiri kalir, yalnizca ikili veri ve son kullanma tarihi temizlenir. ---
+    # satiri kalir, yalnizca ikili veri ve son kullanma tarihi temizlenir.
+    # Kaynak turunden BAGIMSIZ, degismez (immutable) bir snapshot'tir - bir
+    # DesignAsset kaynagindan kopyalandiginda orijinal asset SONRADAN
+    # silinse/expire olsa bile bu kopya kendi retention suresi boyunca etkilenmez. ---
     screenshot_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     screenshot_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Guvenilir saklanan metadata veya gercek decode sonucundan alinir - istemci
+    # veya analyzer'in bildirdigi degere asla dogrudan guvenilmez (bkz. servis).
+    screenshot_content_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    image_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # SHA-256(screenshot_data) - yalnizca BYTE-duzeyinde eslesme anlamina gelir,
+    # perceptual/gorsel benzerlik DEGILDIR ve bir yetkilendirme anahtari degildir
+    # (bkz. app.services.page_analysis modul dokstring'i).
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)

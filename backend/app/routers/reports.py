@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.dependencies import get_organization_id
 from app.engine.baseline import compare_baseline_results
-from app.models.page_analysis import PageAnalysis, PageAnalysisStatus
+from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.projects import Project
 from app.models.reports import Report
 from app.models.simulations import SimulationRun, SimulationStatus
@@ -136,15 +136,70 @@ class HeatmapRegion(BaseModel):
     box: HeatmapRegionBox | None = None
 
 
+# Paket 4 Final Hardening: `overlay_kind` iki YAPISAL OLARAK FARKLI gorunumu
+# ayirt eder - "semantic_region" (DOM/URL kaynagi, 5 sabit isimli bolge,
+# `regions`/`HeatmapRegionBox` percent-koordinat sozlesmesi) ve
+# "synthetic_visual_attention" (screenshot/AI kaynagi, GERCEK OpenCV 8x6
+# piksel-tabanli grid, `grid` alaninda fraksiyon [0,1] x/y/w/h/intensity
+# hucreleri - bkz. app.services.image_visual_analysis). Ikisi ASLA
+# karistirilmaz; `feature_source` de ayni ayrimi tasir ("dom"/"visual_heuristic").
+VISUAL_ATTENTION_DISCLAIMER = (
+    "Sentetik dikkat tahmini — kırmızı alanlar algoritmanın daha yüksek görsel "
+    "belirginlik tahminini gösterir. Gerçek göz takibi veya tıklama verisi değildir."
+)
+
+
+class VisualAttentionCell(BaseModel):
+    x: float
+    y: float
+    w: float
+    h: float
+    intensity: float
+
+
 class HeatmapSection(BaseModel):
     available: bool
     label: str
+    overlay_kind: str = "semantic_region"
+    feature_source: str | None = None
     grid: list[dict] | None
     disclaimer: str | None = None
     regions: list[HeatmapRegion] | None = None
+    visual_cells: list[VisualAttentionCell] | None = None
+    algorithm_version: str | None = None
+    image_width: int | None = None
+    image_height: int | None = None
+    content_sha256: str | None = None
     screenshot_url: str | None = None
     coordinates_available: bool = False
     coordinates_unavailable_reason: str | None = None
+
+
+CTA_CLASSIFICATION_LABELS: dict[str, str] = {
+    "dom_interactive_candidate": "DOM etkileşimli aday",
+    "visual_cta_candidate": "Görsel CTA adayı",
+    "user_confirmed_cta": "Sizin seçtiğiniz CTA",
+}
+
+
+class CtaOverlayBox(BaseModel):
+    classification: str
+    label: str
+    x: float
+    y: float
+    w: float
+    h: float
+    heuristic_score: float | None = None
+
+
+class CtaOverlaySection(BaseModel):
+    available: bool
+    feature_source: str | None = None
+    boxes: list[CtaOverlayBox]
+    screenshot_url: str | None = None
+    coordinates_available: bool = False
+    coordinates_unavailable_reason: str | None = None
+    disclaimer: str
 
 
 class CampaignCtaSection(BaseModel):
@@ -183,6 +238,7 @@ class ReportDetailResponse(BaseModel):
     persona_segment_note: str
     critical_findings: list[CriticalFinding]
     heatmap: HeatmapSection
+    cta_overlay: CtaOverlaySection
     campaign_cta: CampaignCtaSection | None
     network_device: NetworkDeviceSection | None
     accessible_chart_summaries: list[AccessibleChartSummary]
@@ -270,16 +326,22 @@ def _score_level(score: float) -> str:
     return "medium"
 
 
-async def _find_linked_screenshot_analysis(
+async def _find_linked_screenshot_analysis_by_url(
     session: AsyncSession, organization_id: uuid.UUID, url: str | None
 ) -> PageAnalysis | None:
-    """Ayni organizasyonda, ayni URL icin daha once basariyla tamamlanmis ve
-    ekran goruntusu saklama suresi henuz dolmamis (bkz.
-    app.services.page_analysis.purge_expired_screenshots - suresi dolan
-    kayitlarda `screenshot_data` NULL'a cekilir) en guncel `PageAnalysis`
-    kaydini bulur. Baska bir organizasyonun ekran goruntusune ASLA erisilmez
-    (`organization_id` filtresi burada da uygulanir, endpoint tarafinda da
-    ayrica rapor sahipligi dogrulanir).
+    """LEGACY fallback (Paket 4B oncesi run'lar icin, `SimulationRun.
+    page_analysis_id IS NULL`): ayni organizasyonda, ayni URL icin daha once
+    basariyla tamamlanmis ve ekran goruntusu saklama suresi henuz dolmamis
+    (bkz. app.services.page_analysis.purge_expired_screenshots) en guncel
+    `PageAnalysis` kaydini URL STRING eslestirmesiyle bulur.
+
+    Paket 4 Final: yeni raporlarda KULLANILMAZ - `_resolve_report_page_analysis`
+    her zaman once `SimulationRun.page_analysis_id` FK'sini dener (bkz. orasi);
+    bu fonksiyon yalnizca FK'nin hic bulunmadigi eski run'lar icin son bir
+    geriye-donuk-uyumluluk yoludur, gecmise donuk backfill YAPILMAZ. Ayrica
+    `design_asset` kaynakli run'larda `PageAnalysis.url` zaten None'dur - bu
+    yol yapisal olarak yalnizca eski URL-kaynakli run'lar icin anlamlidir.
+    Baska bir organizasyonun ekran goruntusune ASLA erisilmez.
     """
 
     if not url:
@@ -299,6 +361,98 @@ async def _find_linked_screenshot_analysis(
     return result.scalars().first()
 
 
+async def _resolve_report_page_analysis(
+    session: AsyncSession, organization_id: uuid.UUID, run: SimulationRun
+) -> PageAnalysis | None:
+    """Bir run'in gorsel/heatmap kaynagi PageAnalysis'ini cozer.
+
+    Paket 4 Final: URL string eslestirmesi artik BIRINCIL yol DEGIL - yeni
+    run'larda (`page_analysis_id` dolu, bkz. app.services.test_wizard.
+    launch_draft) dogrudan FK ile, org sahipligi AYRICA dogrulanarak cozulur;
+    bu, A/B'nin iki tarafi da AYNI URL'yi kullansa bile veya taraf bir
+    DesignAsset (screenshot/AI) olsa bile (ki bu durumda `PageAnalysis.url`
+    zaten None'dur - URL string eslestirmesi yapisal olarak calismaz) her
+    zaman DOGRU capture'i bulur; cross-tenant/yanlis-capture riski yoktur.
+
+    Yalnizca `page_analysis_id IS NULL` olan (Paket 4B oncesi) eski run'lar
+    icin LEGACY URL string fallback'i korunur - gecmise donuk backfill
+    yapilmaz (bkz. `_find_linked_screenshot_analysis_by_url`).
+    """
+
+    if run.page_analysis_id is not None:
+        analysis = await session.get(PageAnalysis, run.page_analysis_id)
+        if analysis is None or analysis.organization_id != organization_id:
+            return None
+        return analysis
+
+    url = (run.input_snapshot or {}).get("url")
+    return await _find_linked_screenshot_analysis_by_url(session, organization_id, url)
+
+
+def _build_visual_attention_heatmap(analysis: PageAnalysis, report_id: uuid.UUID) -> HeatmapSection:
+    """Screenshot/AI (DesignAsset) kaynakli raporlar icin GERCEK OpenCV 8x6
+    piksel-tabanli dikkat grid'ini dondurur (bkz. app.services
+    .image_visual_analysis) - artik DOM'un 5 sabit semantik bolgesi
+    (`_build_heatmap`in URL/DOM dalinda) BURADA KULLANILMAZ; grid dogrudan
+    `PageAnalysis.features.synthetic_attention_estimate.cells`den okunur,
+    hicbir modul secimine bagli DEGILDIR (bu veri PageAnalysis islenirken
+    HER ZAMAN uretilir). Grid bos/gecersizse sahte bir katman ASLA uretilmez."""
+
+    features = analysis.features or {}
+    attention = features.get("synthetic_attention_estimate")
+    cells_raw = attention.get("cells") if isinstance(attention, dict) else None
+
+    visual_cells: list[VisualAttentionCell] = []
+    if isinstance(cells_raw, list):
+        for cell in cells_raw:
+            if not isinstance(cell, dict):
+                continue
+            try:
+                visual_cells.append(
+                    VisualAttentionCell(
+                        x=float(cell["x"]),
+                        y=float(cell["y"]),
+                        w=float(cell["w"]),
+                        h=float(cell["h"]),
+                        intensity=float(cell["intensity"]),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    if not visual_cells:
+        return HeatmapSection(
+            available=False,
+            label=SYNTHETIC_ATTENTION_LABEL,
+            overlay_kind="synthetic_visual_attention",
+            feature_source="visual_heuristic",
+            grid=None,
+            disclaimer=VISUAL_ATTENTION_DISCLAIMER,
+        )
+
+    screenshot_url = (
+        f"/api/reports/{report_id}/heatmap-screenshot" if analysis.screenshot_data is not None else None
+    )
+
+    return HeatmapSection(
+        available=True,
+        label=SYNTHETIC_ATTENTION_LABEL,
+        overlay_kind="synthetic_visual_attention",
+        feature_source="visual_heuristic",
+        grid=None,
+        visual_cells=visual_cells,
+        disclaimer=(attention.get("disclaimer") if isinstance(attention, dict) else None)
+        or VISUAL_ATTENTION_DISCLAIMER,
+        algorithm_version=attention.get("algorithm_version") if isinstance(attention, dict) else None,
+        image_width=analysis.image_width,
+        image_height=analysis.image_height,
+        content_sha256=analysis.content_sha256,
+        screenshot_url=screenshot_url,
+        coordinates_available=screenshot_url is not None,
+        coordinates_unavailable_reason=None if screenshot_url else SCREENSHOT_MISSING_REASON,
+    )
+
+
 async def _build_heatmap(
     session: AsyncSession,
     organization_id: uuid.UUID,
@@ -306,6 +460,15 @@ async def _build_heatmap(
     run: SimulationRun,
     content: dict,
 ) -> HeatmapSection:
+    analysis = await _resolve_report_page_analysis(session, organization_id, run)
+
+    # Paket 4 Final Hardening: screenshot/AI (DesignAsset) kaynakli raporlar
+    # artik DOM'un 5 sabit semantik bolgesini GORSEL heatmap gibi KULLANMAZ -
+    # gercek OpenCV piksel grid'ine erken donulur (bkz. `_build_visual_attention_heatmap`).
+    if analysis is not None and analysis.source_kind == PageAnalysisSourceKind.DESIGN_ASSET:
+        return _build_visual_attention_heatmap(analysis, report_id)
+
+    # --- URL/DOM yolu (degismedi): 5 sabit semantik bolge -------------------
     # `attention_grid`, yalnizca sihirbazda `synthetic_attention_estimate`
     # modulu secilmisse `app.services.simulation_worker` tarafindan
     # doldurulur (bkz. app.engine.advanced_modules.run_synthetic_attention_estimate).
@@ -315,7 +478,12 @@ async def _build_heatmap(
     disclaimer = attention_module.get("disclaimer") if attention_module else None
     if not grid:
         return HeatmapSection(
-            available=False, label=SYNTHETIC_ATTENTION_LABEL, grid=None, disclaimer=disclaimer
+            available=False,
+            label=SYNTHETIC_ATTENTION_LABEL,
+            overlay_kind="semantic_region",
+            feature_source="dom",
+            grid=None,
+            disclaimer=disclaimer,
         )
 
     regions = [
@@ -324,9 +492,6 @@ async def _build_heatmap(
         )
         for cell in grid
     ]
-
-    url = (run.input_snapshot or {}).get("url")
-    analysis = await _find_linked_screenshot_analysis(session, organization_id, url)
 
     screenshot_url: str | None = None
     coordinates_available = False
@@ -350,12 +515,138 @@ async def _build_heatmap(
     return HeatmapSection(
         available=True,
         label=SYNTHETIC_ATTENTION_LABEL,
+        overlay_kind="semantic_region",
+        feature_source="dom",
         grid=grid,
         disclaimer=disclaimer,
         regions=regions,
         screenshot_url=screenshot_url,
         coordinates_available=coordinates_available,
         coordinates_unavailable_reason=coordinates_unavailable_reason,
+    )
+
+
+CTA_OVERLAY_DISCLAIMER = (
+    "Bu kutular olası CTA (harekete geçirici alan) konumlarını gösterir. DOM "
+    "etkileşimli adaylar sayfa yapısından, görsel adaylar piksel "
+    "sezgilerinden türetilir — hiçbiri gerçek kullanıcı tıklaması veya göz "
+    "takibi verisi değildir; skorlar bir 'güven yüzdesi' değil, yalnızca "
+    "aday sıralama ölçüsüdür."
+)
+
+
+async def _build_cta_overlay(
+    session: AsyncSession,
+    organization_id: uuid.UUID,
+    report_id: uuid.UUID,
+    run: SimulationRun,
+) -> CtaOverlaySection:
+    """CTA kutularini (DOM etkilesimli aday / gorsel CTA adayi / kullanici
+    onayli CTA) tek, kaynak-turune-gore normalize edilmis bir listede dondurur.
+
+    Dedupe kurali: kullanici onayli CTA bir ADAYIN onaylanmasindan geldiyse
+    (`selection_source="candidate_confirmation"`), o SPESIFIK adayin index'i
+    (`source_candidate_index`) aday listesinden ATLANIR - ayni kutu iki kez
+    (hem 'aday' hem 'onaylandi' olarak) CIZILMEZ, kullanici onayli durum
+    onceliklidir. Manuel cizilen (`manual_box`) bir onay, hicbir adaya karsilik
+    gelmedigi icin dedupe GEREKTIRMEZ.
+    """
+
+    analysis = await _resolve_report_page_analysis(session, organization_id, run)
+    if analysis is None:
+        return CtaOverlaySection(
+            available=False,
+            boxes=[],
+            coordinates_unavailable_reason=SCREENSHOT_MISSING_REASON,
+            disclaimer=CTA_OVERLAY_DISCLAIMER,
+        )
+
+    boxes: list[CtaOverlayBox] = []
+    confirmed_candidate_index: int | None = None
+
+    user_confirmed = (run.input_snapshot or {}).get("user_confirmed_cta")
+    if isinstance(user_confirmed, dict):
+        box = user_confirmed.get("box") or {}
+        try:
+            boxes.append(
+                CtaOverlayBox(
+                    classification="user_confirmed_cta",
+                    label=CTA_CLASSIFICATION_LABELS["user_confirmed_cta"],
+                    x=float(box["x"]),
+                    y=float(box["y"]),
+                    w=float(box["w"]),
+                    h=float(box["h"]),
+                )
+            )
+            if user_confirmed.get("selection_source") == "candidate_confirmation":
+                idx = user_confirmed.get("source_candidate_index")
+                if isinstance(idx, int):
+                    confirmed_candidate_index = idx
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    feature_source: str | None = None
+    if analysis.source_kind == PageAnalysisSourceKind.DESIGN_ASSET:
+        feature_source = "visual_heuristic"
+        candidates = (analysis.features or {}).get("visual_cta_candidates") or []
+        for index, candidate in enumerate(candidates):
+            if confirmed_candidate_index is not None and index == confirmed_candidate_index:
+                continue
+            if not isinstance(candidate, dict):
+                continue
+            box = candidate.get("box") or {}
+            try:
+                boxes.append(
+                    CtaOverlayBox(
+                        classification="visual_cta_candidate",
+                        label=CTA_CLASSIFICATION_LABELS["visual_cta_candidate"],
+                        x=float(box["x"]),
+                        y=float(box["y"]),
+                        w=float(box["w"]),
+                        h=float(box["h"]),
+                        heuristic_score=candidate.get("heuristic_score"),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+    else:
+        feature_source = "dom"
+        element_boxes = (analysis.features or {}).get("element_boxes") or []
+        width = analysis.image_width
+        height = analysis.image_height
+        if width and height:
+            for element in element_boxes:
+                if not isinstance(element, dict) or element.get("role") not in ("button", "link"):
+                    continue
+                try:
+                    x = float(element["x"]) / width
+                    y = float(element["y"]) / height
+                    w = float(element["width"]) / width
+                    h = float(element["height"]) / height
+                except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                    continue
+                boxes.append(
+                    CtaOverlayBox(
+                        classification="dom_interactive_candidate",
+                        label=CTA_CLASSIFICATION_LABELS["dom_interactive_candidate"],
+                        x=x,
+                        y=y,
+                        w=w,
+                        h=h,
+                    )
+                )
+
+    screenshot_url = (
+        f"/api/reports/{report_id}/heatmap-screenshot" if analysis.screenshot_data is not None else None
+    )
+    return CtaOverlaySection(
+        available=bool(boxes),
+        feature_source=feature_source,
+        boxes=boxes,
+        screenshot_url=screenshot_url,
+        coordinates_available=screenshot_url is not None,
+        coordinates_unavailable_reason=None if screenshot_url else SCREENSHOT_MISSING_REASON,
+        disclaimer=CTA_OVERLAY_DISCLAIMER,
     )
 
 
@@ -495,7 +786,7 @@ def _build_accessible_chart_summaries(metrics: dict) -> list[AccessibleChartSumm
 
 async def _find_ab_sibling_report(
     session: AsyncSession, organization_id: uuid.UUID, ctx: _ReportContext
-) -> tuple[SimulationRun, TestVariant] | None:
+) -> tuple[SimulationRun, TestVariant, Report] | None:
     """Ayni test tanimindaki, tam olarak iki varyantli bir A/B kurulumunda
     diger varyantin en son basarili calistirmasini + raporunu bulur.
 
@@ -536,10 +827,11 @@ async def _find_ab_sibling_report(
         .order_by(Report.created_at.desc())
         .limit(1)
     )
-    if sibling_report_result.scalar_one_or_none() is None:
+    sibling_report = sibling_report_result.scalar_one_or_none()
+    if sibling_report is None:
         return None
 
-    return sibling_run, sibling_variant
+    return sibling_run, sibling_variant, sibling_report
 
 
 async def _build_detail_response(
@@ -552,7 +844,7 @@ async def _build_detail_response(
     ab_comparison: dict | None = None
     sibling = await _find_ab_sibling_report(session, organization_id, ctx)
     if sibling is not None:
-        sibling_run, sibling_variant = sibling
+        sibling_run, sibling_variant, sibling_report = sibling
         assert sibling_run.result is not None
         this_role = input_snapshot.get("role", "primary")
         this_is_a = this_role == "existing" or this_role == "primary"
@@ -576,6 +868,36 @@ async def _build_detail_response(
         )
         ab_comparison["this_variant_role"] = "variant_a" if this_is_a else "variant_b"
         ab_comparison["sibling_variant_name"] = sibling_variant.name
+        ab_comparison["sibling_report_id"] = str(sibling_report.id)
+
+        # Paket 4 Final: rapor ekraninin A/B tarafini tek sayfada, bagimsiz
+        # heatmap toggle'lariyla gosterebilmesi icin sibling tarafin da
+        # kaynak turu ve heatmap bolumu burada (tek bir HTTP cagrisinda)
+        # tasinir - `_build_heatmap` AYNI (salt-okunur, yeniden hesaplama
+        # yapmayan) fonksiyon sibling run icin de cagrilir.
+        sibling_source_type = (sibling_run.input_snapshot or {}).get("source_type", "url")
+        this_source_type = input_snapshot.get("source_type", "url")
+        ab_comparison["this_source_type"] = this_source_type
+        ab_comparison["sibling_source_type"] = sibling_source_type
+        sibling_heatmap = await _build_heatmap(
+            session, organization_id, sibling_report.id, sibling_run, sibling_run.result
+        )
+        ab_comparison["sibling_heatmap"] = sibling_heatmap.model_dump(mode="json")
+        sibling_cta_overlay = await _build_cta_overlay(session, organization_id, sibling_report.id, sibling_run)
+        ab_comparison["sibling_cta_overlay"] = sibling_cta_overlay.model_dump(mode="json")
+
+        # Byte-duzeyinde ayni snapshot karsilastirmasi uyarisi (bkz. plan §8):
+        # iki tarafin PageAnalysis.content_sha256'si eslesiyorsa acikca
+        # belirtilir - SHA-256 EŞITSIZLIGI gorsel farklilik KANITI sayilmaz,
+        # yalnizca esitlik durumu (byte-ozdesligi) burada isaretlenir.
+        this_analysis = await _resolve_report_page_analysis(session, organization_id, ctx.run)
+        sibling_analysis = await _resolve_report_page_analysis(session, organization_id, sibling_run)
+        ab_comparison["same_snapshot_sha256"] = bool(
+            this_analysis
+            and sibling_analysis
+            and this_analysis.content_sha256
+            and this_analysis.content_sha256 == sibling_analysis.content_sha256
+        )
 
     return ReportDetailResponse(
         id=ctx.report.id,
@@ -596,7 +918,13 @@ async def _build_detail_response(
             rules_version=ctx.run.rules_version,
             fixture_version=ctx.run.fixture_version,
             input_summary={
+                # Paket 4 Final Hardening: `input_snapshot.url` artik HICBIR
+                # kosulda sahte bir deger tasimaz (bkz. app.services
+                # .test_wizard.launch_draft) - DesignAsset kaynaginda zaten
+                # gercekten `None`dur, burada AYRICA gizlenmesi/maskelenmesi
+                # gerekmez; dogrudan iletilir.
                 "url": input_snapshot.get("url"),
+                "source_type": input_snapshot.get("source_type", "url"),
                 "wizard_test_type": input_snapshot.get("wizard_test_type"),
                 "persona_count": input_snapshot.get("persona_count"),
                 "target_audience": input_snapshot.get("target_audience"),
@@ -610,6 +938,7 @@ async def _build_detail_response(
         persona_segment_note=PERSONA_SEGMENT_NOTE,
         critical_findings=_build_critical_findings(metrics),
         heatmap=await _build_heatmap(session, organization_id, ctx.report.id, ctx.run, content),
+        cta_overlay=await _build_cta_overlay(session, organization_id, ctx.report.id, ctx.run),
         campaign_cta=_build_campaign_cta(content),
         network_device=_build_network_device(content),
         accessible_chart_summaries=_build_accessible_chart_summaries(metrics),
@@ -698,8 +1027,7 @@ async def get_report_heatmap_screenshot(
     """
 
     ctx = await _get_owned_report_context(session, organization_id, report_id)
-    url = (ctx.run.input_snapshot or {}).get("url")
-    analysis = await _find_linked_screenshot_analysis(session, organization_id, url)
+    analysis = await _resolve_report_page_analysis(session, organization_id, ctx.run)
     await session.commit()
 
     if analysis is None or analysis.screenshot_data is None:

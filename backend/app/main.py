@@ -14,6 +14,8 @@ from app.routers.ai_explanations import router as ai_explanations_router
 from app.routers.analysis_modules import router as analysis_modules_router
 from app.routers.auth import router as auth_router
 from app.routers.billing import router as billing_router
+from app.routers.design_assets import router as design_assets_router
+from app.routers.design_generations import router as design_generations_router
 from app.routers.page_analysis import router as page_analysis_router
 from app.routers.personas import router as personas_router
 from app.routers.projects import router as projects_router
@@ -53,6 +55,8 @@ app.include_router(ai_explanations_router)
 app.include_router(analysis_modules_router)
 app.include_router(auth_router)
 app.include_router(billing_router)
+app.include_router(design_assets_router)
+app.include_router(design_generations_router)
 app.include_router(page_analysis_router)
 app.include_router(personas_router)
 app.include_router(projects_router)

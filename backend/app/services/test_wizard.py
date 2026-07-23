@@ -10,18 +10,28 @@ Fiyatlandirma/teklif (quote) burada yeniden hesaplanmaz; her zaman
 `app.services.quotes.build_quote` (Prompt 3 servisi) cagrilir.
 """
 
+import math
 import uuid
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.design_assets import DesignAssetStatus
+from app.models.design_generation import DesignGenerationStatus
 from app.models.simulations import SimulationRun, SimulationStatus
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
 from app.models.tests import TestDefinition, TestVariant
 from app.services import chip_ledger, module_catalog, persona_presets, personas, quotes
+from app.services import design_assets as design_assets_service
+from app.services import design_generation as design_generation_service
 from app.services import entitlements as entitlements_service
-from app.services.exceptions import InsufficientChipBalanceError
+from app.services import page_analysis as page_analysis_service
+from app.services.exceptions import (
+    DesignAssetNotFoundError,
+    DesignGenerationJobNotFoundError,
+    InsufficientChipBalanceError,
+)
 from app.services.pricing import FEATURE_ACCESSIBILITY_PRECHECK, FEATURE_BASIC_UX_TEST
 
 # --- Test turleri (bkz. docs/product-rules.md) ------------------------------
@@ -29,6 +39,78 @@ EXISTING_SITE_BASIC_UX = "existing_site_basic_ux"
 AB_COMPARISON = "ab_comparison"
 ACCESSIBILITY_PRECHECK = "accessibility_precheck"
 WIZARD_TEST_TYPES = (EXISTING_SITE_BASIC_UX, AB_COMPARISON, ACCESSIBILITY_PRECHECK)
+
+# --- Tasarim kaynagi turleri: URL veya yuklenen ekran goruntusu (screenshot) --
+#
+# `current_source_type` alani eski taslaklarda hic bulunmayabilir; bu durumda
+# `effective_source_type()` varsayilan olarak SOURCE_TYPE_URL dondurur (geriye
+# donuk uyumluluk - mevcut URL akisi/testleri bozulmaz). Ekran goruntusu
+# kaynagi henuz analyzer/simulasyon motoruna baglanmadigi icin bu kaynakla
+# GERCEK bir test BASLATILAMAZ (bkz. `launch_draft` altindaki acik engel) -
+# kullanici yalnizca gorseli taslaga kaydedebilir, onizleyebilir, degistirebilir
+# ve kaldirabilir (bkz. app.routers.design_assets / Prompt 2 kapsam sinirlari).
+SOURCE_TYPE_URL = "url"
+SOURCE_TYPE_SCREENSHOT = "screenshot"
+SOURCE_TYPES = (SOURCE_TYPE_URL, SOURCE_TYPE_SCREENSHOT)
+
+# "Tasarim B" (new_*) tarafi icin ek bir ucuncu kaynak turu: AI ile Tasarim
+# A'dan uretilen bir varyant. Yalnizca `new_source_type` icin gecerlidir -
+# "Tasarim A" (current_*) tarafi hicbir zaman AI ile uretilemez (AI uretimi
+# HER ZAMAN mevcut bir tasarimdan/referanstan yeni bir varyant uretir, bkz.
+# app.services.design_generation). Bu kaynakla da (screenshot gibi) GERCEK
+# bir test BASLATILAMAZ.
+SOURCE_TYPE_AI_GENERATED = "ai_generated"
+NEW_SOURCE_TYPES = (SOURCE_TYPE_URL, SOURCE_TYPE_SCREENSHOT, SOURCE_TYPE_AI_GENERATED)
+
+# Ekran goruntusu kaynagi "mevcut site: temel UX testi" VE A/B
+# karsilastirmasinin her iki tarafinda da acik (bkz. Paket 4 Final -
+# `launch_draft` artik URL disi kaynaklari da baslatir); erisilebilirlik on
+# kontrolu DOM/sayfa yapisi gerektirdigi icin daima yalnizca URL kabul eder.
+SCREENSHOT_ALLOWED_TEST_TYPES = (EXISTING_SITE_BASIC_UX,)
+
+ACCESSIBILITY_SCREENSHOT_REJECTION_MESSAGE = (
+    "Erisilebilirlik on kontrolu DOM ve sayfa yapisi gerektirdigi icin yalnizca URL kaynagiyla calisir."
+)
+SCREENSHOT_ASSET_UNAVAILABLE_MESSAGE = (
+    "Tasarim gorseli kullanilamiyor (silinmis, saklama suresi dolmus veya erisilemez olabilir); "
+    "lutfen yeni bir gorsel yukleyin."
+)
+AI_GENERATION_UNAVAILABLE_MESSAGE = (
+    "AI ile uretilen tasarim taslagi kullanilamiyor (bulunamadi, henuz tamamlanmamis veya "
+    "baska bir organizasyona ait olabilir); lutfen sonucu yeniden kontrol edin."
+)
+AI_GENERATION_ASSET_MISMATCH_MESSAGE = (
+    "new_design_asset_id, kabul edilen AI uretim sonucuyla eslesmiyor."
+)
+
+# --- Kullanici CTA onayi (Paket 4C+4D) ---------------------------------------
+#
+# Annotation, DesignAsset'in GLOBAL bir ozelligi DEGILDIR - ayni asset farkli
+# taslaklarda ve ayni taslagin hem A hem B tarafinda kullanilabilir. Bu yuzden
+# `design_asset_id` uzerinde ayri/unique bir tablo yerine, mevcut
+# `TestWizardDraft.payload` JSON'una `current_cta_annotation`/
+# `new_cta_annotation` olarak (current_design_asset_id/new_design_asset_id ile
+# AYNI slot desenini izleyerek) eklenir - yeni migration/tablo GEREKMEZ.
+CTA_SELECTION_CANDIDATE_CONFIRMATION = "candidate_confirmation"
+CTA_SELECTION_MANUAL_BOX = "manual_box"
+CTA_SELECTION_SOURCES = (CTA_SELECTION_CANDIDATE_CONFIRMATION, CTA_SELECTION_MANUAL_BOX)
+
+CTA_ANNOTATION_FIELDS = ("current_cta_annotation", "new_cta_annotation")
+CTA_ANNOTATION_FIELD_TO_ASSET_FIELD = {
+    "current_cta_annotation": "current_design_asset_id",
+    "new_cta_annotation": "new_design_asset_id",
+}
+_SLOT_ASSET_FIELD_TO_ANNOTATION_FIELD = {
+    asset_field: annotation_field for annotation_field, asset_field in CTA_ANNOTATION_FIELD_TO_ASSET_FIELD.items()
+}
+
+_CTA_ANNOTATION_MIN_AREA_FRACTION = 0.0005
+CTA_ANNOTATION_LARGE_AREA_WARNING = "cta_annotation_covers_full_image"
+_CTA_ANNOTATION_LARGE_AREA_THRESHOLD = 0.95
+
+CTA_ANNOTATION_ASSET_MISMATCH_MESSAGE = (
+    "cta_annotation.design_asset_id, bu tarafin (current/new) guncel design_asset_id'siyle eslesmiyor."
+)
 
 # Sihirbazdaki test turu, teklif (quote) servisinin bildigi iki
 # feature_key'den birine eslenir: A/B karsilastirmasi da persona sayisina
@@ -61,7 +143,14 @@ PATCHABLE_FIELDS = {
     "target_task",
     "test_type",
     "current_url",
+    "current_source_type",
+    "current_design_asset_id",
     "new_url",
+    "new_source_type",
+    "new_design_asset_id",
+    "new_ai_generation_id",
+    "current_cta_annotation",
+    "new_cta_annotation",
     "persona_count",
     "target_audience",
     "persona_preset_id",
@@ -115,6 +204,34 @@ def validate_patch_fields(patch: dict) -> None:
         if field in patch and patch[field] is not None:
             _validate_url_syntax(patch[field], field)
 
+    if "current_source_type" in patch and patch["current_source_type"] not in SOURCE_TYPES:
+        raise DraftValidationError(f"Gecersiz current_source_type: {patch['current_source_type']}")
+
+    if "current_design_asset_id" in patch and patch["current_design_asset_id"] is not None:
+        try:
+            uuid.UUID(str(patch["current_design_asset_id"]))
+        except (ValueError, TypeError) as exc:
+            raise DraftValidationError("current_design_asset_id gecerli bir UUID olmalidir") from exc
+
+    if "new_source_type" in patch and patch["new_source_type"] not in NEW_SOURCE_TYPES:
+        raise DraftValidationError(f"Gecersiz new_source_type: {patch['new_source_type']}")
+
+    if "new_design_asset_id" in patch and patch["new_design_asset_id"] is not None:
+        try:
+            uuid.UUID(str(patch["new_design_asset_id"]))
+        except (ValueError, TypeError) as exc:
+            raise DraftValidationError("new_design_asset_id gecerli bir UUID olmalidir") from exc
+
+    if "new_ai_generation_id" in patch and patch["new_ai_generation_id"] is not None:
+        try:
+            uuid.UUID(str(patch["new_ai_generation_id"]))
+        except (ValueError, TypeError) as exc:
+            raise DraftValidationError("new_ai_generation_id gecerli bir UUID olmalidir") from exc
+
+    for field in CTA_ANNOTATION_FIELDS:
+        if field in patch:
+            _validate_cta_annotation_shape(patch[field], field=field)
+
     if "modules" in patch:
         modules = patch["modules"]
         if not isinstance(modules, list) or not all(isinstance(m, str) for m in modules):
@@ -158,10 +275,271 @@ def validate_patch_fields(patch: dict) -> None:
             raise DraftValidationError("project_id gecerli bir UUID olmalidir") from exc
 
 
+def _validate_cta_annotation_shape(value: object, *, field: str) -> None:
+    """`current_cta_annotation`/`new_cta_annotation` icin SAF/senkron sekil
+    dogrulamasi - `design_asset_id` sahiplik/kullanilabilirlik dogrulamasi
+    (DB erisimi gerektirir) burada YAPILMAZ, bkz. `resolve_cta_annotation_patch`.
+
+    `null`, bir slot'un annotation'ini acikca temizlemek icin gecerlidir."""
+
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise DraftValidationError(f"'{field}' bir sozluk olmalidir")
+
+    try:
+        uuid.UUID(str(value.get("design_asset_id")))
+    except (ValueError, TypeError) as exc:
+        raise DraftValidationError(f"'{field}.design_asset_id' gecerli bir UUID olmalidir") from exc
+
+    box = value.get("box")
+    if not isinstance(box, dict):
+        raise DraftValidationError(f"'{field}.box' bir sozluk olmalidir")
+
+    numeric_box: dict[str, float] = {}
+    for key in ("x", "y", "w", "h"):
+        raw = box.get(key)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise DraftValidationError(f"'{field}.box.{key}' sayisal olmalidir")
+        number = float(raw)
+        if not math.isfinite(number):
+            raise DraftValidationError(f"'{field}.box.{key}' sonlu bir sayi degil (NaN/Infinity)")
+        if not (0.0 <= number <= 1.0):
+            raise DraftValidationError(f"'{field}.box.{key}' 0 ile 1 arasinda olmalidir")
+        numeric_box[key] = number
+
+    area_fraction = numeric_box["w"] * numeric_box["h"]
+    if area_fraction < _CTA_ANNOTATION_MIN_AREA_FRACTION:
+        raise DraftValidationError(f"'{field}' icin secilen alan anlamsiz derecede kucuk")
+
+    if value.get("selection_source") not in CTA_SELECTION_SOURCES:
+        raise DraftValidationError(
+            f"'{field}.selection_source', {', '.join(CTA_SELECTION_SOURCES)} degerlerinden biri olmalidir"
+        )
+
+    source_candidate_index = value.get("source_candidate_index")
+    if source_candidate_index is not None:
+        if (
+            isinstance(source_candidate_index, bool)
+            or not isinstance(source_candidate_index, int)
+            or source_candidate_index < 0
+        ):
+            raise DraftValidationError(
+                f"'{field}.source_candidate_index' negatif olmayan bir tam sayi olmalidir"
+            )
+
+
+def cta_annotation_area_warning(value: dict | None) -> str | None:
+    """Buyuk/tam-ekran bir CTA secimi ZORLA reddedilmez, yalnizca uyari
+    dondurulur (bkz. plan - "uyari verilmeli", engelleme degil)."""
+
+    if value is None:
+        return None
+    box = value.get("box") or {}
+    try:
+        area_fraction = float(box["w"]) * float(box["h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if area_fraction > _CTA_ANNOTATION_LARGE_AREA_THRESHOLD:
+        return CTA_ANNOTATION_LARGE_AREA_WARNING
+    return None
+
+
+async def resolve_cta_annotation_patch(
+    session: AsyncSession, organization_id: uuid.UUID, raw_value: dict | None
+) -> dict | None:
+    """PATCH govdesinde gelen HAM annotation dict'ini sunucu tarafinda nihai
+    sekle cevirir: `design_asset_id` sahiplik + kullanilabilirlik (aktif/
+    silinmemis/suresi dolmamis/ikili verisi mevcut) burada BAGIMSIZ olarak
+    dogrulanir (ayni `validate_screenshot_asset_ownership` kurallari), ve
+    `verified_content_sha256` HER ZAMAN sunucuda `DesignAsset.checksum_sha256`
+    okunarak yazilir - client'in gonderdigi HERHANGI bir hash degeri (byle bir
+    alan gonderilmis olsa bile) sessizce YOK SAYILIR, asla guvenilmez."""
+
+    if raw_value is None:
+        return None
+
+    asset_id = uuid.UUID(str(raw_value["design_asset_id"]))
+    try:
+        asset = await design_assets_service.get_owned_asset(session, organization_id, asset_id)
+    except DesignAssetNotFoundError as exc:
+        raise DraftValidationError(SCREENSHOT_ASSET_UNAVAILABLE_MESSAGE) from exc
+
+    if (
+        asset.status != DesignAssetStatus.ACTIVE
+        or asset.image_data is None
+        or design_assets_service.is_expired(asset)
+    ):
+        raise DraftValidationError(SCREENSHOT_ASSET_UNAVAILABLE_MESSAGE)
+
+    box = raw_value["box"]
+    return {
+        "design_asset_id": str(asset.id),
+        "box": {
+            "x": float(box["x"]),
+            "y": float(box["y"]),
+            "w": float(box["w"]),
+            "h": float(box["h"]),
+        },
+        "selection_source": raw_value["selection_source"],
+        "source_candidate_index": raw_value.get("source_candidate_index"),
+        # Client'tan asla kabul edilmez - her zaman sunucuda DesignAsset'in
+        # GUNCEL checksum'indan okunur.
+        "verified_content_sha256": asset.checksum_sha256,
+    }
+
+
+def invalidate_stale_cta_annotations(existing: dict, merged: dict, patch: dict) -> dict:
+    """Bir slot'un `design_asset_id`si (var olan degerden farkli olarak)
+    degistiginde, O SLOT'UN annotation'i otomatik olarak `None`'a cekilir -
+    diger slot ve diger taslaklar ETKILENMEZ. Istemci bu PATCH cagrisinda o
+    slot'un annotation alanini ZATEN acikca belirtmisse (yeni bir deger veya
+    acik `null` ile temizleme), o deger ONCELIKLIDIR - burada UZERINE
+    YAZILMAZ (bu, ayni cagrida hem asset degisimini hem yeni asset icin
+    annotation onayini birlikte gonderen istemciyi kirmaz)."""
+
+    result = dict(merged)
+    for asset_field, annotation_field in _SLOT_ASSET_FIELD_TO_ANNOTATION_FIELD.items():
+        if annotation_field in patch:
+            continue
+        if merged.get(asset_field) != existing.get(asset_field):
+            result[annotation_field] = None
+    return result
+
+
 def merge_payload(existing: dict, patch: dict) -> dict:
     merged = dict(existing)
     merged.update(patch)
     return merged
+
+
+def effective_source_type(payload: dict) -> str:
+    """Taslagin etkin tasarim kaynagi turunu dondurur.
+
+    Eski taslaklarda `current_source_type` hic bulunmaz; bu durumda geriye
+    donuk uyumluluk icin daima SOURCE_TYPE_URL varsayilir (mevcut URL akisi/
+    testleri bozulmaz).
+    """
+
+    return payload.get("current_source_type") or SOURCE_TYPE_URL
+
+
+def effective_new_source_type(payload: dict) -> str:
+    """Taslagin etkin "Tasarim B" (new) kaynak turunu dondurur.
+
+    `effective_source_type` ile ayni geriye donuk uyumluluk kurali gecerlidir:
+    `new_source_type` hic bulunmuyorsa daima SOURCE_TYPE_URL varsayilir (eski
+    A/B taslaklari `new_url` alanini korur, bu nedenle bozulmaz).
+    """
+
+    return payload.get("new_source_type") or SOURCE_TYPE_URL
+
+
+def validate_source_type_for_test_type(payload: dict) -> None:
+    """Taslagin (birlestirilmis/merged) tam gorunumune gore kaynak turu <-> test
+    turu uyumunu dogrular; format disi (cross-field) bir kural oldugu icin
+    `validate_patch_fields`'ten (tek basina PATCH govdesini goren, saf/senkron
+    fonksiyon) ayri tutulur - cagiran taraf (router) bunu birlestirilmis
+    payload uzerinde ayrica cagirmalidir.
+
+    A/B karsilastirmasi bu paketten itibaren her iki tarafta da ekran
+    goruntusu kaynagini kabul eder (bkz. `launch_draft` - baslatma yine de
+    gorsel karsilastirma motoru baglanana kadar engellenir). Erisilebilirlik
+    on kontrolu ise DOM/sayfa yapisi gerektirdigi icin daima yalnizca URL
+    kabul eder.
+    """
+
+    test_type = payload.get("test_type")
+    if test_type == ACCESSIBILITY_PRECHECK and effective_source_type(payload) == SOURCE_TYPE_SCREENSHOT:
+        raise DraftValidationError(ACCESSIBILITY_SCREENSHOT_REJECTION_MESSAGE)
+
+
+async def validate_screenshot_asset_ownership(
+    session: AsyncSession, organization_id: uuid.UUID, asset_id: uuid.UUID
+) -> None:
+    """Ekran goruntusu kaynagi olarak referans verilen `DesignAsset`in GERCEKTEN
+    bu organizasyona ait, aktif, ikili verisi hala mevcut ve saklama suresi
+    dolmamis oldugunu DB'ye sorarak dogrular (yalnizca UUID bicimi kontrolu
+    DEGIL). Baska bir organizasyonun asset'i icin de AYNI genel mesaj
+    donduruler - "yok" ile "baskasina ait" arasinda hicbir bilgi sizdirilmaz
+    (bkz. app.services.design_assets.get_owned_asset ile ayni "404 sizdirmaz"
+    deseni, burada DraftValidationError/400 olarak yeniden yukselir).
+    """
+
+    try:
+        asset = await design_assets_service.get_owned_asset(session, organization_id, asset_id)
+    except DesignAssetNotFoundError as exc:
+        raise DraftValidationError(SCREENSHOT_ASSET_UNAVAILABLE_MESSAGE) from exc
+
+    if (
+        asset.status != DesignAssetStatus.ACTIVE
+        or asset.image_data is None
+        or design_assets_service.is_expired(asset)
+    ):
+        raise DraftValidationError(SCREENSHOT_ASSET_UNAVAILABLE_MESSAGE)
+
+
+async def validate_ai_generation_ownership(
+    session: AsyncSession, organization_id: uuid.UUID, job_id: uuid.UUID, design_asset_id: uuid.UUID
+) -> None:
+    """Draft'a `new_source_type=ai_generated` olarak referans verilen is (job)
+    icin: bu organizasyona ait, BASARILI (succeeded) ve `design_asset_id`
+    parametresi tam olarak isin `result_asset_id`siyle eslesiyor mu diye
+    dogrular. Boylece kullanici, kabul ETMEDIGI (ör. hala 'running' veya
+    reddedilmis) bir AI sonucunu draft'a "sahte kabul" ile baglayamaz - tek
+    gecerli baglanti yolu, gercekte basarili bir isin GERCEK sonuc
+    asset'idir. Baska bir organizasyona ait is icin de AYNI genel mesaj
+    donduruler (bkz. validate_screenshot_asset_ownership ile ayni "sizdirmaz"
+    deseni).
+    """
+
+    try:
+        job = await design_generation_service.get_owned_job(session, organization_id, job_id)
+    except DesignGenerationJobNotFoundError as exc:
+        raise DraftValidationError(AI_GENERATION_UNAVAILABLE_MESSAGE) from exc
+
+    if job.status != DesignGenerationStatus.SUCCEEDED or job.result_asset_id is None:
+        raise DraftValidationError(AI_GENERATION_UNAVAILABLE_MESSAGE)
+
+    if job.result_asset_id != design_asset_id:
+        raise DraftValidationError(AI_GENERATION_ASSET_MISMATCH_MESSAGE)
+
+    # Sonuc asset'i, screenshot kaynagiyla AYNI (aktif/suresi dolmamis) sahiplik
+    # kontrolunden de gecirilir - is basarili olsa bile asset ayrica suresi
+    # dolmus/silinmis olabilir (ör. is uzun sure kabul edilmeden beklemis).
+    await validate_screenshot_asset_ownership(session, organization_id, design_asset_id)
+
+
+async def revalidate_cta_annotation(
+    session: AsyncSession, organization_id: uuid.UUID, payload: dict, *, slot: str
+) -> bool:
+    """Ileriye donuk: bir slot'un kaydedilmis annotation'inin HALA gecerli
+    olup olmadigini (asset hala kullanilabilir mi, `verified_content_sha256`
+    hala DesignAsset'in guncel checksum'iyla eslesiyor mu) dogrular. Bu turda
+    `launch_draft()`a BAGLANMAZ (screenshot/AI launch zaten engelli) - yalnizca
+    birim testte egzersiz edilir, gelecekteki launch-zamani entegrasyonu icin
+    hazir bir yapi tasidir. `slot` "current" veya "new" olmalidir."""
+
+    annotation_field = f"{slot}_cta_annotation"
+    annotation = payload.get(annotation_field)
+    if annotation is None:
+        return True
+
+    try:
+        asset = await design_assets_service.get_owned_asset(
+            session, organization_id, uuid.UUID(str(annotation["design_asset_id"]))
+        )
+    except DesignAssetNotFoundError:
+        return False
+
+    if (
+        asset.status != DesignAssetStatus.ACTIVE
+        or asset.image_data is None
+        or design_assets_service.is_expired(asset)
+    ):
+        return False
+
+    return asset.checksum_sha256 == annotation.get("verified_content_sha256")
 
 
 def missing_fields_for_launch(payload: dict) -> list[str]:
@@ -174,15 +552,33 @@ def missing_fields_for_launch(payload: dict) -> list[str]:
         "name",
         "target_task",
         "test_type",
-        "current_url",
         "persona_count",
         "target_audience",
     ):
         if payload.get(field) in (None, ""):
             missing.append(field)
 
-    if payload.get("test_type") == AB_COMPARISON and not payload.get("new_url"):
-        missing.append("new_url")
+    # Aktif olmayan kaynak alani (secilmeyen kaynak turune ait) launch
+    # dogrulamasinda HIC KULLANILMAZ - yalnizca etkin kaynak turune gore
+    # gerekli alan kontrol edilir.
+    if effective_source_type(payload) == SOURCE_TYPE_SCREENSHOT:
+        if not payload.get("current_design_asset_id"):
+            missing.append("current_design_asset_id")
+    else:
+        if payload.get("current_url") in (None, ""):
+            missing.append("current_url")
+
+    if payload.get("test_type") == AB_COMPARISON:
+        if effective_new_source_type(payload) in (SOURCE_TYPE_SCREENSHOT, SOURCE_TYPE_AI_GENERATED):
+            if not payload.get("new_design_asset_id"):
+                missing.append("new_design_asset_id")
+            if effective_new_source_type(payload) == SOURCE_TYPE_AI_GENERATED and not payload.get(
+                "new_ai_generation_id"
+            ):
+                missing.append("new_ai_generation_id")
+        else:
+            if payload.get("new_url") in (None, ""):
+                missing.append("new_url")
 
     if payload.get("authorization_confirmed") is not True:
         missing.append("authorization_confirmed")
@@ -217,6 +613,11 @@ class LaunchResult:
     used_free_entitlement: bool
     reserved_chips: int
     engine_status_message: str = ENGINE_NOT_AVAILABLE_MESSAGE
+    # Paket 4 Final Hardening: stale CTA annotation'lar launch aninda artik
+    # SESSIZCE temizlenmez - hangi tarafin (current/new) annotation'i
+    # temizlendigi burada acik, dogru tarafa bagli bir uyari olarak tasinir
+    # (bkz. `stale_cta_annotation_warning_message`).
+    warnings: tuple[dict, ...] = ()
 
 
 async def _resolve_persona_sample(
@@ -268,19 +669,123 @@ async def _resolve_persona_sample(
     }
 
 
+def _current_side_spec(payload: dict, *, role: str) -> dict:
+    return {
+        "role": role,
+        "source_type": effective_source_type(payload),
+        "url": payload.get("current_url"),
+        "design_asset_id": payload.get("current_design_asset_id"),
+    }
+
+
+def _new_side_spec(payload: dict) -> dict:
+    return {
+        "role": "new",
+        "source_type": effective_new_source_type(payload),
+        "url": payload.get("new_url"),
+        "design_asset_id": payload.get("new_design_asset_id"),
+    }
+
+
 def _variant_specs(payload: dict) -> list[tuple[str, dict]]:
+    """Her varyant icin `{role, source_type, url|design_asset_id}` uretir.
+
+    Paket 4 Final: kaynak URL ile sinirli degildir - `source_type`
+    (url/screenshot/ai_generated) hangi alanin (`url` veya
+    `design_asset_id`) gecerli oldugunu belirler; `launch_draft` bunu
+    `page_analysis_service.create_analysis`'e dogru anahtar kelime
+    argumaniyla ( `url=` veya `design_asset_id=`) gecirir. "ai_generated"
+    (yalnizca Tasarim B icin gecerli) da `design_asset_id` uzerinden
+    calisir - AI'nin urettigi sonuc, kabul edildiginde zaten sıradan bir
+    `DesignAsset`e donusmustur (bkz. app.services.design_generation);
+    burada URL/screenshot'tan farkli bir isleme YOKTUR.
+    """
+
     if payload["test_type"] == AB_COMPARISON:
         return [
-            ("Mevcut Tasarim", {"role": "existing", "url": payload["current_url"]}),
-            ("Yeni Tasarim", {"role": "new", "url": payload["new_url"]}),
+            ("Mevcut Tasarim", _current_side_spec(payload, role="existing")),
+            ("Yeni Tasarim", _new_side_spec(payload)),
         ]
-    return [("Ana Senaryo", {"role": "primary", "url": payload["current_url"]})]
+    return [("Ana Senaryo", _current_side_spec(payload, role="primary"))]
+
+
+async def _revalidate_launch_sources(session: AsyncSession, organization_id: uuid.UUID, payload: dict) -> None:
+    """Launch aninda, PATCH sirasinda zaten yapilan sahiplik/kullanilabilirlik
+    kontrollerini (bkz. app.routers.test_wizard.patch_draft) AYNEN tekrar
+    calistirir - son PATCH ile launch arasinda asset silinmis/expire olmus
+    olabilir, create-time/PATCH-time kontrolune TEK BASINA guvenilmez (ayni
+    ilke `design_assets_service.ensure_asset_usable` docstring'inde de var).
+    Herhangi bir taraf gecersizse `DraftValidationError` firlatilir ve
+    `launch_draft` cagirani BU NOKTADAN SONRAKI hicbir side effect'i
+    (TestDefinition/SimulationRun/Chip/entitlement rezervasyonu) uretmez."""
+
+    sides = [("current_design_asset_id", effective_source_type(payload))]
+    if payload.get("test_type") == AB_COMPARISON:
+        sides.append(("new_design_asset_id", effective_new_source_type(payload)))
+
+    for field_name, source_type in sides:
+        asset_id_raw = payload.get(field_name)
+        if source_type in (SOURCE_TYPE_SCREENSHOT, SOURCE_TYPE_AI_GENERATED) and asset_id_raw:
+            await validate_screenshot_asset_ownership(session, organization_id, uuid.UUID(str(asset_id_raw)))
+
+    if payload.get("test_type") == AB_COMPARISON and effective_new_source_type(payload) == SOURCE_TYPE_AI_GENERATED:
+        new_asset_id_raw = payload.get("new_design_asset_id")
+        new_generation_id_raw = payload.get("new_ai_generation_id")
+        if not (new_asset_id_raw and new_generation_id_raw):
+            raise DraftValidationError(AI_GENERATION_UNAVAILABLE_MESSAGE)
+        await validate_ai_generation_ownership(
+            session, organization_id, uuid.UUID(str(new_generation_id_raw)), uuid.UUID(str(new_asset_id_raw))
+        )
+
+
+STALE_CTA_ANNOTATION_CLEARED_CODE = "stale_cta_annotation_cleared"
+
+
+def stale_cta_annotation_warning_message(slot: str) -> str:
+    side = "Tasarım A" if slot == "current" else "Tasarım B"
+    return (
+        f"{side} için tasarım değiştiği/kullanılamaz hale geldiği için önceki CTA "
+        "seçiminiz temizlendi. Yeni bir CTA seçmeden de analizi başlatabilirsiniz - "
+        "CTA'ya özel değerlendirmeler bu durumda aday düzeyinde kalır."
+    )
+
+
+async def _clean_stale_cta_annotations_for_launch(
+    session: AsyncSession, organization_id: uuid.UUID, payload: dict
+) -> tuple[dict, list[dict]]:
+    """Launch aninda gecersizlesmis (asset degismis/silinmis veya hash artik
+    guncel checksum'la eslesmeyen) bir CTA onayini `None`'a ceker - launch'i
+    ENGELLEMEZ (annotation zorunlu degildir, genel dikkat analizi zaten
+    fallback'tir - bkz. `adapt_visual_page_analysis`), ama SESSIZCE de
+    yapmaz: hangi tarafin (`current`/`new`) annotation'inin temizlendigi,
+    dogru tarafa bagli acik bir uyari olarak (bkz.
+    `stale_cta_annotation_warning_message`) dondurulur - cagiran taraf
+    (`launch_draft`) bunu `LaunchResult.warnings`e ekler. `payload`
+    degistirilmez, temizlenmis bir kopya + uyari listesi dondurulur."""
+
+    cleaned = dict(payload)
+    warnings: list[dict] = []
+    for slot in ("current", "new"):
+        field = f"{slot}_cta_annotation"
+        if cleaned.get(field) is not None and not await revalidate_cta_annotation(
+            session, organization_id, cleaned, slot=slot
+        ):
+            cleaned[field] = None
+            warnings.append(
+                {
+                    "code": STALE_CTA_ANNOTATION_CLEARED_CODE,
+                    "slot": slot,
+                    "message": stale_cta_annotation_warning_message(slot),
+                }
+            )
+    return cleaned, warnings
 
 
 async def launch_draft(
     session: AsyncSession,
     *,
     organization_id: uuid.UUID,
+    requested_by_user_id: uuid.UUID,
     draft: TestWizardDraft,
 ) -> LaunchResult:
     """Taslagi baslatir; entitlement/Chip rezervasyonu yapar ve `queued` calistirmalar olusturur.
@@ -299,6 +804,7 @@ async def launch_draft(
             simulation_run_ids=tuple(uuid.UUID(r) for r in result["simulation_run_ids"]),
             used_free_entitlement=result["used_free_entitlement"],
             reserved_chips=result["reserved_chips"],
+            warnings=tuple(result.get("warnings") or ()),
         )
 
     missing = missing_fields_for_launch(draft.payload)
@@ -307,7 +813,17 @@ async def launch_draft(
             f"Sihirbaz tamamlanmadan baslatilamaz, eksik/gecersiz alan(lar): {', '.join(missing)}"
         )
 
-    payload = draft.payload
+    # Paket 4 Final: her tarafin kaynagi (URL/screenshot/AI) launch aninda
+    # BAGIMSIZ olarak yeniden dogrulanir - gecersiz bir taraf (silinmis/
+    # expired/cross-tenant asset, kabul edilmemis AI isi) BU NOKTADAN SONRAKI
+    # hicbir side effect'i (TestDefinition/SimulationRun/Chip/entitlement
+    # rezervasyonu) uretmeden reddedilir (bkz. `_revalidate_launch_sources`).
+    await _revalidate_launch_sources(session, organization_id, draft.payload)
+    payload, stale_cta_warnings = await _clean_stale_cta_annotations_for_launch(
+        session, organization_id, draft.payload
+    )
+    draft.payload = payload
+
     quote = await build_quote_for_payload(session, organization_id, payload)
 
     if draft.launch_run_id is None:
@@ -382,6 +898,46 @@ async def launch_draft(
             session, organization_id, payload, run_deterministic_seed
         )
 
+        # Paket 4B/4 Final: bu varyantin kaynagi (URL VEYA DesignAsset) icin
+        # sunucu tarafinda otomatik bir PageAnalysis capture'i olusturulur ve
+        # SimulationRun buna kalici olarak baglanir - client `page_analysis_id`
+        # enjekte edemez (launch endpoint'i zaten govde almiyor). SSRF/
+        # normalizasyon, yetki onayi VE DesignAsset sahiplik/kullanilabilirlik
+        # zorunlulugu `create_analysis` uzerinden AYNEN yeniden kullanilir
+        # (kopyalanmaz). A/B'de ayni kaynak her iki tarafta kullanilsa bile
+        # HER VARYANT icin AYRI bir PageAnalysis satiri olusturulur - bu, A ve
+        # B'nin provenance'inin asla karismamasini garanti eder.
+        if config["source_type"] == SOURCE_TYPE_URL:
+            analysis = await page_analysis_service.create_analysis(
+                session,
+                organization_id=organization_id,
+                requested_by_user_id=requested_by_user_id,
+                url=config["url"],
+                authorization_confirmed=bool(payload.get("authorization_confirmed")),
+            )
+        else:
+            analysis = await page_analysis_service.create_analysis(
+                session,
+                organization_id=organization_id,
+                requested_by_user_id=requested_by_user_id,
+                design_asset_id=uuid.UUID(str(config["design_asset_id"])),
+            )
+
+        # Paket 4 Final Hardening: `input_snapshot["url"]`e artik hicbir
+        # kosulda sahte bir deger (`design-asset:<id>`) yazilmaz. URL
+        # kaynaginda gercek `url` dolu, `source_reference`/`design_asset_id`
+        # `None`dur; DesignAsset kaynaginda (screenshot/AI) `url` acikca
+        # `None`dur ve bunun yerine ayri, acikca isimlendirilmis
+        # `source_reference` alani (motorun "bos olmayan kimlik" sartini
+        # additive bicimde karsilayan `design-asset:<id>` metni - bkz.
+        # app.engine.baseline.run_baseline_simulation /
+        # app.engine.advanced_modules._require_source_identity) kullanilir.
+        # Motor gercek DOM/gorsel `PageFeatureSnapshot`'i zaten
+        # `page_feature_snapshot` parametresinden alir (bkz.
+        # simulation_worker._load_page_feature_input); `source_reference`
+        # yalnizca kimliklendirme/etiketleme icindir, hicbir skor hesabina
+        # girmez (skor icin gercek kaynak: `page.input_hash`, DesignAsset
+        # kaynaginda `PageAnalysis.content_sha256` - bkz. adapt_visual_page_analysis).
         input_snapshot = {
             "wizard_test_type": payload["test_type"],
             "persona_count": payload["persona_count"],
@@ -389,10 +945,28 @@ async def launch_draft(
             "modules": payload.get("modules") or [],
             "url": config["url"],
             "role": config["role"],
+            "source_type": config["source_type"],
             "pricing_version": quote.pricing_version,
         }
+        if config["design_asset_id"]:
+            input_snapshot["design_asset_id"] = str(config["design_asset_id"])
+            input_snapshot["source_reference"] = f"design-asset:{config['design_asset_id']}"
+            input_snapshot["page_analysis_id"] = str(analysis.id)
+        if config["source_type"] == SOURCE_TYPE_AI_GENERATED:
+            input_snapshot["ai_generation_id"] = payload.get("new_ai_generation_id")
         if persona_sample is not None:
             input_snapshot["persona_sample"] = persona_sample
+
+        # Kullanicinin sihirbazda onayladigi CTA kutusu (varsa, yalnizca
+        # DesignAsset kaynakli taraflar icin anlamlidir - bkz.
+        # CTA_ANNOTATION_FIELD_TO_ASSET_FIELD) run'in KENDI degismez
+        # input_snapshot kopyasina yazilir; asset sonradan silinse/degisse
+        # bile tamamlanmis run/rapor bundan ETKILENMEZ (bkz.
+        # app.services.page_analysis_adapter.adapt_visual_page_analysis).
+        annotation_field = "current_cta_annotation" if config["role"] != "new" else "new_cta_annotation"
+        annotation = payload.get(annotation_field)
+        if annotation is not None:
+            input_snapshot["user_confirmed_cta"] = annotation
 
         run = SimulationRun(
             organization_id=organization_id,
@@ -404,6 +978,7 @@ async def launch_draft(
             launch_run_id=run_id,
             free_entitlement_feature_key=free_entitlement_feature_key,
             chip_reservation_id=chip_reservation_id,
+            page_analysis_id=analysis.id,
         )
         session.add(run)
         await session.flush()
@@ -415,6 +990,7 @@ async def launch_draft(
         "simulation_run_ids": [str(rid) for rid in simulation_run_ids],
         "used_free_entitlement": used_free_entitlement,
         "reserved_chips": reserved_chips,
+        "warnings": stale_cta_warnings,
     }
     await session.flush()
 
@@ -423,26 +999,53 @@ async def launch_draft(
         simulation_run_ids=tuple(simulation_run_ids),
         used_free_entitlement=used_free_entitlement,
         reserved_chips=reserved_chips,
+        warnings=tuple(stale_cta_warnings),
     )
 
 
 __all__ = [
     "ACCESSIBILITY_PRECHECK",
     "AB_COMPARISON",
+    "AI_GENERATION_ASSET_MISMATCH_MESSAGE",
+    "AI_GENERATION_UNAVAILABLE_MESSAGE",
     "ANALYSIS_MODULES",
+    "CTA_ANNOTATION_ASSET_MISMATCH_MESSAGE",
+    "CTA_ANNOTATION_FIELD_TO_ASSET_FIELD",
+    "CTA_ANNOTATION_FIELDS",
+    "CTA_ANNOTATION_LARGE_AREA_WARNING",
+    "CTA_SELECTION_CANDIDATE_CONFIRMATION",
+    "CTA_SELECTION_MANUAL_BOX",
+    "CTA_SELECTION_SOURCES",
     "EXISTING_SITE_BASIC_UX",
     "ENGINE_NOT_AVAILABLE_MESSAGE",
+    "STALE_CTA_ANNOTATION_CLEARED_CODE",
     "MAX_PERSONA_COUNT",
     "MIN_PERSONA_COUNT",
+    "NEW_SOURCE_TYPES",
     "PATCHABLE_FIELDS",
     "QUOTE_TEST_TYPE_BY_WIZARD_TYPE",
+    "SCREENSHOT_ALLOWED_TEST_TYPES",
+    "SCREENSHOT_ASSET_UNAVAILABLE_MESSAGE",
+    "SOURCE_TYPE_AI_GENERATED",
+    "SOURCE_TYPE_SCREENSHOT",
+    "SOURCE_TYPE_URL",
+    "SOURCE_TYPES",
     "WIZARD_TEST_TYPES",
     "DraftValidationError",
     "LaunchResult",
     "InsufficientChipBalanceError",
     "build_quote_for_payload",
+    "cta_annotation_area_warning",
+    "effective_new_source_type",
+    "effective_source_type",
+    "invalidate_stale_cta_annotations",
     "launch_draft",
     "merge_payload",
     "missing_fields_for_launch",
+    "resolve_cta_annotation_patch",
+    "revalidate_cta_annotation",
+    "validate_ai_generation_ownership",
     "validate_patch_fields",
+    "validate_screenshot_asset_ownership",
+    "validate_source_type_for_test_type",
 ]

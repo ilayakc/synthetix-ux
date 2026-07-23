@@ -25,6 +25,83 @@ analyzer'a gitmez. Gerçek (kalibre edilmiş) bir simülasyon motoru ve
 LLM/AI sağlayıcı entegrasyonu (AI destekli açıklama katmanı hariç, bkz.
 `app.services.ai_explanation`) bu aşamanın kapsamı dışındadır.
 
+Ayrıca, kullanıcının doğrudan bir tasarım ekran görüntüsü **yükleyebildiği**
+bağımsız bir altyapı (`app.services.design_assets`/`app.routers.design_assets`)
+mevcuttur; tehdit modeli ve limitler için bkz.
+[docs/security.md](security.md#güvenlik-yüklenen-tasarım-ekran-görüntüleri-design-assets).
+İkili veri, `page_analyses` ile aynı desende Postgres `LargeBinary`'de
+saklanır — ayrı bir obje depolama (MinIO/S3) servisi bu aşamada **yoktur**,
+bu bilinçli bir MVP kararıdır. Yeni Test sihirbazının 2. adımı (Tasarım
+Kaynağı, bkz. `frontend/src/pages/wizard/DesignSourcePicker.tsx`), hem
+"mevcut site: temel UX testi" türünde tek bir tasarım kaynağı için, hem de
+A/B karşılaştırmasında **her iki tarafta da bağımsız olarak** (`current_*`/
+"Tasarım A" ve `new_*`/"Tasarım B", bkz.
+`frontend/src/pages/wizard/DesignBSourcePicker.tsx`), kullanıcının bir URL
+yerine yüklediği bir `DesignAsset`'i (`current_source_type`/`new_source_type
+="screenshot"` + ilgili `*_design_asset_id`, bkz. `app.services.test_wizard`)
+taslağa kaydedebilmesini sağlar; bu alanlar yalnızca aynı organizasyona ait,
+aktif, ikili verisi hâlâ mevcut ve saklama süresi dolmamış bir asset'i kabul
+eder (`app.services.test_wizard.validate_screenshot_asset_ownership`). A/B
+karşılaştırmasında "Tasarım B" tarafı ayrıca AI ile Tasarım A'dan üretilen
+bir varyant da olabilir (`new_source_type="ai_generated"` +
+`new_design_asset_id` + `new_ai_generation_id`, bkz.
+`app.services.design_generation` ve [docs/ai-policy.md](ai-policy.md) "AI
+ile Tasarım Varyantı Üretimi").
+
+**Paket 4 Final itibarıyla bu kaynaklarla gerçek test başlatılabilir**
+(önceki, artık kaldırılmış `SCREENSHOT_LAUNCH_BLOCKED_MESSAGE`/
+`AB_VISUAL_SOURCE_LAUNCH_BLOCKED_MESSAGE` engeli — bkz. `app.services
+.test_wizard._revalidate_launch_sources`): `launch_draft`, her tarafın
+kaynağını (URL/screenshot/AI) launch anında bağımsız olarak yeniden
+doğrular (asset silinmiş/expired/cross-tenant veya kabul edilmemiş bir AI
+işi ise hiçbir side effect üretmeden 400 döner), ardından her varyant için
+sunucu tarafında bir `PageAnalysis` capture'i oluşturur:
+
+- URL kaynağı → gerçek `analyzer` (Playwright/DOM) analizi,
+  `feature_source="dom"`.
+- Screenshot/AI (DesignAsset) kaynağı → `analyzer`'a HİÇBİR istek gitmez;
+  tamamen yerel/deterministik OpenCV analizi (bkz.
+  [docs/security.md](security.md#güvenlik-ekran-görüntüsü-yerel-görsel-analizi-paket-4c4d)),
+  `feature_source="visual_heuristic"`.
+
+Motorun girdi sözleşmesi de buna göre genelleştirilmiştir: `input_snapshot
+["url"]` yalnızca GERÇEK bir URL varsa doludur; DesignAsset kaynaklarında
+`None`'dur ve motorun "boş olmayan kimlik" gereksinimi ayrı, açık bir
+`input_snapshot["source_reference"]` alanıyla (ör. `design-asset:<id>`,
+skorlamaya hiç girmez) karşılanır — bkz. `app.engine.baseline
+.run_baseline_simulation`, `app.engine.advanced_modules
+._require_source_identity`. Erişilebilirlik ön kontrolü hâlâ yalnızca URL
+kabul eder (DOM/sayfa yapısı gerektirir).
+
+### Rapor görsel katmanları: sentetik dikkat overlay'i ve CTA overlay'i
+
+`GET /api/reports/{id}` yanıtındaki `heatmap` alanı iki YAPISAL OLARAK
+FARKLI `overlay_kind` değeri taşıyabilir:
+
+- `"semantic_region"` (`feature_source="dom"`) — URL/DOM kaynağı, 5 sabit
+  isimli bölge (`ust_navigasyon`/`hero_baslik`/`birincil_cta`/`govde_metni`/
+  `alt_bilgi`), `regions`/percent-koordinat sözleşmesi (değişmedi).
+- `"synthetic_visual_attention"` (`feature_source="visual_heuristic"`) —
+  screenshot/AI kaynağı, GERÇEK OpenCV 8×6 piksel-tabanlı grid
+  (`visual_cells`, fraksiyon [0,1] x/y/w/h/intensity) — `PageAnalysis
+  .features.synthetic_attention_estimate.cells`'ten doğrudan okunur, hiçbir
+  modül seçimine bağlı DEĞİLDİR (bu veri PageAnalysis işlenirken her zaman
+  üretilir). Modül seçilmiş DOM tarafındaki 5-bölge heuristiği burada ASLA
+  kullanılmaz.
+
+Ayrıca `cta_overlay` alanı, `dom_interactive_candidate`/
+`visual_cta_candidate`/`user_confirmed_cta` kutularını tek, normalize
+edilmiş (fraksiyon [0,1]) bir listede döner; kullanıcı onaylı bir CTA bir
+adayın onaylanmasından geldiyse (`selection_source="candidate_confirmation"`)
+o adayın index'i (`source_candidate_index`) listeden dedupe edilir — aynı
+kutu iki kez çizilmez. Her iki overlay de `app.routers.reports
+._build_heatmap`/`_build_cta_overlay` tarafından, `Report.content`
+üzerinden salt-okunur türetilir; hiçbir yeniden hesaplama/model çağrısı
+yapılmaz.
+
+Saklama: bkz. [docs/security.md](security.md#paket-4-final-hardening-rapor-bağlı-snapshot-saklama-süresi)
+"Paket 4 Final Hardening: rapor-bağlı snapshot saklama süresi".
+
 ## Veri modeli (ER özeti) ve tenant sınırı
 
 Platform çok kiracılı (multi-tenant) bir B2B SaaS'tir. Tüm kimlikler UUID,

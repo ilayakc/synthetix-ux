@@ -11,7 +11,8 @@ from app.dependencies import Principal, get_organization_id, require_roles
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
 from app.services import settings as settings_service
 from app.services import test_wizard as wizard_service
-from app.services.exceptions import InsufficientChipBalanceError
+from app.services import url_safety
+from app.services.exceptions import InsufficientChipBalanceError, UnauthorizedPageAnalysisError
 
 router = APIRouter(prefix="/api/tests/drafts", tags=["test-wizard"])
 
@@ -29,9 +30,10 @@ class DraftResponse(BaseModel):
     missing_fields: list[str]
     created_at: datetime
     updated_at: datetime
+    warnings: list[str] = []
 
 
-def _to_response(draft: TestWizardDraft) -> DraftResponse:
+def _to_response(draft: TestWizardDraft, *, warnings: list[str] | None = None) -> DraftResponse:
     return DraftResponse(
         id=draft.id,
         organization_id=draft.organization_id,
@@ -41,6 +43,7 @@ def _to_response(draft: TestWizardDraft) -> DraftResponse:
         missing_fields=wizard_service.missing_fields_for_launch(draft.payload),
         created_at=draft.created_at,
         updated_at=draft.updated_at,
+        warnings=warnings or [],
     )
 
 
@@ -112,10 +115,85 @@ async def patch_draft(
 
     try:
         wizard_service.validate_patch_fields(body.payload)
+        merged_payload = wizard_service.merge_payload(draft.payload, body.payload)
+        merged_payload = wizard_service.invalidate_stale_cta_annotations(
+            draft.payload, merged_payload, body.payload
+        )
+        wizard_service.validate_source_type_for_test_type(merged_payload)
     except wizard_service.DraftValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    draft.payload = wizard_service.merge_payload(draft.payload, body.payload)
+    # Sekil (UUID bicimi) dogrulamasi `validate_patch_fields` icinde zaten
+    # yapildi; burada AYRICA gercek DB sahiplik/kullanilabilirlik dogrulamasi
+    # yapilir (bkz. `validate_screenshot_asset_ownership` docstring'i) - bu
+    # nedenle `validate_patch_fields` saf/senkron kalir, yalnizca bu adim
+    # async'tir. A/B karsilastirmasinda hem "Tasarim A" (current) hem
+    # "Tasarim B" (new) tarafi bagimsiz olarak ekran goruntusu kaynagi
+    # secebildigi icin ayni kontrol her iki alan icin de calistirilir.
+    asset_fields = (
+        ("current_design_asset_id", wizard_service.effective_source_type(merged_payload)),
+        ("new_design_asset_id", wizard_service.effective_new_source_type(merged_payload)),
+    )
+    for field_name, source_type in asset_fields:
+        asset_id_raw = merged_payload.get(field_name)
+        if source_type == wizard_service.SOURCE_TYPE_SCREENSHOT and asset_id_raw:
+            try:
+                await wizard_service.validate_screenshot_asset_ownership(
+                    session, principal.organization_id, uuid.UUID(str(asset_id_raw))
+                )
+            except wizard_service.DraftValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # "Tasarim B" (new) tarafi AI ile uretilmisse ("ai_generated"), sahiplik
+    # kontrolu farklidir: yalnizca asset'in degil, onu ureten isin (job)
+    # GERCEKTEN basarili oldugu VE `new_design_asset_id`nin isin gercek
+    # sonucuyla eslestigi de dogrulanir (bkz. validate_ai_generation_ownership
+    # docstring'i - kullanicinin kabul etmedigi/hala calisan bir sonucu
+    # "sahte kabul" ile baglamasini engeller). Bu, "Tasarim A" (current)
+    # tarafi icin GECERLI DEGILDIR - o taraf hicbir zaman AI ile uretilemez.
+    if wizard_service.effective_new_source_type(merged_payload) == wizard_service.SOURCE_TYPE_AI_GENERATED:
+        new_asset_id_raw = merged_payload.get("new_design_asset_id")
+        new_generation_id_raw = merged_payload.get("new_ai_generation_id")
+        if new_asset_id_raw and new_generation_id_raw:
+            try:
+                await wizard_service.validate_ai_generation_ownership(
+                    session,
+                    principal.organization_id,
+                    uuid.UUID(str(new_generation_id_raw)),
+                    uuid.UUID(str(new_asset_id_raw)),
+                )
+            except wizard_service.DraftValidationError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Kullanici CTA onayi (Paket 4C+4D): yalnizca bu PATCH cagrisinda ACIKCA
+    # gonderilen slot(lar) islenir - `design_asset_id`, o slot'un GUNCEL
+    # (birlestirilmis) degeriyle eslesmeli, sahiplik/kullanilabilirlik burada
+    # BAGIMSIZ olarak yeniden dogrulanir, ve `verified_content_sha256` HER
+    # ZAMAN sunucuda yeniden hesaplanir (bkz. resolve_cta_annotation_patch
+    # docstring'i - client degeri asla kabul edilmez). Buyuk-alan uyarisi
+    # (zorla engelleme degil) response'a eklenir.
+    patch_warnings: list[str] = []
+    for annotation_field, asset_field in wizard_service.CTA_ANNOTATION_FIELD_TO_ASSET_FIELD.items():
+        if annotation_field not in body.payload or body.payload[annotation_field] is None:
+            continue
+        raw_value = body.payload[annotation_field]
+        expected_asset_id = merged_payload.get(asset_field)
+        if expected_asset_id is None or str(raw_value.get("design_asset_id")) != str(expected_asset_id):
+            raise HTTPException(
+                status_code=400, detail=wizard_service.CTA_ANNOTATION_ASSET_MISMATCH_MESSAGE
+            )
+        try:
+            resolved = await wizard_service.resolve_cta_annotation_patch(
+                session, principal.organization_id, raw_value
+            )
+        except wizard_service.DraftValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        merged_payload[annotation_field] = resolved
+        warning = wizard_service.cta_annotation_area_warning(resolved)
+        if warning:
+            patch_warnings.append(warning)
+
+    draft.payload = merged_payload
     if body.current_step is not None:
         if not (1 <= body.current_step <= 5):
             raise HTTPException(status_code=400, detail="current_step 1 ile 5 arasinda olmalidir")
@@ -124,7 +202,13 @@ async def patch_draft(
     await session.commit()
     await session.refresh(draft)
 
-    return _to_response(draft)
+    return _to_response(draft, warnings=patch_warnings)
+
+
+class LaunchWarning(BaseModel):
+    code: str
+    slot: str
+    message: str
 
 
 class LaunchResponse(BaseModel):
@@ -135,6 +219,7 @@ class LaunchResponse(BaseModel):
     used_free_entitlement: bool
     reserved_chips: int
     engine_status_message: str
+    warnings: list[LaunchWarning] = []
 
 
 @router.post("/{draft_id}/launch", response_model=LaunchResponse)
@@ -155,7 +240,10 @@ async def launch_draft(
 
     try:
         result = await wizard_service.launch_draft(
-            session, organization_id=principal.organization_id, draft=draft
+            session,
+            organization_id=principal.organization_id,
+            requested_by_user_id=principal.user_id,
+            draft=draft,
         )
     except wizard_service.DraftValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -167,6 +255,10 @@ async def launch_draft(
                 f"mevcut bakiyenizi asiyor ({exc})."
             ),
         ) from exc
+    except url_safety.UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UnauthorizedPageAnalysisError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     await session.commit()
 
@@ -178,4 +270,5 @@ async def launch_draft(
         used_free_entitlement=result.used_free_entitlement,
         reserved_chips=result.reserved_chips,
         engine_status_message=result.engine_status_message,
+        warnings=[LaunchWarning.model_validate(w) for w in result.warnings],
     )

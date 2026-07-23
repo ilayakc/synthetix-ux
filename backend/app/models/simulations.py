@@ -30,6 +30,7 @@ class SimulationRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("ix_simulation_runs_organization_id", "organization_id"),
         Index("ix_simulation_runs_test_variant_id", "test_variant_id"),
+        Index("ix_simulation_runs_page_analysis_id", "page_analysis_id"),
     )
 
     organization_id: Mapped[uuid.UUID] = mapped_column(
@@ -40,6 +41,20 @@ class SimulationRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     persona_preset_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("persona_presets.id", ondelete="SET NULL"), nullable=True
+    )
+    # Paket 4B: yeni URL launch'larinda sunucu tarafinda otomatik olusturulan,
+    # bu run'a atanmis PageAnalysis capture'i (bkz. app.services.test_wizard
+    # .launch_draft). Eski (Paket 4B oncesi) run'larda NULL kalir - bu durumda
+    # motor legacy `app.engine.fixtures` yerlesigini kullanmaya devam eder (bkz.
+    # app.services.simulation_worker._load_dom_input). `design_assets.id` ile
+    # ayni gerekce: `ondelete="SET NULL"` (asla CASCADE) - boylece organizasyon
+    # hard-delete'i, page_analyses/simulation_runs kendi organization_id CASCADE'
+    # lerinden hangisinin once islendigine bakilmaksizin FK ihlali uretmez; ve
+    # PageAnalysis ekran goruntusu purge edildiginde (yalnizca screenshot_data/
+    # screenshot_expires_at null'lanir, satir silinmez) bu FK hicbir zaman
+    # etkilenmez.
+    page_analysis_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("page_analyses.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[SimulationStatus] = mapped_column(
         SqlEnum(SimulationStatus, name="simulation_status"),

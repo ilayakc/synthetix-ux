@@ -1,6 +1,6 @@
 const STEP_LABELS = [
   "Test Detayları",
-  "URL Bilgisi",
+  "Tasarım Kaynağı",
   "Persona",
   "Analiz Modülleri",
   "Özet ve Başlat",

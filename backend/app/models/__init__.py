@@ -11,7 +11,9 @@ from app.models.billing import (
     Entitlement,
     EntitlementStatus,
 )
-from app.models.page_analysis import PageAnalysis, PageAnalysisStatus
+from app.models.design_assets import DesignAsset, DesignAssetContentType, DesignAssetStatus
+from app.models.design_generation import DesignGenerationJob, DesignGenerationStatus
+from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.projects import Project, ProjectStatus
 from app.models.reports import Report
 from app.models.settings import OrganizationSettings, UserPreferences
@@ -39,6 +41,12 @@ __all__ = [
     "Report",
     "PageAnalysis",
     "PageAnalysisStatus",
+    "PageAnalysisSourceKind",
+    "DesignAsset",
+    "DesignAssetContentType",
+    "DesignAssetStatus",
+    "DesignGenerationJob",
+    "DesignGenerationStatus",
     "Entitlement",
     "EntitlementStatus",
     "ChipLedgerEntry",

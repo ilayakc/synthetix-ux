@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 
 from app.engine import fixtures
+from app.engine.fixtures import PageFeatureSnapshot
 from app.engine.rules_config import HeuristicRulesConfig, get_rules_config
 
 ADVANCED_MODULES_ENGINE_VERSION = "advanced-modules-2026.1"
@@ -107,58 +109,133 @@ def _seeded_unit_value(seed_material: str, index: int) -> float:
     return int.from_bytes(digest[:8], "big") / 2**64
 
 
-def _require_url(input_snapshot: dict) -> tuple[str, str]:
+@dataclass(frozen=True)
+class _SourceIdentity:
+    url: str | None
+    source_reference: str | None
+    role: str
+
+
+def _require_source_identity(input_snapshot: dict) -> _SourceIdentity:
+    """Sayfayi/tasarimi kimliklendiren alanlari dondurur.
+
+    URL-kaynakli varyantlarda gercek `url` dolu, `source_reference` `None`dur.
+    DesignAsset-kaynakli (screenshot/AI) varyantlarda gercek bir URL YOKTUR
+    (bkz. app.services.test_wizard.launch_draft) - bu durumda `url` `None`,
+    `source_reference` (ör. `design-asset:<id>`) dolu olur. Paket 4 Final
+    Hardening'den ONCE bu iki alan `url` icinde bir sozde-URL (`design-asset:
+    <id>`) olarak BIRLESTIRILIYORDU (workaround); artik acikca AYRI iki alan
+    olarak tasinir, hicbir kosulda `url` sahte bir deger almaz. Ikisi de
+    yoksa (gecersiz girdi) `ModuleInputError` firlatilir."""
+
     url = input_snapshot.get("url")
-    if not url or not isinstance(url, str):
-        raise ModuleInputError("input_snapshot.url gereklidir")
-    role = input_snapshot.get("role", "primary")
-    return url, role
+    has_url = isinstance(url, str) and bool(url)
+    source_reference = input_snapshot.get("source_reference")
+    has_source_reference = isinstance(source_reference, str) and bool(source_reference)
+    if not has_url and not has_source_reference:
+        raise ModuleInputError("input_snapshot.url veya input_snapshot.source_reference gereklidir")
+
+    return _SourceIdentity(
+        url=url if has_url else None,
+        source_reference=source_reference if has_source_reference else None,
+        role=input_snapshot.get("role", "primary"),
+    )
 
 
 def run_campaign_cta_analysis(
     input_snapshot: dict,
     deterministic_seed: int,
     rules_version: str | None = None,
+    page_feature_snapshot: PageFeatureSnapshot | None = None,
+    cta_evidence: list[dict] | None = None,
 ) -> dict:
     """Sayfadaki birincil CTA'lar icin sentetik tiklama olasiligi tahmini uretir.
 
-    CTA adaylari, `page_feature_snapshot.primary_cta_count` kadar, url+role'den
-    sha256 ile turetilen deterministik siralamayla sentezlenir (gercek DOM'dan
-    okunmaz - bkz. modul dokstring'i).
+    Legacy yol (varsayilan): CTA adaylari, `page_feature_snapshot
+    .primary_cta_count` kadar, url+role'den sha256 ile turetilen deterministik
+    siralamayla sentezlenir (gercek DOM'dan okunmaz).
+
+    Paket 4B - `cta_evidence` verilirse (bkz. app.services.page_analysis_adapter
+    .DomAdaptedInput.cta_evidence): CTA konumu/varligi artik URL/seed'den
+    UYDURULMAZ, gercek DOM element rolu (`button`/`link`) kanitindan gelir;
+    yalnizca tiklama olasiligi hala `rules_config` agirliklarindan hesaplanan
+    bir sentetik senaryo tahminidir (konumsal/varlik iddiasi degil).
     """
 
-    url, role = _require_url(input_snapshot)
+    identity = _require_source_identity(input_snapshot)
     rules: HeuristicRulesConfig = get_rules_config(rules_version)
-    page = fixtures.get_page_feature_snapshot(url, role)
-
-    seed_material = f"{page.input_hash}:cta"
-    ctas: list[dict] = []
-    for index in range(page.primary_cta_count):
-        # Ilk CTA, sayfanin kendi `above_fold_cta` bayragini tasir; sonraki
-        # adaylar icin (varsa) deterministik bir seed'li deger kullanilir.
-        if index == 0:
-            above_fold = page.above_fold_cta
-        else:
-            above_fold = _seeded_unit_value(seed_material, index) > 0.55
-
-        click_point = rules.cta_base_click_probability
-        click_point -= rules.cta_rank_penalty * index
-        click_point += rules.cta_above_fold_bonus if above_fold else -rules.cta_below_fold_penalty
-        if page.avg_contrast_ratio < fixtures.WCAG_AA_CONTRAST_THRESHOLD:
-            click_point -= rules.cta_low_contrast_penalty
-        click_point = _clamp(click_point, 0.01, 0.95)
-
-        ctas.append(
-            {
-                "key": f"cta_{index + 1}",
-                "label": f"CTA {index + 1}",
-                "rank": index + 1,
-                "above_fold": above_fold,
-                "click_probability": _uncertainty_interval(
-                    click_point, rules.probability_uncertainty_half_width_ratio, 0.0, 1.0
-                ),
-            }
+    if page_feature_snapshot is not None:
+        page = page_feature_snapshot
+    elif identity.url:
+        page = fixtures.get_page_feature_snapshot(identity.url, identity.role)
+    else:
+        raise ModuleInputError(
+            "page_feature_snapshot, source_reference tabanli (url olmayan) girdilerde zorunludur"
         )
+
+    ctas: list[dict] = []
+    if cta_evidence is not None:
+        for index, evidence in enumerate(cta_evidence):
+            # Ilk CTA, sayfanin kendi `above_fold_cta` bayragini tasir (gercek
+            # kanit: layout_regions.birincil_cta above-the-fold viewport'ta
+            # hesaplaniyor); sonraki adaylar icin gercek above-fold kaniti
+            # YOK - URL/seed'den UYDURULMAZ, acikca bilinmiyor (None) birakilir.
+            above_fold = page.above_fold_cta if index == 0 else None
+
+            click_point = rules.cta_base_click_probability
+            click_point -= rules.cta_rank_penalty * index
+            click_point += rules.cta_above_fold_bonus if above_fold else -rules.cta_below_fold_penalty
+            if page.avg_contrast_ratio < fixtures.WCAG_AA_CONTRAST_THRESHOLD:
+                click_point -= rules.cta_low_contrast_penalty
+            click_point = _clamp(click_point, 0.01, 0.95)
+
+            ctas.append(
+                {
+                    "key": f"cta_{index + 1}",
+                    "rank": index + 1,
+                    "above_fold": above_fold,
+                    "classification": evidence["classification"],
+                    "evidence": evidence["evidence"],
+                    "role": evidence["role"],
+                    "geometry": {
+                        "x": evidence["x"],
+                        "y": evidence["y"],
+                        "width": evidence["width"],
+                        "height": evidence["height"],
+                    },
+                    "click_probability": _uncertainty_interval(
+                        click_point, rules.probability_uncertainty_half_width_ratio, 0.0, 1.0
+                    ),
+                }
+            )
+    else:
+        seed_material = f"{page.input_hash}:cta"
+        for index in range(page.primary_cta_count):
+            # Ilk CTA, sayfanin kendi `above_fold_cta` bayragini tasir; sonraki
+            # adaylar icin (varsa) deterministik bir seed'li deger kullanilir.
+            if index == 0:
+                above_fold = page.above_fold_cta
+            else:
+                above_fold = _seeded_unit_value(seed_material, index) > 0.55
+
+            click_point = rules.cta_base_click_probability
+            click_point -= rules.cta_rank_penalty * index
+            click_point += rules.cta_above_fold_bonus if above_fold else -rules.cta_below_fold_penalty
+            if page.avg_contrast_ratio < fixtures.WCAG_AA_CONTRAST_THRESHOLD:
+                click_point -= rules.cta_low_contrast_penalty
+            click_point = _clamp(click_point, 0.01, 0.95)
+
+            ctas.append(
+                {
+                    "key": f"cta_{index + 1}",
+                    "label": f"CTA {index + 1}",
+                    "rank": index + 1,
+                    "above_fold": above_fold,
+                    "click_probability": _uncertainty_interval(
+                        click_point, rules.probability_uncertainty_half_width_ratio, 0.0, 1.0
+                    ),
+                }
+            )
 
     findings: list[dict] = []
     if page.primary_cta_count > rules.cta_too_many_ctas_threshold:
@@ -207,8 +284,9 @@ def run_campaign_cta_analysis(
         "fixture_version": page.fixture_version,
         "calibration_status": "uncalibrated",
         "deterministic_seed": deterministic_seed,
-        "variant_role": role,
-        "url": url,
+        "variant_role": identity.role,
+        "url": identity.url,
+        "source_reference": identity.source_reference,
         "ctas": ctas,
         "message_clarity_findings": findings,
         "disclaimer": CAMPAIGN_CTA_DISCLAIMER,
@@ -231,15 +309,28 @@ def run_synthetic_attention_estimate(
     input_snapshot: dict,
     deterministic_seed: int,
     rules_version: str | None = None,
+    page_feature_snapshot: PageFeatureSnapshot | None = None,
 ) -> dict:
     """Sayfa duzeninden turetilen sentetik bir dikkat/gorsel aginlik agirlik dagilimi uretir.
 
     GERCEK goz izleme (eye-tracking) verisi DEGILDIR - bkz. `SYNTHETIC_ATTENTION_DISCLAIMER`.
+
+    `page_feature_snapshot` verilirse (Paket 4B, bkz. app.services
+    .page_analysis_adapter) agirliklar gercek DOM'dan turetilen skaler
+    ozelliklerden (heading_count/page_word_count/above_fold_cta) hesaplanir;
+    verilmezse eskisi gibi `fixtures.get_page_feature_snapshot` kullanilir.
     """
 
-    url, role = _require_url(input_snapshot)
+    identity = _require_source_identity(input_snapshot)
     rules: HeuristicRulesConfig = get_rules_config(rules_version)
-    page = fixtures.get_page_feature_snapshot(url, role)
+    if page_feature_snapshot is not None:
+        page = page_feature_snapshot
+    elif identity.url:
+        page = fixtures.get_page_feature_snapshot(identity.url, identity.role)
+    else:
+        raise ModuleInputError(
+            "page_feature_snapshot, source_reference tabanli (url olmayan) girdilerde zorunludur"
+        )
 
     heading_bonus = min(
         rules.attention_heading_bonus_max, rules.attention_heading_bonus_per_heading * page.heading_count
@@ -280,8 +371,9 @@ def run_synthetic_attention_estimate(
         "fixture_version": page.fixture_version,
         "calibration_status": "uncalibrated",
         "deterministic_seed": deterministic_seed,
-        "variant_role": role,
-        "url": url,
+        "variant_role": identity.role,
+        "url": identity.url,
+        "source_reference": identity.source_reference,
         "regions": regions,
         "grid": grid,
         "disclaimer": SYNTHETIC_ATTENTION_DISCLAIMER,

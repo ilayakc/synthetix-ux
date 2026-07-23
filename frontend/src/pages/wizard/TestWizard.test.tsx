@@ -288,7 +288,7 @@ describe("TestWizard", () => {
     const launchButton = await screen.findByText("Ücretsiz hakkı kullan ve başlat");
     expect(launchButton.closest("button")).toBeDisabled();
 
-    fireEvent.click(screen.getByLabelText(/Bu URL'leri test etme yetkisine sahip/));
+    fireEvent.click(screen.getByLabelText(/Bu URL'leri analiz etme yetkisine sahip/));
 
     await waitFor(() => expect(launchButton.closest("button")).not.toBeDisabled());
   });
@@ -332,6 +332,7 @@ describe("TestWizard", () => {
               used_free_entitlement: true,
               reserved_chips: 0,
               engine_status_message: "Simülasyon kuyruğa alındı.",
+              warnings: [],
             },
           };
           return jsonResponse(status, body);
@@ -385,6 +386,7 @@ describe("TestWizard", () => {
           used_free_entitlement: true,
           reserved_chips: 0,
           engine_status_message: "Simülasyon kuyruğa alındı.",
+          warnings: [],
         },
       },
     });
@@ -401,6 +403,54 @@ describe("TestWizard", () => {
       screen.getByText("Test, ücretsiz hakkınız kullanılarak başlatıldı."),
     ).toBeInTheDocument();
     expect(screen.getByText("Simülasyon kuyruğa alındı.")).toBeInTheDocument();
+  });
+
+  it("stale CTA annotation uyarisi varsa dogru tarafa (slot) bagli acik bir mesaj gosterir", async () => {
+    stubLaunchFetch({
+      draft: launchReadyDraft(),
+      quote: {
+        pricing_version: "2026.1",
+        test_type: "basic_ux_test",
+        persona_count: 500,
+        modules: [],
+        free_entitlement_feature_key: "basic_ux_test",
+        free_entitlement_applicable: true,
+        line_items: [],
+        required_chips: 0,
+        total_chips: 0,
+      },
+      launchResponse: {
+        status: 200,
+        body: {
+          draft_id: "draft-1",
+          status: "launched",
+          test_definition_id: "test-def-1",
+          simulation_run_ids: ["run-1"],
+          used_free_entitlement: true,
+          reserved_chips: 0,
+          engine_status_message: "Simülasyon kuyruğa alındı.",
+          warnings: [
+            {
+              code: "stale_cta_annotation_cleared",
+              slot: "current",
+              message: "sunucu mesaji (kullanilmiyor, frontend kendi metnini gosterir)",
+            },
+          ],
+        },
+      },
+    });
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    const launchButton = await screen.findByText("Ücretsiz hakkı kullan ve başlat");
+    fireEvent.click(launchButton);
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Test başlatıldı" })).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/Tasarım değiştiği için önceki CTA seçiminiz temizlendi \(Tasarım A\)/),
+    ).toBeInTheDocument();
   });
 
   it("basarili baslatma (Chip ile) sonrasi Chip mesajini gosterir", async () => {
@@ -427,6 +477,7 @@ describe("TestWizard", () => {
           used_free_entitlement: false,
           reserved_chips: 50,
           engine_status_message: "Simülasyon kuyruğa alındı.",
+          warnings: [],
         },
       },
     });
@@ -478,6 +529,67 @@ describe("TestWizard", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByRole("heading", { name: "Test başlatıldı" })).not.toBeInTheDocument();
+  });
+
+  it("404 gibi 400/402 disindaki bir ApiError'da da gercek backend mesaji gosterilir (jenerik mesaja indirgenmez)", async () => {
+    stubLaunchFetch({
+      draft: launchReadyDraft(),
+      quote: {
+        pricing_version: "2026.1",
+        test_type: "basic_ux_test",
+        persona_count: 500,
+        modules: [],
+        free_entitlement_feature_key: "basic_ux_test",
+        free_entitlement_applicable: true,
+        line_items: [],
+        required_chips: 0,
+        total_chips: 0,
+      },
+      launchResponse: {
+        status: 404,
+        body: { detail: "Taslak bulunamadi" },
+      },
+    });
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    const launchButton = await screen.findByText("Ücretsiz hakkı kullan ve başlat");
+    fireEvent.click(launchButton);
+
+    await waitFor(() => expect(screen.getByText("Taslak bulunamadi")).toBeInTheDocument());
+    expect(
+      screen.queryByText("Test başlatılamadı. Lütfen tekrar deneyin."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("govdesiz/beklenmeyen 500 hatasinda guvenli jenerik bir API mesaji gosterilir (stack trace/SQL degil)", async () => {
+    stubLaunchFetch({
+      draft: launchReadyDraft(),
+      quote: {
+        pricing_version: "2026.1",
+        test_type: "basic_ux_test",
+        persona_count: 500,
+        modules: [],
+        free_entitlement_feature_key: "basic_ux_test",
+        free_entitlement_applicable: true,
+        line_items: [],
+        required_chips: 0,
+        total_chips: 0,
+      },
+      launchResponse: {
+        status: 500,
+        body: null,
+      },
+    });
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    const launchButton = await screen.findByText("Ücretsiz hakkı kullan ve başlat");
+    fireEvent.click(launchButton);
+
+    await waitFor(() =>
+      expect(screen.getByText(/API istegi basarisiz: 500/)).toBeInTheDocument(),
+    );
   });
 
   it("persona sayisi tam 100 oldugunda bir sonraki adima gecisi saglar (alt sinir)", async () => {
@@ -673,12 +785,12 @@ describe("TestWizard", () => {
 
     renderWizard("/tests/new?draft=draft-1");
 
-    await waitFor(() => expect(screen.getByText("2. URL Bilgisi")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("İleri"));
 
     expect(await screen.findByText("Yeni tasarım URL'si gereklidir.")).toBeInTheDocument();
-    expect(screen.getByText("2. URL Bilgisi")).toBeInTheDocument();
+    expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument();
   });
 
   it("katalogdan gelen gecerli modul secimini yeni draft'a kaydeder ve 'Seçim kaydedildi' gosterir", async () => {
@@ -1093,5 +1205,551 @@ describe("TestWizard", () => {
 
     expect(screen.getByRole("button", { name: "Geri" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "İleri" })).toBeInTheDocument();
+  });
+
+  // --- Tasarim kaynagi (URL / ekran goruntusu) - Prompt 2 ---------------------
+
+  it("ekran goruntusu secimi (source_type + asset id) autosave payload'una girer", async () => {
+    const draftAtStep2 = { ...emptyDraft, current_step: 2, payload: {} };
+    const patchCalls: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, draftAtStep2);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          patchCalls.push(JSON.parse(String(init.body)));
+          return jsonResponse(200, draftAtStep2);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("radio", { name: /Ekran görüntüsü/ }));
+
+    await waitFor(() =>
+      expect(patchCalls.some((call) => (call.payload as Record<string, unknown>)?.current_source_type === "screenshot")).toBe(true),
+    );
+  });
+
+  it("eski (source type olmayan) bir taslak URL kaynagini varsayar", async () => {
+    const legacyDraft = {
+      ...emptyDraft,
+      current_step: 2,
+      payload: { test_type: "existing_site_basic_ux", current_url: "https://example.com" },
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, legacyDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, legacyDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    expect(screen.getByRole("radio", { name: "URL" })).toBeChecked();
+    expect(document.getElementById("wizard-current-url")).toHaveValue("https://example.com");
+  });
+
+  it("ozet (5. adim) ekran goruntusu kaynagini gosterir ve baslatma dugmesi artik acik olur", async () => {
+    const screenshotDraft = {
+      ...emptyDraft,
+      current_step: 5,
+      payload: {
+        project_id: project.id,
+        name: "Sepet akisi",
+        target_task: "Odeme tamamla",
+        test_type: "existing_site_basic_ux",
+        current_source_type: "screenshot",
+        current_design_asset_id: "asset-1",
+        persona_count: 500,
+        target_audience: "Yeni musteriler",
+        modules: [],
+        authorization_confirmed: true,
+      },
+      missing_fields: [],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/design-assets/asset-1") && (init?.method ?? "GET") === "GET") {
+          return jsonResponse(200, {
+            id: "asset-1",
+            organization_id: "org-1",
+            content_type: "image/png",
+            byte_size: 2048,
+            width: 100,
+            height: 80,
+            label: null,
+            status: "active",
+            has_image: true,
+            expires_at: null,
+            created_at: "2026-07-20T00:00:00Z",
+            updated_at: "2026-07-20T00:00:00Z",
+          });
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, screenshotDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, screenshotDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        if (url.includes("/api/billing/quote")) {
+          return jsonResponse(200, {
+            pricing_version: "2026.1",
+            test_type: "basic_ux_test",
+            persona_count: 500,
+            modules: [],
+            free_entitlement_feature_key: "basic_ux_test",
+            free_entitlement_applicable: true,
+            line_items: [],
+            required_chips: 0,
+            total_chips: 0,
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getAllByText("Ekran görüntüsü").length).toBeGreaterThan(0));
+
+    const launchButton = await screen.findByRole("button", { name: /başlat/i });
+    // Paket 4 Final: gecerli bir design_asset_id secilmisse buton artik
+    // ONCEDEN kapatilmaz (asil dogrulama sunucu tarafinda, launch aninda
+    // yapilir - bkz. app.services.test_wizard._revalidate_launch_sources).
+    expect(launchButton).not.toBeDisabled();
+  });
+
+  it("A/B karsilastirmasinda URL/URL akisi bozulmadan calismaya devam eder", async () => {
+    const abDraft = {
+      ...emptyDraft,
+      current_step: 2,
+      payload: { test_type: "ab_comparison", current_url: "https://example.com" },
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    expect(document.getElementById("wizard-current-url")).toHaveValue("https://example.com");
+    expect(document.getElementById("wizard-new-url")).toBeInTheDocument();
+  });
+
+  // --- Paket 3A: A/B karsilastirmasinda gorsel kaynaklar -----------------------
+
+  it("A/B karsilastirmasinda hem Tasarim A hem Tasarim B icin ekran goruntusu secenegi gosterilir", async () => {
+    const abDraft = {
+      ...emptyDraft,
+      current_step: 2,
+      payload: { test_type: "ab_comparison", current_url: "https://example.com" },
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    // Iki bagimsiz picker: her biri kendi "Ekran görüntüsü" radiogroup girisine sahip.
+    expect(screen.getAllByRole("radio", { name: /Ekran görüntüsü/ })).toHaveLength(2);
+    // Bileşen etiketi (label) yalnızca radiogroup'un aria-label'ına gömer,
+    // ayrı bir görünür başlık olarak render etmez (bkz. DesignSourcePicker.tsx).
+    expect(
+      screen.getByRole("radiogroup", { name: "Tasarım A — Orijinal tasarım - kaynak türü" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("radiogroup", { name: "Tasarım B — Alternatif tasarım - kaynak türü" }),
+    ).toBeInTheDocument();
+  });
+
+  it("A/B: Tasarim B icin ekran goruntusu secimi autosave payload'una new_source_type olarak girer", async () => {
+    const abDraft = {
+      ...emptyDraft,
+      current_step: 2,
+      payload: { test_type: "ab_comparison", current_url: "https://example.com" },
+    };
+    const patchCalls: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          patchCalls.push(JSON.parse(String(init.body)));
+          return jsonResponse(200, abDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+    const screenshotRadios = screen.getAllByRole("radio", { name: /Ekran görüntüsü/ });
+    fireEvent.click(screenshotRadios[1]); // ikinci picker = Tasarim B
+
+    await waitFor(() =>
+      expect(
+        patchCalls.some(
+          (call) => (call.payload as Record<string, unknown>)?.new_source_type === "screenshot",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("ozet (5. adim) A/B icin gorsel bir kaynak (Tasarim B ekran goruntusu) varsa baslatma dugmesi acik olur", async () => {
+    const abVisualDraft = {
+      ...emptyDraft,
+      current_step: 5,
+      payload: {
+        project_id: project.id,
+        name: "AB testi",
+        target_task: "Odeme tamamla",
+        test_type: "ab_comparison",
+        current_url: "https://example.com",
+        new_source_type: "screenshot",
+        new_design_asset_id: "asset-b",
+        persona_count: 500,
+        target_audience: "Yeni musteriler",
+        modules: [],
+        authorization_confirmed: true,
+      },
+      missing_fields: [],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/design-assets/asset-b") && (init?.method ?? "GET") === "GET") {
+          return jsonResponse(200, {
+            id: "asset-b",
+            organization_id: "org-1",
+            content_type: "image/png",
+            byte_size: 2048,
+            width: 100,
+            height: 80,
+            label: null,
+            status: "active",
+            has_image: true,
+            expires_at: null,
+            created_at: "2026-07-20T00:00:00Z",
+            updated_at: "2026-07-20T00:00:00Z",
+          });
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, abVisualDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, abVisualDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        if (url.includes("/api/billing/quote")) {
+          return jsonResponse(200, {
+            pricing_version: "2026.1",
+            test_type: "basic_ux_test",
+            persona_count: 500,
+            modules: [],
+            free_entitlement_feature_key: "basic_ux_test",
+            free_entitlement_applicable: true,
+            line_items: [],
+            required_chips: 0,
+            total_chips: 0,
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    const launchButton = await screen.findByRole("button", { name: /başlat/i });
+    // Paket 4 Final: A/B'nin "Tasarim B" tarafi ekran goruntusu oldugunda da
+    // gecerli bir design_asset_id varsa buton artik ONCEDEN kapatilmaz.
+    expect(launchButton).not.toBeDisabled();
+  });
+
+  it("karisik kaynakta (URL + ekran goruntusu) birlesik onay metnini gosterir", async () => {
+    const abMixedDraft = {
+      ...emptyDraft,
+      current_step: 5,
+      payload: {
+        project_id: project.id,
+        name: "AB testi",
+        target_task: "Odeme tamamla",
+        test_type: "ab_comparison",
+        current_url: "https://example.com",
+        new_source_type: "screenshot",
+        new_design_asset_id: "asset-b",
+        persona_count: 500,
+        target_audience: "Yeni musteriler",
+        modules: [],
+        authorization_confirmed: true,
+      },
+      missing_fields: [],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/design-assets/asset-b") && (init?.method ?? "GET") === "GET") {
+          return jsonResponse(200, {
+            id: "asset-b",
+            organization_id: "org-1",
+            content_type: "image/png",
+            byte_size: 2048,
+            width: 100,
+            height: 80,
+            label: null,
+            status: "active",
+            has_image: true,
+            expires_at: null,
+            created_at: "2026-07-20T00:00:00Z",
+            updated_at: "2026-07-20T00:00:00Z",
+          });
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, abMixedDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, abMixedDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        if (url.includes("/api/billing/quote")) {
+          return jsonResponse(200, {
+            pricing_version: "2026.1",
+            test_type: "basic_ux_test",
+            persona_count: 500,
+            modules: [],
+            free_entitlement_feature_key: "basic_ux_test",
+            free_entitlement_applicable: true,
+            line_items: [],
+            required_chips: 0,
+            total_chips: 0,
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/^Bu URL ve tasarım görsellerini analiz etme yetkisine sahip/),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("her iki taraf da ekran goruntusu ise sadece-URL onay metni gosterilmez", async () => {
+    const abBothScreenshotDraft = {
+      ...emptyDraft,
+      current_step: 5,
+      payload: {
+        project_id: project.id,
+        name: "AB testi",
+        target_task: "Odeme tamamla",
+        test_type: "ab_comparison",
+        current_source_type: "screenshot",
+        current_design_asset_id: "asset-a",
+        new_source_type: "screenshot",
+        new_design_asset_id: "asset-b",
+        persona_count: 500,
+        target_audience: "Yeni musteriler",
+        modules: [],
+        authorization_confirmed: true,
+      },
+      missing_fields: [],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (
+          (url.includes("/api/design-assets/asset-a") || url.includes("/api/design-assets/asset-b")) &&
+          (init?.method ?? "GET") === "GET"
+        ) {
+          return jsonResponse(200, {
+            id: url.includes("asset-a") ? "asset-a" : "asset-b",
+            organization_id: "org-1",
+            content_type: "image/png",
+            byte_size: 2048,
+            width: 100,
+            height: 80,
+            label: null,
+            status: "active",
+            has_image: true,
+            expires_at: null,
+            created_at: "2026-07-20T00:00:00Z",
+            updated_at: "2026-07-20T00:00:00Z",
+          });
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, abBothScreenshotDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, abBothScreenshotDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        if (url.includes("/api/billing/quote")) {
+          return jsonResponse(200, {
+            pricing_version: "2026.1",
+            test_type: "basic_ux_test",
+            persona_count: 500,
+            modules: [],
+            free_entitlement_feature_key: "basic_ux_test",
+            free_entitlement_applicable: true,
+            line_items: [],
+            required_chips: 0,
+            total_chips: 0,
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/^Bu tasarım görsellerini analiz etme ve kullanma yetkisine sahip/),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Bu URL'leri analiz etme yetkisine sahip/)).not.toBeInTheDocument();
   });
 });

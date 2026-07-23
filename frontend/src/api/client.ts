@@ -25,7 +25,35 @@ function readCookie(name: string): string | null {
   return match ? decodeURIComponent(match.split("=").slice(1).join("=")) : null;
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+const GENERIC_ERROR_MESSAGE = "İstek işlenirken bir hata oluştu.";
+
+// FastAPI `detail` alani her zaman string degildir: 422 dogrulama
+// hatalarinda `{loc, msg, type}` nesnelerinden olusan bir dizi, bazi
+// durumlarda ise tek bir nesne donebilir. Ham nesneyi/diziyi dogrudan
+// mesaj olarak kullanmak `String(...)` -> "[object Object]" sonucuna
+// yol acar; bu yuzden burada kullaniciya gosterilecek kisa, guvenli bir
+// metne cevriliyor.
+function describeErrorDetail(detail: unknown): string | null {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) =>
+        item && typeof item === "object" && "msg" in item && typeof item.msg === "string"
+          ? item.msg
+          : null,
+      )
+      .filter((msg): msg is string => Boolean(msg));
+    return messages.length > 0 ? messages.join("; ") : GENERIC_ERROR_MESSAGE;
+  }
+  if (detail && typeof detail === "object") {
+    return GENERIC_ERROR_MESSAGE;
+  }
+  return null;
+}
+
+async function rawFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -58,12 +86,9 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       // yanit govdesi yok/JSON degil; body null kalir
     }
 
-    if (response.status === 401 && !path.startsWith(AUTH_PATH_PREFIX)) {
-      notifySessionExpired();
-    }
-
+    const detail = (body as { detail?: unknown } | null)?.detail;
     const message =
-      (body as { detail?: string } | null)?.detail ??
+      describeErrorDetail(detail) ??
       `API istegi basarisiz: ${response.status} ${response.statusText}`;
     throw new ApiError(response.status, message, body);
   }
@@ -73,6 +98,51 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+// Erisim tokeni suresi dolan (15 dk) ancak yenileme tokeni gecerli olan bir
+// oturumda, arka planda alinan tek bir 401 dogrudan "oturum suresi doldu"
+// olarak yorumlanmamali; once sessizce `/api/auth/refresh` denenir ve
+// basarili olursa orijinal istek bir kez daha tekrarlanir. Ayni anda
+// birden fazla istek 401 alirsa yenileme tek seferde paylasilir.
+let pendingRefresh: Promise<void> | null = null;
+
+function refreshAccessToken(): Promise<void> {
+  if (!pendingRefresh) {
+    pendingRefresh = rawFetch<SessionResponse>("/api/auth/refresh", { method: "POST" })
+      .then(() => undefined)
+      .finally(() => {
+        pendingRefresh = null;
+      });
+  }
+  return pendingRefresh;
+}
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
+    return await rawFetch<T>(path, init);
+  } catch (error) {
+    const isUnauthorized = error instanceof ApiError && error.status === 401;
+    if (!isUnauthorized || path.startsWith(AUTH_PATH_PREFIX)) {
+      throw error;
+    }
+
+    try {
+      await refreshAccessToken();
+    } catch {
+      notifySessionExpired();
+      throw error;
+    }
+
+    try {
+      return await rawFetch<T>(path, init);
+    } catch (retryError) {
+      if (retryError instanceof ApiError && retryError.status === 401) {
+        notifySessionExpired();
+      }
+      throw retryError;
+    }
+  }
 }
 
 export interface HealthResponse {
@@ -398,13 +468,65 @@ export type WizardTestType = "existing_site_basic_ux" | "ab_comparison" | "acces
 // gelir; backend zaten gecerliligi dogrular.
 export type WizardModuleKey = string;
 
+// Mevcut tasarimin (current_*) kaynagi: bir URL veya yuklenen bir ekran
+// goruntusu (design asset). Eski taslaklarda bu alan hic bulunmayabilir;
+// backend bu durumda "url" varsayar (bkz. backend/app/services/test_wizard.py
+// effective_source_type). Ekran goruntusu kaynagi bu surumde yalnizca
+// "existing_site_basic_ux" icin secilebilir ve henuz analiz motoruna
+// baglanmadigi icin bu kaynakla GERCEK bir test BASLATILAMAZ (bkz.
+// DesignSourcePicker ve Step5Summary).
+export type WizardCurrentSourceType = "url" | "screenshot";
+
+// "Tasarim B" (new_*) kaynagi: A/B karsilastirmasinda yalnizca gecerlidir.
+// Eski taslaklarda bu alan hic bulunmayabilir; backend bu durumda "url"
+// varsayar (bkz. backend/app/services/test_wizard.py
+// effective_new_source_type). "ai_generated" yalnizca Tasarim B tarafi icin
+// gecerlidir (Tasarim A hicbir zaman AI ile uretilemez). Bu kaynaklarin
+// hicbiriyle GERCEK bir test BASLATILAMAZ (bkz. DesignBSourcePicker ve
+// Step5Summary).
+export type WizardNewSourceType = "url" | "screenshot" | "ai_generated";
+
+// Kullanicinin bir CTA adayini onaylamasi VEYA kendi kutusunu cizmesi (Paket
+// 4C+4D). Draft+slot (current/new) bagliminda tutulur - `design_asset_id`
+// GLOBAL bir asset ozelligi degildir, ayni asset farkli taslaklarda/taraflarda
+// kullanilabilir (bkz. backend/app/services/test_wizard.py). `box` 0-1
+// normalize kutu (analiz ediligin gorselin oranina gore); `verified_content_sha256`
+// HER ZAMAN sunucu tarafinda hesaplanir - client tarafinda gonderilen/uretilen
+// hicbir hash degeri kullanilmaz/gonderilmemelidir (sunucu zaten yok sayar).
+export type CtaAnnotationSelectionSource = "candidate_confirmation" | "manual_box";
+
+export interface CtaAnnotationBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface CtaAnnotationInput {
+  design_asset_id: string;
+  box: CtaAnnotationBox;
+  selection_source: CtaAnnotationSelectionSource;
+  source_candidate_index?: number;
+}
+
+export interface CtaAnnotation extends CtaAnnotationInput {
+  verified_content_sha256: string;
+}
+
 export interface WizardDraftPayload {
   project_id?: string;
   name?: string;
   target_task?: string;
   test_type?: WizardTestType;
   current_url?: string;
+  current_source_type?: WizardCurrentSourceType;
+  current_design_asset_id?: string;
+  current_cta_annotation?: CtaAnnotation | null;
   new_url?: string;
+  new_source_type?: WizardNewSourceType;
+  new_design_asset_id?: string;
+  new_ai_generation_id?: string;
+  new_cta_annotation?: CtaAnnotation | null;
   persona_count?: number;
   target_audience?: string;
   persona_preset_id?: string;
@@ -424,6 +546,9 @@ export interface WizardDraftResponse {
   missing_fields: string[];
   created_at: string;
   updated_at: string;
+  // Zorla reddedilmeyen ama kullaniciya gosterilmesi gereken durumlar (ör.
+  // CTA secimi neredeyse tum gorseli kapliyor) - bkz. backend PatchDraftRequest.
+  warnings: string[];
 }
 
 export function createWizardDraft(): Promise<WizardDraftResponse> {
@@ -448,6 +573,12 @@ export function patchWizardDraft(
   });
 }
 
+export interface WizardLaunchWarning {
+  code: string;
+  slot: "current" | "new";
+  message: string;
+}
+
 export interface WizardLaunchResponse {
   draft_id: string;
   status: WizardDraftStatus;
@@ -456,6 +587,7 @@ export interface WizardLaunchResponse {
   used_free_entitlement: boolean;
   reserved_chips: number;
   engine_status_message: string;
+  warnings: WizardLaunchWarning[];
 }
 
 export function launchWizardDraft(draftId: string): Promise<WizardLaunchResponse> {
@@ -667,6 +799,7 @@ export interface ReportInfoBox {
   fixture_version: string | null;
   input_summary: {
     url?: string | null;
+    source_type?: "url" | "screenshot" | "ai_generated" | null;
     wizard_test_type?: string | null;
     persona_count?: number | null;
     target_audience?: string | null;
@@ -704,15 +837,58 @@ export interface ReportHeatmapRegion {
   box: ReportHeatmapRegionBox | null;
 }
 
+export type ReportHeatmapOverlayKind = "semantic_region" | "synthetic_visual_attention";
+export type ReportFeatureSource = "dom" | "visual_heuristic";
+
+export interface ReportVisualAttentionCell {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  intensity: number;
+}
+
 export interface ReportHeatmapSection {
   available: boolean;
   label: string;
+  overlay_kind: ReportHeatmapOverlayKind;
+  feature_source: ReportFeatureSource | null;
   grid: Record<string, unknown>[] | null;
   disclaimer: string | null;
   regions?: ReportHeatmapRegion[] | null;
+  visual_cells?: ReportVisualAttentionCell[] | null;
+  algorithm_version?: string | null;
+  image_width?: number | null;
+  image_height?: number | null;
+  content_sha256?: string | null;
   screenshot_url?: string | null;
   coordinates_available?: boolean;
   coordinates_unavailable_reason?: string | null;
+}
+
+export type CtaOverlayClassification =
+  | "dom_interactive_candidate"
+  | "visual_cta_candidate"
+  | "user_confirmed_cta";
+
+export interface ReportCtaOverlayBox {
+  classification: CtaOverlayClassification;
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  heuristic_score?: number | null;
+}
+
+export interface ReportCtaOverlaySection {
+  available: boolean;
+  feature_source: ReportFeatureSource | null;
+  boxes: ReportCtaOverlayBox[];
+  screenshot_url?: string | null;
+  coordinates_available?: boolean;
+  coordinates_unavailable_reason?: string | null;
+  disclaimer: string;
 }
 
 export interface ReportCampaignCtaEntry {
@@ -773,6 +949,12 @@ export interface ReportAbComparison {
   note: string;
   this_variant_role: "variant_a" | "variant_b";
   sibling_variant_name: string;
+  sibling_report_id: string;
+  this_source_type: "url" | "screenshot" | "ai_generated";
+  sibling_source_type: "url" | "screenshot" | "ai_generated";
+  sibling_heatmap: ReportHeatmapSection;
+  sibling_cta_overlay: ReportCtaOverlaySection;
+  same_snapshot_sha256: boolean;
 }
 
 export interface ReportDetailResponse {
@@ -794,6 +976,7 @@ export interface ReportDetailResponse {
   persona_segment_note: string;
   critical_findings: ReportCriticalFinding[];
   heatmap: ReportHeatmapSection;
+  cta_overlay: ReportCtaOverlaySection;
   campaign_cta: ReportCampaignCta | null;
   network_device: ReportNetworkDevice | null;
   accessible_chart_summaries: ReportAccessibleChartSummary[];
@@ -814,6 +997,323 @@ export function getReportExportUrl(path: string): string {
 // yolu mutlak URL'ye cevirir - harici bir kaynagi ASLA dogrudan doner.
 export function getReportHeatmapScreenshotUrl(path: string): string {
   return `${API_BASE_URL}${path}`;
+}
+
+// --- Yüklenen tasarım ekran görüntüleri (design assets) -----------------------
+//
+// Yalnızca PNG/JPEG/WebP kabul edilir; dosya backend'de gerçekten decode
+// edilerek doğrulanır ve EXIF/metadata temizlenir (bkz.
+// backend/app/services/design_assets.py). Bu uç nokta bir `multipart/form-data`
+// isteği olduğu için `apiFetch`'in sabit JSON `Content-Type` header'ını
+// kullanamaz (tarayıcının `boundary` içeren `Content-Type`'ı kendisinin
+// belirlemesine izin vermek için header hiç ayarlanmaz); ilerleme (progress)
+// bildirimi de fetch API ile mümkün olmadığı için ayrı bir `XMLHttpRequest`
+// tabanlı yardımcı kullanılır (CSRF header'ı ve `credentials`/`withCredentials`
+// davranışı `rawFetch` ile aynı şekilde korunur).
+
+export type DesignAssetContentType = "image/png" | "image/jpeg" | "image/webp";
+export type DesignAssetStatus = "active" | "deleted";
+
+export interface DesignAssetResponse {
+  id: string;
+  organization_id: string;
+  content_type: DesignAssetContentType;
+  byte_size: number;
+  width: number;
+  height: number;
+  label: string | null;
+  status: DesignAssetStatus;
+  has_image: boolean;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UploadDesignAssetOptions {
+  label?: string;
+  onProgress?: (loadedBytes: number, totalBytes: number) => void;
+}
+
+interface RawUploadAttemptResult {
+  status: number;
+  statusText: string;
+  body: unknown;
+}
+
+function _performUploadAttempt(
+  file: File,
+  options: UploadDesignAssetOptions | undefined,
+): Promise<RawUploadAttemptResult> {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (options?.label) {
+      formData.append("label", options.label);
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE_URL}/api/design-assets`);
+    xhr.withCredentials = true;
+
+    // Her deneme (ilk çağrı ve 401 sonrası tekrar deneme) çağrı anındaki
+    // güncel `csrf_token` cookie'sini okur; bir yenileme (refresh) CSRF
+    // cookie'sini rotate etmiş olsa bile tekrar deneme eski/geçersiz bir
+    // token kullanmaz.
+    const csrfToken = readCookie(CSRF_COOKIE_NAME);
+    if (csrfToken) {
+      xhr.setRequestHeader("X-CSRF-Token", csrfToken);
+    }
+
+    if (options?.onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          options.onProgress?.(event.loaded, event.total);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      let body: unknown = null;
+      try {
+        body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        // yanıt gövdesi JSON değil; body null kalır
+      }
+      resolve({ status: xhr.status, statusText: xhr.statusText, body });
+    };
+
+    xhr.onerror = () => {
+      reject(new ApiError(0, "Yükleme sırasında ağ hatası oluştu", null));
+    };
+
+    xhr.send(formData);
+  });
+}
+
+function _uploadResultToError(result: RawUploadAttemptResult): ApiError {
+  const detail = (result.body as { detail?: unknown } | null)?.detail;
+  const message =
+    describeErrorDetail(detail) ?? `Yükleme başarısız: ${result.status} ${result.statusText}`;
+  return new ApiError(result.status, message, result.body);
+}
+
+// `apiFetch` ile aynı sessiz 401 yenileme/tekrar deneme deseni (bkz.
+// `refreshAccessToken`/`apiFetch` yukarıda): erişim tokeni tam yükleme
+// sırasında dolmuşsa, `/api/auth/refresh` bir kez denenir ve başarılı olursa
+// yükleme TAM OLARAK BİR KEZ tekrarlanır (sonsuz döngü yoktur - ikinci
+// denemenin sonucu, başarılı da olsa başarısız da olsa doğrudan döndürülür/
+// fırlatılır). İlerleme (progress) callback'i her iki denemede de aynı
+// şekilde çalışmaya devam eder.
+export async function uploadDesignAsset(
+  file: File,
+  options?: UploadDesignAssetOptions,
+): Promise<DesignAssetResponse> {
+  const first = await _performUploadAttempt(file, options);
+  if (first.status >= 200 && first.status < 300) {
+    return first.body as DesignAssetResponse;
+  }
+  if (first.status !== 401) {
+    throw _uploadResultToError(first);
+  }
+
+  try {
+    await refreshAccessToken();
+  } catch {
+    notifySessionExpired();
+    throw _uploadResultToError(first);
+  }
+
+  const retry = await _performUploadAttempt(file, options);
+  if (retry.status >= 200 && retry.status < 300) {
+    return retry.body as DesignAssetResponse;
+  }
+  if (retry.status === 401) {
+    notifySessionExpired();
+  }
+  throw _uploadResultToError(retry);
+}
+
+export function getDesignAsset(assetId: string): Promise<DesignAssetResponse> {
+  return apiFetch<DesignAssetResponse>(`/api/design-assets/${encodeURIComponent(assetId)}`);
+}
+
+// Rapor/ekran görüntüsü desenleriyle aynı şekilde (bkz.
+// `getReportHeatmapScreenshotUrl`), tenant izolasyonu backend'de doğrulanır;
+// bu yalnızca göreli yolu mutlak URL'ye çevirir.
+export function getDesignAssetPreviewUrl(assetId: string): string {
+  return `${API_BASE_URL}/api/design-assets/${encodeURIComponent(assetId)}/preview`;
+}
+
+export function deleteDesignAsset(assetId: string): Promise<void> {
+  return apiFetch<void>(`/api/design-assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
+}
+
+// --- Sayfa analizi (page-analyses) — DesignAsset ekran görüntüleri için yerel
+// görsel analiz (Paket 4C+4D) ------------------------------------------------
+//
+// Bu analiz TAMAMEN yerel/deterministik OpenCV işlemesinden gelir (bkz.
+// backend/app/services/image_visual_analysis.py); hiçbir gerçek kullanıcı
+// tıklaması/göz takibi verisi DEĞİLDİR — yalnızca aday sıralama skoru ve
+// piksel tabanlı sentetik dikkat tahminidir.
+
+export type PageAnalysisStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface VisualCtaCandidateBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface VisualCtaCandidateColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
+export interface VisualCtaCandidate {
+  kind: "visual_cta_candidate";
+  box: VisualCtaCandidateBox;
+  // GERÇEK bir tıklama olasılığı veya istatistiksel güven değildir - yalnızca
+  // aday SIRALAMA skorudur (bkz. docs/methodology.md).
+  heuristic_score: number;
+  dominant_color: VisualCtaCandidateColor;
+  regional_visual_contrast_estimate: number;
+  size_component: number;
+  position_component: number;
+  contrast_component: number;
+  evidence: string[];
+  algorithm_version: string;
+}
+
+export interface SyntheticAttentionCell {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  intensity: number;
+}
+
+export interface SyntheticAttentionEstimate {
+  cells: SyntheticAttentionCell[];
+  feature_source: string;
+  algorithm_version: string;
+  disclaimer: string;
+}
+
+export interface DesignAssetVisualFeatures {
+  feature_source: "visual_heuristic";
+  algorithm_version: string;
+  visual_cta_candidates: VisualCtaCandidate[];
+  candidate_disclaimer: string;
+  synthetic_attention_estimate: SyntheticAttentionEstimate;
+  limitations: string[];
+}
+
+export interface PageAnalysisResponse {
+  id: string;
+  organization_id: string;
+  source_kind: "url" | "design_asset";
+  url: string | null;
+  design_asset_id: string | null;
+  design_asset_still_linked: boolean | null;
+  status: PageAnalysisStatus;
+  attempt_count: number;
+  error: string | null;
+  snapshot_version: string | null;
+  analyzer_version: string | null;
+  source: string | null;
+  features: DesignAssetVisualFeatures | Record<string, unknown> | null;
+  has_screenshot: boolean;
+  image_width: number | null;
+  image_height: number | null;
+  screenshot_content_type: string | null;
+  content_sha256: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function createPageAnalysisForDesignAsset(designAssetId: string): Promise<PageAnalysisResponse> {
+  return apiFetch<PageAnalysisResponse>("/api/page-analyses", {
+    method: "POST",
+    body: JSON.stringify({ design_asset_id: designAssetId }),
+  });
+}
+
+export function getPageAnalysis(analysisId: string): Promise<PageAnalysisResponse> {
+  return apiFetch<PageAnalysisResponse>(`/api/page-analyses/${encodeURIComponent(analysisId)}`);
+}
+
+// --- AI ile tasarım varyantı üretimi (yalnızca "Tasarım B" için) --------------
+//
+// Bu, yukarıdaki `ai_explanation` (rapor açıklaması) özelliğinden TAMAMEN
+// AYRIDIR: burada gerçek bir görsel üretim sağlayıcısı yapılandırılmamışsa
+// özellik tamamen DEVRE DIŞIDIR (sahte/placeholder bir sonuç asla üretilmez).
+// `getDesignGenerationAvailability` frontend'in bu durumu bilmesi için tek
+// doğruluk kaynağıdır - API anahtarı veya uç nokta URL'si asla döndürmez.
+
+export type DesignGenerationStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface DesignGenerationAvailability {
+  available: boolean;
+  provider_name: string | null;
+  max_prompt_length: number;
+  disabled_reason: string | null;
+}
+
+export interface DesignGenerationResultAsset {
+  id: string;
+  content_type: DesignAssetContentType;
+  width: number;
+  height: number;
+  expires_at: string | null;
+}
+
+export interface DesignGenerationResponse {
+  id: string;
+  status: DesignGenerationStatus;
+  provider: string;
+  model_name: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  result_asset: DesignGenerationResultAsset | null;
+  error_message: string | null;
+}
+
+export function getDesignGenerationAvailability(): Promise<DesignGenerationAvailability> {
+  return apiFetch<DesignGenerationAvailability>("/api/design-generations/availability");
+}
+
+export function createDesignGeneration(params: {
+  sourceAssetId: string;
+  prompt: string;
+  authorizationConfirmed: boolean;
+}): Promise<DesignGenerationResponse> {
+  return apiFetch<DesignGenerationResponse>("/api/design-generations", {
+    method: "POST",
+    body: JSON.stringify({
+      source_asset_id: params.sourceAssetId,
+      prompt: params.prompt,
+      authorization_confirmed: params.authorizationConfirmed,
+    }),
+  });
+}
+
+export function getDesignGeneration(jobId: string): Promise<DesignGenerationResponse> {
+  return apiFetch<DesignGenerationResponse>(`/api/design-generations/${encodeURIComponent(jobId)}`);
+}
+
+export function cancelDesignGeneration(jobId: string): Promise<DesignGenerationResponse> {
+  return apiFetch<DesignGenerationResponse>(`/api/design-generations/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function deleteDesignGeneration(jobId: string): Promise<void> {
+  return apiFetch<void>(`/api/design-generations/${encodeURIComponent(jobId)}`, { method: "DELETE" });
 }
 
 // --- AI destekli açıklama (isteğe bağlı, otomatik üretilir) -------------------
@@ -889,7 +1389,7 @@ export function login(body: LoginRequest): Promise<SessionResponse> {
 }
 
 export function refreshSession(): Promise<SessionResponse> {
-  return apiFetch<SessionResponse>("/api/auth/refresh", { method: "POST" });
+  return rawFetch<SessionResponse>("/api/auth/refresh", { method: "POST" });
 }
 
 export function logout(): Promise<void> {

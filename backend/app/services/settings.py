@@ -11,6 +11,7 @@ uretsin.
 import uuid
 import zoneinfo
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.settings import OrganizationSettings, UserPreferences
@@ -36,11 +37,27 @@ class SettingsValidationError(ValueError):
 
 
 async def get_or_create_user_preferences(session: AsyncSession, user_id: uuid.UUID) -> UserPreferences:
+    """Ilk erisimde olusturur; iki es zamanli istek AYNI satiri ilk kez
+    olusturmaya calisirsa (TOCTOU - `SELECT` ikisinde de `None` doner) ikinci
+    `INSERT`, birincil anahtar cakismasi (`IntegrityError`) ile basarisiz
+    olur. Bu, cagirilmadan once acikca bir SAVEPOINT (`begin_nested`) icinde
+    denenir - cakisma olursa yalnizca bu SAVEPOINT geri alinir (disaridaki
+    cagiranin transaction'i ETKILENMEZ) ve satir, DIGER istegin zaten
+    olusturdugu haliyle GUVENLE yeniden okunur; boylece bu fonksiyon HICBIR
+    zaman kullaniciya 500 olarak sizan bir IntegrityError firlatmaz."""
+
     prefs = await session.get(UserPreferences, user_id)
-    if prefs is None:
-        prefs = UserPreferences(user_id=user_id)
-        session.add(prefs)
-        await session.flush()
+    if prefs is not None:
+        return prefs
+    try:
+        async with session.begin_nested():
+            prefs = UserPreferences(user_id=user_id)
+            session.add(prefs)
+            await session.flush()
+    except IntegrityError:
+        prefs = await session.get(UserPreferences, user_id)
+        if prefs is None:
+            raise
     return prefs
 
 
@@ -123,11 +140,25 @@ async def update_user_preferences(
 async def get_or_create_organization_settings(
     session: AsyncSession, organization_id: uuid.UUID
 ) -> OrganizationSettings:
+    """Ilk erisimde olusturur - ayni TOCTOU-guvenli SAVEPOINT deseni icin bkz.
+    `get_or_create_user_preferences` docstring'i. Bu, gercek bir production
+    hatasindan (bkz. sonuc raporu - React StrictMode'un dev'de effect'leri
+    iki kez calistirmasi, es zamanli iki `POST /api/tests/drafts` isteginin
+    ayni organizasyon icin bu satiri ayni anda olusturmaya calismasina ve
+    500 Internal Server Error'a yol acmasindan) kaynaklanan bir duzeltmedir."""
+
     settings_row = await session.get(OrganizationSettings, organization_id)
-    if settings_row is None:
-        settings_row = OrganizationSettings(organization_id=organization_id)
-        session.add(settings_row)
-        await session.flush()
+    if settings_row is not None:
+        return settings_row
+    try:
+        async with session.begin_nested():
+            settings_row = OrganizationSettings(organization_id=organization_id)
+            session.add(settings_row)
+            await session.flush()
+    except IntegrityError:
+        settings_row = await session.get(OrganizationSettings, organization_id)
+        if settings_row is None:
+            raise
     return settings_row
 
 

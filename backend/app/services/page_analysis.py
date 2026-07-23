@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
+import hashlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -34,13 +36,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import async_session_maker
-from app.models.page_analysis import PageAnalysis, PageAnalysisStatus
+from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
+from app.models.reports import Report
+from app.models.simulations import SimulationRun
+from app.services import design_assets as design_assets_service
+from app.services import image_safety
+from app.services import image_visual_analysis
 from app.services import url_safety
-from app.services.exceptions import PageAnalysisNotFoundError, UnauthorizedPageAnalysisError
+from app.services.exceptions import (
+    DesignAssetNotFoundError,
+    DesignAssetUnavailableError,
+    ImageTooLargeError,
+    InvalidImageError,
+    PageAnalysisNotFoundError,
+    PageAnalysisSourceConflictError,
+    UnauthorizedPageAnalysisError,
+)
 
 logger = logging.getLogger("synthetix.page_analysis")
 
 CLAIM_BATCH_SIZE = 5
+
+# Analyzer'in sozlesmesi (bkz. analyzer/app/schemas.py) yalnizca PNG
+# uretir - baska hicbir format burada guvenilir kabul edilmez.
+_URL_SCREENSHOT_ALLOWED_FORMATS: dict[str, str] = {"PNG": "image/png"}
+
+# Guvenilir saklanan DesignAsset.content_type (MIME) -> PageAnalysis worker'inin
+# yeniden dogrulama icin kabul ettigi tek format (bkz. _verify_design_asset_snapshot).
+_DESIGN_ASSET_ALLOWED_FORMATS = image_safety.STANDARD_IMAGE_FORMATS
+
+# Genel, guvenli hata mesajlari - ic dogrulama ayrinti/format/boyut bilgisi
+# (ki bunlar zaten sentetik/ham-veri-icermeyen metinlerdir) API yanitina asla
+# dogrudan yansitilmaz; yalnizca WARNING seviyeli log'da tutulur.
+_SCREENSHOT_VALIDATION_FAILED_MESSAGE = "Ekran goruntusu guvenlik dogrulamasindan gecemedi"
 
 
 def _now() -> datetime:
@@ -52,17 +80,56 @@ async def create_analysis(
     *,
     organization_id: uuid.UUID,
     requested_by_user_id: uuid.UUID,
-    url: str,
-    authorization_confirmed: bool,
+    url: str | None = None,
+    design_asset_id: uuid.UUID | None = None,
+    authorization_confirmed: bool = False,
 ) -> PageAnalysis:
     """Yeni bir analiz isi olusturur ve kuyruga (queued) ekler.
 
-    Kullanici, URL'yi analiz etme yetkisini acikca onaylamadan
+    Ortak kaynak sozlesmesi: `url` ve `design_asset_id`'den TAM OLARAK biri
+    verilmelidir (bkz. app.routers.page_analysis - istemci sozlesmesi bu
+    kuralı 422 ile zaten zorunlu kilar; burasi servis katmaninda ikinci,
+    bagimsiz bir savunma katmanidir).
+
+    URL kaynagi: kullanici, URL'yi analiz etme yetkisini acikca onaylamadan
     (`authorization_confirmed=True`) hicbir is olusturulmaz. URL sozdizimi
     ve DNS/IP dogrulamasi burada da yapilir (hizli, kullanici dostu 400
     hatasi icin); otoriter/son dogrulama analyzer servisinde tekrarlanir
     (bkz. modul dokstring'i ve docs/security.md).
+
+    DesignAsset kaynagi: `authorization_confirmed` kavrami gecerli degildir
+    (kullanici zaten kendi yukledigi kendi gorselini analiz ediyor). Asset'in
+    ayni organizasyona ait, aktif, silinmemis, suresi dolmamis ve ikili
+    verisinin mevcut oldugu burada dogrulanir (`ensure_asset_usable`) - ama
+    bu yalnizca create-time bir kontroldur; worker, isleme zamaninda AYNI
+    kontrolleri BAGIMSIZ olarak tekrar yapar (bkz. process_analysis).
     """
+
+    has_url = url is not None
+    has_asset = design_asset_id is not None
+    if has_url == has_asset:
+        raise PageAnalysisSourceConflictError(
+            "Tam olarak bir kaynak belirtilmelidir: 'url' veya 'design_asset_id'"
+        )
+
+    if has_asset:
+        asset = await design_assets_service.get_owned_asset(session, organization_id, design_asset_id)
+        design_assets_service.ensure_asset_usable(asset)
+
+        analysis = PageAnalysis(
+            organization_id=organization_id,
+            requested_by_user_id=requested_by_user_id,
+            source_kind=PageAnalysisSourceKind.DESIGN_ASSET,
+            design_asset_id=asset.id,
+            url=None,
+            # DesignAsset kaynaginda yetki onayi kavrami gecerli degil (kullanici
+            # zaten kendi yukledigi kendi gorselini analiz ediyor) - `True` sabit.
+            authorization_confirmed=True,
+            status=PageAnalysisStatus.QUEUED,
+        )
+        session.add(analysis)
+        await session.flush()
+        return analysis
 
     if not authorization_confirmed:
         raise UnauthorizedPageAnalysisError("Bu URL'yi analiz etme yetkisini onaylamadan istek islenemez")
@@ -74,7 +141,9 @@ async def create_analysis(
     analysis = PageAnalysis(
         organization_id=organization_id,
         requested_by_user_id=requested_by_user_id,
+        source_kind=PageAnalysisSourceKind.URL,
         url=validated.url,
+        design_asset_id=None,
         authorization_confirmed=True,
         status=PageAnalysisStatus.QUEUED,
     )
@@ -152,10 +221,105 @@ async def _call_analyzer(client: httpx.AsyncClient, url: str) -> dict:
     return response.json()
 
 
+def _verify_design_asset_snapshot(image_bytes: bytes, content_type_mime: str) -> tuple[int, int]:
+    """Saklanan DesignAsset binary'sini YENIDEN, ortak `image_safety` hattindan
+    decode ederek dogrular: format/kare-sayisi/boyut/piksel + saklanan
+    `content_type` ile tutarlilik. Zaten upload sirasinda ayni hattan gecmis
+    olsa da, bu ikinci, bagimsiz bir kontroldur - analyzer'in metadata'sina
+    veya saklanan width/height kolonuna KOR guvenilmez."""
+
+    try:
+        image, decoded_content_type = image_safety.decode_and_validate_image(
+            image_bytes,
+            allowed_formats=_DESIGN_ASSET_ALLOWED_FORMATS,
+            max_dimension=settings.design_asset_max_dimension,
+            max_pixels=settings.design_asset_max_pixels,
+        )
+    except (InvalidImageError, ImageTooLargeError) as exc:
+        raise DesignAssetUnavailableError("Tasarim gorseli guvenlik dogrulamasindan gecemedi") from exc
+
+    with image:
+        width, height = image.size
+
+    if decoded_content_type != content_type_mime:
+        raise DesignAssetUnavailableError("Tasarim gorseli format tutarsizligi tespit edildi")
+
+    return width, height
+
+
+async def _process_design_asset_source(session: AsyncSession, analysis: PageAnalysis) -> None:
+    """DesignAsset kaynakli bir analiz isini isler: analyzer'a HICBIR ISTEK
+    YAPILMAZ, DOM alanlari uretilmez - guvenli dogrulama hattindan gecmis
+    binary, degismez bir snapshot olarak kopyalanir VE yerel/deterministik
+    OpenCV gorsel analizi (bkz. app.services.image_visual_analysis) ile
+    `features` doldurulur (CTA adaylari + sentetik dikkat tahmini,
+    `feature_source="visual_heuristic"`).
+
+    Create ile bu fonksiyonun calistigi an arasinda asset silinmis/expire
+    olmus olabilir; bu yuzden sahiplik + kullanilabilirlik burada BAGIMSIZ
+    olarak yeniden dogrulanir (create-time kontrolune guvenilmez). Herhangi
+    bir adim (asset dogrulama VEYA gorsel analiz) basarisiz olursa
+    `screenshot_data`/`features` veya kismi ikili veri ASLA yazilmaz - is
+    guvenli ve genel bir mesajla 'failed' olur, ic hata ayrintisi
+    API'ye/loglara sizmaz (yalnizca WARNING seviyeli log'da tutulur); bu
+    yolda analyzer HTTP servisi hicbir zaman cagrilmaz.
+    """
+
+    try:
+        asset = await design_assets_service.get_owned_asset(
+            session, analysis.organization_id, analysis.design_asset_id
+        )
+        design_assets_service.ensure_asset_usable(asset)
+        image_bytes = asset.image_data
+        content_type = asset.content_type
+        width, height = _verify_design_asset_snapshot(image_bytes, content_type.value)
+    except (DesignAssetNotFoundError, DesignAssetUnavailableError) as exc:
+        analysis.status = PageAnalysisStatus.FAILED
+        analysis.error = "Tasarim gorseli artik kullanilabilir durumda degil"
+        analysis.finished_at = _now()
+        await session.flush()
+        logger.warning("design_asset kaynakli analiz basarisiz (id=%s): %s", analysis.id, exc)
+        return
+
+    try:
+        features = image_visual_analysis.analyze_screenshot(image_bytes)
+    except image_visual_analysis.VisualAnalysisError as exc:
+        analysis.status = PageAnalysisStatus.FAILED
+        analysis.error = "Gorsel analiz basarisiz oldu"
+        analysis.finished_at = _now()
+        await session.flush()
+        logger.warning("design_asset kaynakli gorsel analiz basarisiz (id=%s): %s", analysis.id, exc)
+        return
+
+    analysis.screenshot_data = image_bytes
+    analysis.screenshot_expires_at = _now() + timedelta(
+        seconds=settings.page_analysis_screenshot_retention_seconds
+    )
+    analysis.screenshot_content_type = content_type.value
+    analysis.image_width = width
+    analysis.image_height = height
+    analysis.content_sha256 = hashlib.sha256(image_bytes).hexdigest()
+    analysis.snapshot_version = "design-asset-snapshot-1"
+    analysis.analyzer_version = None
+    analysis.source = "design_asset"
+    # DOM olmadigi icin element_boxes/layout_regions/contrast_candidates
+    # uretilmez (bunlar yalnizca gercek DOM/analyzer verisiyle doldurulur) -
+    # ama yerel OpenCV analizinden gelen visual_cta_candidates/synthetic_
+    # attention_estimate DOLU yazilir (feature_source="visual_heuristic").
+    analysis.features = features
+    analysis.status = PageAnalysisStatus.SUCCEEDED
+    analysis.finished_at = _now()
+    await session.flush()
+
+
 async def process_analysis(
     session: AsyncSession, analysis: PageAnalysis, *, client: httpx.AsyncClient | None = None
 ) -> None:
     """Tek bir 'running' analiz isini sonuna kadar isler (basarili/basarisiz)."""
+
+    if analysis.source_kind == PageAnalysisSourceKind.DESIGN_ASSET:
+        await _process_design_asset_source(session, analysis)
+        return
 
     owns_client = client is None
     if client is None:
@@ -175,10 +339,60 @@ async def process_analysis(
             await client.aclose()
 
     screenshot_b64 = snapshot["screenshot"]["base64_data"]
-    analysis.screenshot_data = base64.b64decode(screenshot_b64)
+    try:
+        screenshot_bytes = base64.b64decode(screenshot_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        analysis.status = PageAnalysisStatus.FAILED
+        analysis.error = _SCREENSHOT_VALIDATION_FAILED_MESSAGE
+        analysis.finished_at = _now()
+        await session.flush()
+        logger.warning("URL kaynakli analiz ekran goruntusu base64 cozumlemesi basarisiz (id=%s): %s", analysis.id, exc)
+        return
+
+    # Analyzer'in bildirdigi genislik/yukseklik/format TEK BASINA guvenilmez;
+    # saklanmadan ONCE GERCEKTEN decode edilerek dogrulanir (byte boyutu/format/
+    # kare-sayisi/boyut/piksel/decompression-bomb - bkz. app.services.image_safety,
+    # ayni DesignAsset yukleme hattiyla PAYLASILAN kod). Dogrulama basarisiz
+    # olursa is guvenli bicimde 'failed' olur - kismi/tutarsiz bir SUCCEEDED
+    # kaydi ASLA birakilmaz; ic hata ayrintisi yalnizca WARNING log'unda kalir.
+    if len(screenshot_bytes) > settings.page_analysis_screenshot_max_bytes:
+        analysis.status = PageAnalysisStatus.FAILED
+        analysis.error = _SCREENSHOT_VALIDATION_FAILED_MESSAGE
+        analysis.finished_at = _now()
+        await session.flush()
+        logger.warning(
+            "URL kaynakli analiz ekran goruntusu boyutu sinirin uzerinde (id=%s, bytes=%s)",
+            analysis.id,
+            len(screenshot_bytes),
+        )
+        return
+
+    try:
+        image, real_content_type = image_safety.decode_and_validate_image(
+            screenshot_bytes,
+            allowed_formats=_URL_SCREENSHOT_ALLOWED_FORMATS,
+            max_dimension=settings.page_analysis_screenshot_max_dimension,
+            max_pixels=settings.page_analysis_screenshot_max_pixels,
+        )
+    except (InvalidImageError, ImageTooLargeError) as exc:
+        analysis.status = PageAnalysisStatus.FAILED
+        analysis.error = _SCREENSHOT_VALIDATION_FAILED_MESSAGE
+        analysis.finished_at = _now()
+        await session.flush()
+        logger.warning("URL kaynakli analiz ekran goruntusu dogrulamasi basarisiz (id=%s): %s", analysis.id, exc)
+        return
+
+    with image:
+        real_width, real_height = image.size
+
+    analysis.screenshot_data = screenshot_bytes
     analysis.screenshot_expires_at = _now() + timedelta(
         seconds=settings.page_analysis_screenshot_retention_seconds
     )
+    analysis.screenshot_content_type = real_content_type
+    analysis.image_width = real_width
+    analysis.image_height = real_height
+    analysis.content_sha256 = hashlib.sha256(screenshot_bytes).hexdigest()
     analysis.snapshot_version = snapshot["snapshot_version"]
     analysis.analyzer_version = snapshot["analyzer_version"]
     analysis.source = snapshot["source"]
@@ -221,7 +435,18 @@ async def reap_stale_running(
 
 
 async def purge_expired_screenshots(session: AsyncSession) -> int:
-    """Saklama suresi dolmus ekran goruntusu verilerini siler; metadata satiri kalir."""
+    """Saklama suresi dolmus ekran goruntusu verilerini siler; metadata satiri kalir.
+
+    Paket 4 Final: kisa TTL'si dolmus olsa bile, bagli oldugu run'in
+    TAMAMLANMIS bir Report'u varsa purge ertelenir - bunun yerine, raporun
+    OLUSTURULMA zamanindan (Report.created_at) itibaren islenen, ayrica
+    belgelenmis ve SINIRLI (suresiz DEGIL) bir `report_linked_screenshot_
+    retention_seconds` penceresi uygulanir (bkz. app.config.settings) -
+    aksi halde tamamlanmis bir raporun gorsel katmani, rapora hicbir bagi
+    olmayan kisa-omurlu bir capture gibi sessizce kaybolurdu. Rapora/run'a
+    HIC baglanmamis capture'lar (veya raporu henuz olusturulmamis run'lar)
+    icin davranis DEGISMEZ - mevcut kisa TTL ile purge edilmeye devam eder.
+    """
 
     result = await session.execute(
         select(PageAnalysis).where(
@@ -230,7 +455,37 @@ async def purge_expired_screenshots(session: AsyncSession) -> int:
             PageAnalysis.screenshot_expires_at < _now(),
         )
     )
-    expired = list(result.scalars().all())
+    candidates = list(result.scalars().all())
+    if not candidates:
+        return 0
+
+    candidate_ids = [analysis.id for analysis in candidates]
+    linked_result = await session.execute(
+        select(SimulationRun.page_analysis_id, Report.created_at)
+        .join(Report, Report.simulation_run_id == SimulationRun.id)
+        .where(SimulationRun.page_analysis_id.in_(candidate_ids))
+    )
+    # Ayni PageAnalysis'e (teorik olarak) birden fazla Report baglanmis olsa
+    # bile, ongorulebilir/tutarli davranis icin EN ERKEN Report.created_at
+    # esas alinir (en uzun degil).
+    earliest_report_created_at: dict[uuid.UUID, datetime] = {}
+    for analysis_id, created_at in linked_result.all():
+        existing = earliest_report_created_at.get(analysis_id)
+        if existing is None or created_at < existing:
+            earliest_report_created_at[analysis_id] = created_at
+
+    now = _now()
+    expired: list[PageAnalysis] = []
+    for analysis in candidates:
+        report_created_at = earliest_report_created_at.get(analysis.id)
+        if report_created_at is not None:
+            report_retained_until = report_created_at + timedelta(
+                seconds=settings.report_linked_screenshot_retention_seconds
+            )
+            if report_retained_until > now:
+                continue
+        expired.append(analysis)
+
     for analysis in expired:
         analysis.screenshot_data = None
         analysis.screenshot_expires_at = None

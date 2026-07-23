@@ -65,6 +65,51 @@ class Settings(BaseSettings):
     page_analysis_max_attempts: int = 3
     page_analysis_stale_timeout_seconds: int = 120
     page_analysis_screenshot_retention_seconds: int = 24 * 60 * 60
+    # Paket 4 Final: tamamlanmis bir Rapor'a bagli PageAnalysis'in ekran
+    # goruntusu, baglanti olmayan kisa-omurlu capture'lardan (yukaridaki
+    # `page_analysis_screenshot_retention_seconds`) DAHA UZUN sureli
+    # saklanir - aksi halde kisa TTL, kullanicinin sonradan actigi bir
+    # raporun gorsel katmanini sessizce kaybettirirdi. SURESIZ DEGILDIR
+    # (bkz. app.services.page_analysis.purge_expired_screenshots) - sure,
+    # raporun OLUSTURULMA zamanindan (Report.created_at) itibaren islenir.
+    # Varsayilan (30 gun), bu paket kapsaminda yeni/ayri ve belgelenmis bir
+    # ayar olarak eklendi - onceden acikca tanimlanmis bir "rapor saklama
+    # suresi" bulunmadigi icin makul, sinirli bir varsayilan secildi.
+    report_linked_screenshot_retention_seconds: int = 30 * 24 * 60 * 60
+    # Analyzer'in urettigi ekran goruntusu TEK BASINA guvenilmez (bkz.
+    # app.services.page_analysis, app.services.image_safety) - saklanmadan
+    # once GERCEKTEN decode edilerek bu sinirlara karsi dogrulanir. Sabit
+    # Playwright viewport'lari (varsayilan 1366x900, en genis profil 1440x900 -
+    # bkz. analyzer/app/browser.py) bu degerlerin cok altinda kaldigi icin
+    # sinirlar bilinçli olarak `design_asset_max_*`'den daha dar tutulur.
+    page_analysis_screenshot_max_bytes: int = 10 * 1024 * 1024
+    page_analysis_screenshot_max_dimension: int = 4000
+    page_analysis_screenshot_max_pixels: int = 8_000_000
+
+    # --- Yuklenen tasarim ekran goruntuleri (bkz. app.services.design_assets) ---
+    # Yalnizca PNG/JPEG/WebP kabul edilir; boyut/cozunurlum sinirlari asagida.
+    # `page_analyses.screenshot_data` ile ayni TTL+purge desenini izler.
+    design_asset_retention_seconds: int = 24 * 60 * 60
+    # Yukleme (network istegi govdesi) siniri - `app.routers.design_assets`
+    # bu deger asilir asilmaz akisi (stream) durdurur, tum dosyayi belege
+    # onceden yuklemez.
+    design_asset_max_bytes: int = 10 * 1024 * 1024
+    # Yeniden encode edilmis (EXIF'i temizlenmis, saklanacak) ciktinin
+    # boyut siniri. YUKLEME sinirindan (`design_asset_max_bytes`) KASITLI
+    # OLARAK AYRI ve biraz daha genistir: PNG'ler orijinal sikistirma
+    # ayarlarini korumadan yeniden encode edildiginde kaynaktan buyuk
+    # cikabilir; bu ayri sinir olmasaydi meshru bir yukleme yalnizca
+    # yeniden-encode fazlaligi yuzunden reddedilebilirdi. Yine de saklanan
+    # veri sinirsiz buyuyemez.
+    design_asset_max_stored_bytes: int = 20 * 1024 * 1024
+    design_asset_max_dimension: int = 8000
+    # Genislik*yukseklik ust siniri - `design_asset_max_dimension`'dan
+    # BAGIMSIZ, ek bir savunma katmani (ör. cok uzun/ince gorsellerin
+    # tek eksende sinirin altinda kalip toplam piksel sayisinda asiri
+    # buyuk olmasini engeller). Pillow'un kendi `Image.MAX_IMAGE_PIXELS`
+    # decompression-bomb esigi bu ayardan BAGIMSIZ olarak korunur, devre
+    # disi birakilmaz (bkz. app.services.design_assets._decode_and_validate).
+    design_asset_max_pixels: int = 25_000_000
 
     # --- AI destekli açıklama katmanı (bkz. app.services.ai_explanation) ---
     # ONEMLI: gelistiricinin kendi Claude Pro/IDE aboneligi bir API anahtari
@@ -79,6 +124,29 @@ class Settings(BaseSettings):
     ai_request_timeout_seconds: int = 20
     ai_max_retries: int = 1
     ai_max_output_tokens: int = 800
+
+    # --- AI ile gorsel (tasarim varyanti) uretimi (bkz. app.services.design_generation) ---
+    # ONEMLI: yukaridaki `ai_*` metin/aciklama saglayicisindan TAMAMEN AYRI bir
+    # yapilandirmadir - bir metin saglayicisinin gorsel uretebilecegi
+    # VARSAYILMAZ. Varsayilan "none" saglayicisi HICBIR gorsel uretmez (metin
+    # aciklamasinin aksine, "guvenli/deterministik bir sahte gorsel" diye bir
+    # sey yoktur); AI ile tasarim varyanti secenegi frontend'de yalnizca
+    # "remote" aktif VE gercek bir uc nokta ayarlanmissa gorunur/kullanilabilir
+    # olur (bkz. GET /api/design-generations/availability). Gelistiricinin
+    # kendi Claude Pro/IDE aboneligi bu API anahtari icin de GECERLI DEGILDIR.
+    image_generation_provider: Literal["none", "remote"] = "none"
+    image_generation_endpoint: str | None = None
+    image_generation_api_key: str | None = None
+    image_generation_model_name: str = "unspecified"
+    image_generation_request_timeout_seconds: int = 60
+    image_generation_max_retries: int = 1
+    image_generation_max_prompt_length: int = 1000
+    # `app.services.page_analysis` ile ayni "running'de takili kalma" kurtarma
+    # deseni (bkz. app.services.design_generation.reap_stale_running); gorsel
+    # uretimi bir sayfa analizinden cok daha uzun surebilecegi icin zaman
+    # asimi payi kasitli olarak daha genis tutulur.
+    design_generation_stale_timeout_seconds: int = 180
+    design_generation_max_attempts: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env",

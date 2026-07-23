@@ -15,6 +15,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.billing import Entitlement, EntitlementStatus
@@ -31,7 +32,19 @@ DEFAULT_RESERVATION_TTL_SECONDS = 3600
 async def get_or_create_entitlement(
     session: AsyncSession, organization_id: uuid.UUID, feature_key: str
 ) -> Entitlement:
-    """Verilen ucretsiz hakki dondurur; yoksa `available`/quantity=1 olarak olusturur."""
+    """Verilen ucretsiz hakki dondurur; yoksa `available`/quantity=1 olarak olusturur.
+
+    `with_for_update()`, satir ZATEN varsa gelecekteki es zamanli okumalari
+    serilestirir - ama satir HENUZ yoksa kilitlenecek bir satir olmadigi icin
+    hicbir koruma saglamaz (TOCTOU): iki es zamanli istek ikisi de `None`
+    gorup ikisi de INSERT denerse, ikincisi `uq_entitlements_org_feature`
+    benzersizlik kisitini ihlal eder. Bu, gercek bir production hatasi
+    olarak gozlemlenmistir (bkz. app.services.settings
+    .get_or_create_organization_settings docstring'i - ayni desen, launch
+    akisinin (`app.services.test_wizard.launch_draft` ->
+    `reserve_entitlement`) TAM ICINDE): bu yuzden INSERT bir SAVEPOINT
+    icinde denenir, cakisma olursa yalnizca SAVEPOINT geri alinir ve satir
+    guvenle yeniden okunur - cagirana hicbir zaman 500 olarak sizmaz."""
 
     result = await session.execute(
         select(Entitlement)
@@ -42,14 +55,25 @@ async def get_or_create_entitlement(
     if entitlement is not None:
         return entitlement
 
-    entitlement = Entitlement(
-        organization_id=organization_id,
-        feature_key=feature_key,
-        quantity=1,
-        status=EntitlementStatus.AVAILABLE,
-    )
-    session.add(entitlement)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            entitlement = Entitlement(
+                organization_id=organization_id,
+                feature_key=feature_key,
+                quantity=1,
+                status=EntitlementStatus.AVAILABLE,
+            )
+            session.add(entitlement)
+            await session.flush()
+    except IntegrityError:
+        result = await session.execute(
+            select(Entitlement)
+            .where(Entitlement.organization_id == organization_id, Entitlement.feature_key == feature_key)
+            .with_for_update()
+        )
+        entitlement = result.scalar_one_or_none()
+        if entitlement is None:
+            raise
     return entitlement
 
 

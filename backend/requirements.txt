@@ -12,6 +12,16 @@ argon2-cffi==23.1.0
 pyjwt==2.10.1
 # analyzer servisini cagirmak icin (bkz. app.services.page_analysis)
 httpx==0.28.1
+# yuklenen tasarim ekran goruntulerini decode/dogrula/EXIF-temizle/yeniden-encode
+# etmek icin (bkz. app.services.design_assets)
+Pillow==11.1.0
+# FastAPI'nin multipart/form-data (dosya yukleme) istekerini ayristirmasi icin
+python-multipart==0.0.20
+# DesignAsset ekran goruntuleri icin yerel/deterministik gorsel analiz (CTA
+# adaylari, sentetik dikkat tahmini) - bkz. app.services.image_visual_analysis.
+# Harici vision API cagrisi yapilmaz, gorseller ucuncu taraflara gonderilmez.
+numpy==2.1.3
+opencv-python-headless==4.10.0.84
 
 # --- test ---
 pytest==8.3.4

@@ -23,20 +23,56 @@ yerini **almaz**.
 
 ## Girdi kaynagi: `page_feature_snapshot`
 
-Bu asamada gercek bir sayfa hicbir zaman ziyaret edilmez (Playwright yok).
-Bunun yerine `app.engine.fixtures.get_page_feature_snapshot(url, role)`,
-verilen `url` + `role` (`existing`/`new`/`primary`) ciftinden **sha256
-tabanli, deterministik** bir sentetik sayfa ozellik kumesi turetir:
-gezinme derinligi (`nav_depth`), birincil CTA sayisi, form alani sayisi,
-kelime sayisi, ortalama cumle uzunlugu, baslik sayisi, kontrast oranlari ve
-mobil uyum. Ayni `(url, role)` her zaman ayni ozellik kumesini uretir.
+**Legacy/eski run'lar (`SimulationRun.page_analysis_id IS NULL`)**: gercek
+bir sayfa hicbir zaman ziyaret edilmez (Playwright yok).
+`app.engine.fixtures.get_page_feature_snapshot(url, role)`, verilen `url` +
+`role` (`existing`/`new`/`primary`) ciftinden **sha256 tabanli,
+deterministik** bir sentetik sayfa ozellik kumesi turetir: gezinme derinligi
+(`nav_depth`), birincil CTA sayisi, form alani sayisi, kelime sayisi,
+ortalama cumle uzunlugu, baslik sayisi, kontrast oranlari ve mobil uyum.
+Ayni `(url, role)` her zaman ayni ozellik kumesini uretir. Bu, **gercek
+sayfa analizinin yerini tutmaz**; yalnizca motorun sabit semali, surumlu
+(`PAGE_FEATURE_SNAPSHOT_VERSION`) bir girdiye ihtiyaci oldugu icin
+kullanilan bir yer tutucudur.
 
-Bu, **gercek sayfa analizinin yerini tutmaz**; yalnizca motorun sabit
-semali, surumlu (`PAGE_FEATURE_SNAPSHOT_VERSION`) bir girdiye ihtiyaci
-oldugu icin kullanilan bir yer tutucudur. Gercek bir Playwright tabanli
-cikarim hattina gecildiginde bu fonksiyonun ic uygulamasi degisecek, ancak
-sema (alan adlari/turleri) ve surum alani ayni kalacak sekilde
-tasarlanmistir.
+**Paket 4B itibarıyla, yeni URL launch'ları** artık bu yer tutucuyu
+kullanmaz: `app.services.page_analysis_adapter.adapt_page_analysis`, gercek
+(Playwright tabanli `analyzer`) `PageAnalysis.features` verisinden
+(`element_boxes`, `layout_regions`, `text_stats`, `contrast_candidates`)
+AYNI sema/tip (`PageFeatureSnapshot`) ile bir girdi turetir - `input_hash`
+artik `sha256(url)` degil, `PageAnalysis.content_sha256` (gercek ekran
+goruntusu icerik hash'i) olur; `fixture_version` `dom-adapter-1:...` ile
+baslar (legacy `page-feature-snapshot-2026.1`'den ayristirilir). `nav_depth`
+(tek sayfalik bir snapshot cok adimli navigasyon derinligini olcemez -> **0**,
+Paket 4C duzeltmesi: bu deger `rules_config`'in kendi dokumante ettigi
+"nav_depth=0 varsayimi" ile hizalanir ve asagidaki formullere SIFIR katki
+saglar - eskiden yanlislikla `1` idi, yani olculmemis oldugu halde bir
+miktar ceza uyguluyordu) ve `mobile_friendly` (bu analyzer yolu
+responsive/mobil viewport testi yapmaz -> `True`, sabit; bu deger de
+formule sifir katki saglar) alanlari bilinen, belgelenmis notr
+varsayimlardir - `DomAdaptedInput.provenance.unmeasured_fields` acikca
+`{"nav_depth": "assumed", "mobile_friendly": "assumed"}` olarak isaretler,
+kullaniciya olculmus veri gibi gosterilmez. Digerleri (primary_cta_count,
+form_field_count, above_fold_cta, page_word_count, avg_sentence_word_count,
+heading_count, min/avg_contrast_ratio) dogrudan gercek DOM olcumlerinden
+gelir. `SimulationRun.result.feature_source` (`"dom"`|`"fixture"`) hangi
+yolun kullanildigini acikca saklar (bkz. `docs/security.md` "Prompt 7
+motoruyla iliski (Paket 4B)").
+
+**CTA kanit terminolojisi (Paket 4C duzeltmesi)**: `cta_evidence`
+icindeki DOM-dogrulanmis (`element_boxes` icinde gercek `role in
+{button, link}` kaniti tasiyan) kutular artik `"classification":
+"dom_interactive_candidate"` olarak siniflandirilir (eskiden yanlislikla
+`"confirmed_cta"` deniyordu - her etkilesimli DOM ogesi mutlaka bir
+pazarlama CTA'si degildir). `layout_regions.birincil_cta`'dan turetilen
+heuristik aday (`"cta_candidate"`, DOM rol/tag kaniti YOK) degismeden
+kalir. Ekran goruntusu (DesignAsset) tabanli analizde piksel/kontur
+sezgisinden turetilen adaylar ise ayri bir sinif olan `visual_cta_candidate`
+ile isaretlenir (bkz. asagida "Ekran goruntusu gorsel analizi"); bu ucu
+ASLA birbirinin yerine kullanilmaz. Kullanicinin secip onayladigi/cizdigi
+kesin CTA `user_confirmed_cta` olarak, yalnizca sihirbaz taslak
+payload'inda (`current_cta_annotation`/`new_cta_annotation`) tutulur - bkz.
+`app.services.test_wizard`.
 
 Persona ornegi (`input_snapshot.persona_sample`, varsa) `app.services.
 personas.sample_cohorts` tarafindan uretilen deterministik cohort/segment
@@ -214,6 +250,68 @@ basarisiz olursa (`ModuleInputError`/`ModuleProcessingError`) TUM run
 consume/release mekanizmasiyla - bkz. yukarida "Rezervasyon entegrasyonu")
 serbest birakilir; boylece kismi/yarim bir modul sonucu asla "succeeded"
 olarak Chip tuketmez. Kullanici mevcut `retry` uc noktasiyla yeniden dener.
+
+## Ekran goruntusu (DesignAsset) yerel gorsel analizi (Paket 4C+4D)
+
+**Bu, yukaridaki `synthetic_attention_estimate` MODULUYLE KARISTIRILMAMALIDIR**
+- o modul, simulasyon motorunun sentetik sayfa fixture'indan 5 sabit bolge
+icin bir agirlik dagilimi hesaplar; burada anlatilan ise TAMAMEN ayri bir
+boru hatti: bir DesignAsset ekran goruntusunun GERCEK pikselerinden
+deterministik olarak turetilen, sihirbazin CTA secim ekranini besleyen bir
+`PageAnalysis.features` uretimidir. Ikisi asla ayni veri/sonuc degildir ve
+birbirinin yerine sunulmaz.
+
+Bir DesignAsset kaynakli `PageAnalysis` isi (`source_kind=design_asset`)
+worker tarafindan islenirken, `app.services.page_analysis.
+_process_design_asset_source` guvenli snapshot kopyalandiktan SONRA
+`app.services.image_visual_analysis.analyze_screenshot(image_bytes)`'i
+cagirir - bu tamamen yerel/deterministik bir OpenCV (`opencv-python-headless`)
++ numpy islemidir, hicbir harici vision API'sine cagri yapilmaz, gorsel
+hicbir zaman ucuncu bir tarafa gonderilmez (bkz. docs/security.md). Analyzer
+HTTP servisi bu yolda HICBIR ZAMAN cagrilmaz - URL kaynakli `PageAnalysis`
+akisindan tamamen bagimsizdir.
+
+Algoritma (surum `visual-analysis-1`, tumu deterministik, ML modeli yok):
+- Calisma cozunurlugu `MAX_WORKING_DIMENSION` (1600px) ile aspect-ratio
+  korunarak sinirlanir (CPU/bellek korumasi); tum sonuc kutulari orijinal
+  gorsele gore 0-1 normalize edilir.
+- **`visual_cta_candidates`**: gri ton + Canny kenar tespiti + kontur
+  analizinden, buton-benzeri boyut/en-boy oraninda adaylar cikarilir. Her
+  adayin `heuristic_score`'u (boyut + konum + yerel kontrast bilesenlerinin
+  agirlikli toplami) **GERCEK bir tiklama olasiligi veya istatistiksel guven
+  degildir - yalnizca aday SIRALAMA skorudur**. Hic aday bulunamamasi
+  gecerli bir sonuctur; sahte aday asla uretilmez. OCR yapilmadigi icin
+  metin/CTA etiketi uydurulmaz - arayuzde tarafsiz "CTA adayı N" adlandirmasi
+  kullanilir.
+- **`synthetic_attention_estimate`**: luminance/kontrast + kenar yogunlugu +
+  boyut/konum sezgilerinden izgara tabanli (8x6 hucre), normalize edilmis bir
+  tahmin. Kullanilacak ifadeler: "Sentetik dikkat tahmini", "Tahmini gorsel
+  belirginlik". Kullanilmayacak ifadeler: "Kullanicilarin baktigi yer", "En
+  cok tiklanan alan", "Gercek goz takibi", "Gercek kullanici davranisi" -
+  zorunlu `disclaimer` alani bunu her zaman acikca belirtir.
+- **`regional_visual_contrast_estimate`**: her adayin ic bolgesi ile cevresi
+  arasindaki WCAG bagil luminance formuluyle (analyzer/app/browser.py::
+  relativeLuminance/contrastRatio ile BIREBIR AYNI sabitler - 0.2126/0.7152/
+  0.0722, gamma 2.4) hesaplanan bir kontrast tahminidir. Foreground/
+  background kesin ayristirilamadigi icin **"WCAG gecti/kaldi" iddiasi
+  ASLA kullanilmaz** - yalnizca bir tahmin olarak sunulur (ayri alan:
+  `measured_dom_contrast`, yalnizca gercek DOM analizinde/URL kaynaginda
+  var olur).
+
+Guvenlik/kaynak sinirlari: bu fonksiyon yalnizca `app.services.image_safety`
+ile ONCEDEN decode/format/boyut/piksel dogrulamasindan gecmis bytes uzerinde
+calisir; NaN/Infinity degerler reddedilir, gecici dosya kullanilmaz (bellek
+ici `cv2.imdecode`), binary/piksel verisi hicbir yerde loglanmaz. OpenCV
+hata verirse (`VisualAnalysisError`) is guvenli bicimde `FAILED` olur -
+`features` hicbir zaman kismi yazilmaz (ya tam dolu ya `None`+`FAILED`).
+
+Kullanicinin bir adayi onaylamasi veya kendi kutusunu cizmesi
+(`user_confirmed_cta`) `TestWizardDraft.payload`'daki
+`current_cta_annotation`/`new_cta_annotation` alanlarinda, draft+taraf
+(current/new) bagliminda saklanir - bkz. `app.services.test_wizard.
+resolve_cta_annotation_patch`/`invalidate_stale_cta_annotations`. Bu tamamen
+yeni bir tablo/migration GEREKTIRMEZ; annotation, DesignAsset'in global bir
+ozelligi degildir (ayni asset farkli taslaklarda/taraflarda kullanilabilir).
 
 ## Kalibrasyon plani (gelecek)
 
