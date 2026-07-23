@@ -54,4 +54,55 @@ describe("Sidebar", () => {
       "/tests/new",
     );
   });
+
+  it("'Yeni Test' sade bir baglanti olarak tekrarlanmaz, yalnizca CTA'da bulunur", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Sidebar isOpen={false} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getAllByRole("link", { name: /Yeni Test/ })).toHaveLength(1);
+  });
+
+  it("ana islemler dogru sirada listelenir ve Cip Cuzdani'na yonlendirir", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Sidebar isOpen={false} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+
+    const primaryLabels = ["Genel Bakış", "Projeler", "Simülasyonlar", "Raporlar", "Çip Cüzdanı"];
+    for (const label of primaryLabels) {
+      expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("link", { name: "Çip Cüzdanı" })).toHaveAttribute(
+      "href",
+      "/kullanim-ve-chip",
+    );
+    expect(screen.queryByRole("link", { name: "Kullanım ve Chip" })).not.toBeInTheDocument();
+  });
+
+  it("Personalar ve Analiz Modulleri 'Araçlar' grubunda yer alir", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Sidebar isOpen={false} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+
+    const toolsGroup = screen.getByRole("list", { name: "Araçlar" });
+    expect(toolsGroup).toContainElement(screen.getByRole("link", { name: "Personalar" }));
+    expect(toolsGroup).toContainElement(screen.getByRole("link", { name: "Analiz Modülleri" }));
+  });
+
+  it("Ayarlar ve Yardım menu altinda bulunur", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Sidebar isOpen={false} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "Ayarlar" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Yardım" })).toBeInTheDocument();
+  });
 });

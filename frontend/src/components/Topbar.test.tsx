@@ -58,7 +58,7 @@ describe("Topbar", () => {
     await waitFor(() => expect(screen.getByText("250 Chip")).toBeInTheDocument());
   });
 
-  it("arama alani sahte sonuc uretmez; sonraki asama bilgisini gosterir", async () => {
+  it("henuz calismayan arama alani ve bildirim dugmesi gosterilmez", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation((url: string) => {
@@ -77,34 +77,10 @@ describe("Topbar", () => {
 
     renderTopbar();
 
+    expect(screen.queryByPlaceholderText("Proje veya test ara…")).not.toBeInTheDocument();
     expect(
-      screen.getByText("Proje ve test araması sonraki aşamada etkinleştirilecek."),
-    ).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Proje veya test ara…")).toBeInTheDocument();
-  });
-
-  it("bildirim simgesi sahte bir sayi gostermez", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation((url: string) => {
-        if (url.endsWith("/api/auth/me")) return jsonResponse(200, sessionResponse);
-        if (url.includes("/api/billing/usage-summary")) {
-          return jsonResponse(200, {
-            organization_id: "org",
-            chip_balance: 0,
-            entitlements: [],
-            pricing_version: "2026.1",
-          });
-        }
-        throw new Error(`Beklenmeyen istek: ${url}`);
-      }),
-    );
-
-    renderTopbar();
-
-    const bellButton = screen.getByRole("button", { name: "Bildirimler (yakında)" });
-    expect(bellButton).toBeDisabled();
-    expect(bellButton.textContent).toMatch(/^\s*$/);
+      screen.queryByRole("button", { name: "Bildirimler (yakında)" }),
+    ).not.toBeInTheDocument();
   });
 
   it("kullanici menusu ve cikis islemi calisir", async () => {

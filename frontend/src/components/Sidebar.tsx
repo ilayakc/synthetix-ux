@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { type ComponentType, useEffect, useRef } from "react";
 import { Link, NavLink } from "react-router-dom";
 import {
   ActivityIcon,
@@ -13,18 +13,59 @@ import {
   UsersIcon,
 } from "./icons";
 
-const NAV_ITEMS = [
+interface NavItem {
+  to: string;
+  label: string;
+  end?: boolean;
+  icon: ComponentType<{ className?: string }>;
+}
+
+// Ana islemler: kullanicinin en sik basvurdugu bes akis. "Yeni Test" burada
+// sade bir baglanti olarak tekrarlanmaz; onun yerine altta tek, belirgin bir
+// CTA olarak sunulur (bkz. `sidebar__cta`).
+const PRIMARY_NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Genel Bakış", end: true, icon: HomeIcon },
   { to: "/projeler", label: "Projeler", icon: FolderIcon },
-  { to: "/tests/new", label: "Yeni Test", icon: PlusIcon },
-  { to: "/personalar", label: "Personalar", icon: UsersIcon },
-  { to: "/analiz-modulleri", label: "Analiz Modülleri", icon: LayersIcon },
   { to: "/simulasyonlar", label: "Simülasyonlar", icon: ActivityIcon },
   { to: "/raporlar", label: "Raporlar", icon: FileTextIcon },
-  { to: "/kullanim-ve-chip", label: "Kullanım ve Chip", icon: ChipCoinIcon },
+  { to: "/kullanim-ve-chip", label: "Çip Cüzdanı", icon: ChipCoinIcon },
+];
+
+const TOOLS_NAV_ITEMS: NavItem[] = [
+  { to: "/personalar", label: "Personalar", icon: UsersIcon },
+  { to: "/analiz-modulleri", label: "Analiz Modülleri", icon: LayersIcon },
+];
+
+const FOOTER_NAV_ITEMS: NavItem[] = [
   { to: "/ayarlar", label: "Ayarlar", icon: GearIcon },
   { to: "/yardim", label: "Yardım", icon: HelpCircleIcon },
 ];
+
+function NavList({
+  items,
+  onNavigate,
+  labelledBy,
+}: {
+  items: NavItem[];
+  onNavigate: () => void;
+  labelledBy?: string;
+}) {
+  return (
+    <ul aria-labelledby={labelledBy}>
+      {items.map((item) => {
+        const Icon = item.icon;
+        return (
+          <li key={item.to}>
+            <NavLink to={item.to} end={item.end} onClick={onNavigate}>
+              <Icon />
+              <span>{item.label}</span>
+            </NavLink>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 interface SidebarProps {
   isOpen: boolean;
@@ -84,19 +125,18 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       </div>
 
       <nav className="sidebar__nav">
-        <ul>
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            return (
-              <li key={item.to}>
-                <NavLink to={item.to} end={item.end} onClick={onClose}>
-                  <Icon />
-                  <span>{item.label}</span>
-                </NavLink>
-              </li>
-            );
-          })}
-        </ul>
+        <NavList items={PRIMARY_NAV_ITEMS} onNavigate={onClose} />
+
+        <div className="sidebar__nav-group">
+          <p className="sidebar__nav-label" id="sidebar-tools-label">
+            Araçlar
+          </p>
+          <NavList items={TOOLS_NAV_ITEMS} onNavigate={onClose} labelledBy="sidebar-tools-label" />
+        </div>
+
+        <div className="sidebar__nav-group sidebar__nav-group--footer">
+          <NavList items={FOOTER_NAV_ITEMS} onNavigate={onClose} />
+        </div>
       </nav>
 
       <div className="sidebar__footer">

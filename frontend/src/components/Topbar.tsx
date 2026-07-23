@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getUsageSummary } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { BellIcon, ChipCoinIcon, CloseIcon, MenuIcon, SearchIcon } from "./icons";
+import { ChipCoinIcon, CloseIcon, MenuIcon } from "./icons";
 
 interface TopbarProps {
   isMenuOpen: boolean;
@@ -51,39 +51,13 @@ export default function Topbar({ isMenuOpen, onToggleMenu }: TopbarProps) {
 
       <span className="topbar__brand">Synthetix UX</span>
 
-      <div className="topbar__search">
-        <SearchIcon className="topbar__search-icon" />
-        <label htmlFor="topbar-search" className="visually-hidden">
-          Proje veya test ara
-        </label>
-        <input
-          id="topbar-search"
-          type="search"
-          className="topbar__search-input"
-          placeholder="Proje veya test ara…"
-          aria-describedby="topbar-search-hint"
-        />
-        <span id="topbar-search-hint" className="topbar__search-hint" role="status">
-          Proje ve test araması sonraki aşamada etkinleştirilecek.
-        </span>
-      </div>
-
       <div className="topbar__actions">
         {chipBalance !== null && (
-          <Link to="/kullanim-ve-chip" className="topbar__chip-pill" title="Chip bakiyeniz">
+          <Link to="/kullanim-ve-chip" className="topbar__chip-pill" title="Çip Cüzdanı bakiyeniz">
             <ChipCoinIcon />
             <span>{chipBalance} Chip</span>
           </Link>
         )}
-
-        <button
-          type="button"
-          className="topbar__icon-button"
-          aria-label="Bildirimler (yakında)"
-          disabled
-        >
-          <BellIcon />
-        </button>
 
         {session && (
           <div className="topbar__account">
