@@ -4,6 +4,7 @@ from arq import cron
 from arq.connections import RedisSettings
 
 from app.config import settings
+from app.config_security import validate_production_secrets
 from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import page_analysis as page_analysis_service
@@ -73,6 +74,9 @@ async def purge_expired_design_generations(ctx: dict) -> None:
 
 
 async def on_startup(ctx: dict) -> None:
+    # Fail-closed: backend ile ayni dogrulama (bkz. app.config_security) -
+    # production'da eksik/zayif/placeholder secret'la worker gorev almaya baslamaz.
+    validate_production_secrets()
     logger.info("worker basladi (redis_url=%s)", settings.redis_url)
 
 

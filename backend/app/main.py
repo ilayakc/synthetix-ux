@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.config_security import validate_production_secrets
 from app.db import engine, get_session
 from app.redis_client import check_redis_connection
 from app.routers.ai_explanations import router as ai_explanations_router
@@ -27,6 +28,9 @@ from app.routers.test_wizard import router as test_wizard_router
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Fail-closed: production'da eksik/zayif/placeholder secret'lar servis
+    # vermeye baslamadan once tespit edilir (bkz. app.config_security).
+    validate_production_secrets()
     yield
     # Havuzlanmis DB baglantilarini kapanista birak (bkz. asagidaki not).
     #
