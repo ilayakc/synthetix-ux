@@ -11,6 +11,12 @@ interface ModuleCatalogCardWizardProps {
   onToggle: (key: string) => void;
   onUseInTest?: undefined;
   queued?: undefined;
+  /** Modul, taslagin GUNCEL tasarim kaynagi turleriyle (bkz.
+   * moduleCompatibility.ts) uyumsuz oldugu icin secilemez. */
+  disabled?: boolean;
+  /** `disabled` true iken gosterilen, erisilebilir (screen-reader'in da
+   * okuyabilecegi) kisa aciklama. */
+  disabledReason?: string;
 }
 
 interface ModuleCatalogCardCatalogProps {
@@ -61,14 +67,27 @@ export default function ModuleCatalogCard(props: ModuleCatalogCardProps) {
   const { module } = props;
 
   if (props.onToggle) {
-    const { selected, onToggle } = props;
+    const { selected, onToggle, disabled, disabledReason } = props;
     return (
-      <label className={`module-card${selected ? " module-card--selected" : ""}`}>
+      <label
+        className={`module-card${selected ? " module-card--selected" : ""}${disabled ? " module-card--disabled" : ""}`}
+        aria-disabled={disabled || undefined}
+      >
         <div className="module-card__header">
-          <input type="checkbox" checked={selected} onChange={() => onToggle(module.key)} />
+          <input
+            type="checkbox"
+            checked={selected}
+            disabled={disabled}
+            onChange={() => onToggle(module.key)}
+          />
           <h3>{module.name}</h3>
         </div>
         <ModuleCatalogCardBody module={module} />
+        {disabled && disabledReason && (
+          <p className="wizard-field-hint" role="status">
+            {disabledReason}
+          </p>
+        )}
       </label>
     );
   }

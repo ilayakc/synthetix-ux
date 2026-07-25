@@ -246,6 +246,8 @@ export function listTopUpRequests(): Promise<TopUpRequestResponse[]> {
 
 export type ModuleMeasurementType = "technical_measurement" | "synthetic_estimate";
 
+export type ModuleSourceType = "url" | "screenshot" | "ai_generated";
+
 export interface AnalysisModuleDefinition {
   key: string;
   name: string;
@@ -256,6 +258,7 @@ export interface AnalysisModuleDefinition {
   free_entitlement_feature_key: string | null;
   estimated_duration_minutes: number;
   selectable_in_wizard: boolean;
+  supported_source_types: ModuleSourceType[];
 }
 
 export interface AnalysisModuleCatalogResponse {
@@ -706,6 +709,8 @@ export interface SimulationRunResponse {
   fixture_version: string | null;
   error: string | null;
   result: SimulationResult | null;
+  retryable: boolean;
+  failure_code: string | null;
   not_real_user_data_label: string;
   methodology_reference: string;
   attempt_count: number;

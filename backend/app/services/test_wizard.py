@@ -435,6 +435,52 @@ def effective_new_source_type(payload: dict) -> str:
     return payload.get("new_source_type") or SOURCE_TYPE_URL
 
 
+NETWORK_DEVICE_TEST_SOURCE_REJECTION_MESSAGE = (
+    "Ağ ve cihaz testi yalnızca tüm tasarım kaynakları canlı URL olduğunda kullanılabilir. "
+    "Ekran görüntüsü kullanıyorsanız bu modülü kaldırın."
+)
+
+
+def validate_module_source_compatibility(payload: dict) -> None:
+    """Secili gelismis modullerin (bkz. `payload["modules"]`), taslagin (tum
+    varyantlarindaki) etkin tasarim kaynagi turleriyle (url/screenshot/
+    ai_generated) uyumlu oldugunu dogrular - tek gercek kaynak olan modul
+    katalogu capability alanina (`AnalysisModuleDefinition.
+    supported_source_types`, bkz. app.services.module_catalog) dayanir.
+
+    `launch_draft` bu fonksiyonu, HICBIR side effect (TestDefinition/
+    SimulationRun/PageAnalysis/Chip/entitlement rezervasyonu) uretilmeden
+    ONCE cagirir - bkz. `launch_draft` docstring'i. A/B karsilastirmasinda
+    HER IKI taraf (current/new) da ayri ayri kontrol edilir: taraflardan
+    biri bile modulun desteklemedigi bir kaynak turundeyse tum launch
+    reddedilir (ornegin `network_device_test` + A/B URL/screenshot ->
+    reddedilir, cunku screenshot tarafinda gercek bir ag/yukleme olcumu
+    YAPILAMAZ).
+    """
+
+    modules: list[str] = payload.get("modules") or []
+    if not modules:
+        return
+
+    source_types = [effective_source_type(payload)]
+    if payload.get("test_type") == AB_COMPARISON:
+        source_types.append(effective_new_source_type(payload))
+
+    for module_key in modules:
+        try:
+            module = module_catalog.get_module_definition(module_key)
+        except ValueError:
+            # Bilinmeyen modul anahtari zaten `validate_patch_fields` tarafindan
+            # reddedilir; burada savunma amacli sessizce atlanir.
+            continue
+        if any(source_type not in module.supported_source_types for source_type in source_types):
+            if module_key == "network_device_test":
+                raise DraftValidationError(NETWORK_DEVICE_TEST_SOURCE_REJECTION_MESSAGE)
+            raise DraftValidationError(
+                f"'{module.name}' modulu, secili tasarim kaynagi turuyle uyumlu degil."
+            )
+
+
 def validate_source_type_for_test_type(payload: dict) -> None:
     """Taslagin (birlestirilmis/merged) tam gorunumune gore kaynak turu <-> test
     turu uyumunu dogrular; format disi (cross-field) bir kural oldugu icin
@@ -813,6 +859,14 @@ async def launch_draft(
             f"Sihirbaz tamamlanmadan baslatilamaz, eksik/gecersiz alan(lar): {', '.join(missing)}"
         )
 
+    # Kaynak-modul uyumluluk dogrulamasi (ör. `network_device_test` +
+    # screenshot/AI kaynagi) HER SEYDEN ONCE, hicbir side effect
+    # uretilmeden yapilir - bkz. `validate_module_source_compatibility`
+    # docstring'i. Worker'daki (`app.services.simulation_worker.
+    # _process_selected_modules`) ayni kontrol savunma amacli olarak
+    # KALIR (eski/bozuk/manuel olusturulmus kayitlar icin).
+    validate_module_source_compatibility(draft.payload)
+
     # Paket 4 Final: her tarafin kaynagi (URL/screenshot/AI) launch aninda
     # BAGIMSIZ olarak yeniden dogrulanir - gecersiz bir taraf (silinmis/
     # expired/cross-tenant asset, kabul edilmemis AI isi) BU NOKTADAN SONRAKI
@@ -1021,6 +1075,7 @@ __all__ = [
     "STALE_CTA_ANNOTATION_CLEARED_CODE",
     "MAX_PERSONA_COUNT",
     "MIN_PERSONA_COUNT",
+    "NETWORK_DEVICE_TEST_SOURCE_REJECTION_MESSAGE",
     "NEW_SOURCE_TYPES",
     "PATCHABLE_FIELDS",
     "QUOTE_TEST_TYPE_BY_WIZARD_TYPE",
@@ -1045,6 +1100,7 @@ __all__ = [
     "resolve_cta_annotation_patch",
     "revalidate_cta_annotation",
     "validate_ai_generation_ownership",
+    "validate_module_source_compatibility",
     "validate_patch_fields",
     "validate_screenshot_asset_ownership",
     "validate_source_type_for_test_type",

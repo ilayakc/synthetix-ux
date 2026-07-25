@@ -257,6 +257,41 @@ async def test_retry_after_module_failure_does_not_double_charge(
 
 
 @pytest.mark.security
+async def test_worker_defense_still_fails_run_when_network_device_test_url_missing(
+    session: AsyncSession, organization: Organization
+):
+    """Launch-oncesi kaynak-modul dogrulamasi (bkz. app.services.test_wizard.
+    validate_module_source_compatibility) ana koruma olsa da, worker'daki bu
+    kontrol savunma amacli olarak KALIR - eski/bozuk/manuel olusturulmus bir
+    kayit (ör. bu testteki gibi dogrudan DB'ye yazilmis, `url` alani eksik bir
+    run) yine de guvenli sekilde FAILED olarak sonuclanmali ve rezervasyon
+    haksiz tuketilmeden serbest birakilmalidir."""
+
+    await chip_ledger.credit(session, organization.id, 200, "test credit")
+    launch_run_id = uuid.uuid4()
+    reservation = await chip_ledger.reserve_chips(
+        session, organization.id, 40, "test reserve", run_id=launch_run_id
+    )
+
+    run = await _make_queued_run(
+        session,
+        organization,
+        modules=["network_device_test"],
+        launch_run_id=launch_run_id,
+        chip_reservation_id=reservation.id,
+    )
+    run.input_snapshot = {**run.input_snapshot, "url": None}
+    run.status = SimulationStatus.RUNNING
+
+    await simulation_worker.process_run(session, run)
+
+    assert run.status == SimulationStatus.FAILED
+    assert run.error is not None
+    assert "gereklidir" in run.error
+    assert await chip_ledger.get_chip_balance(session, organization.id) == 200
+
+
+@pytest.mark.security
 async def test_free_entitlement_and_chip_reservation_are_both_consumed_when_combined(
     session: AsyncSession, organization: Organization
 ):

@@ -83,6 +83,55 @@ MAX_ATTEMPTS = 3
 
 TERMINAL_STATUSES = (SimulationStatus.SUCCEEDED, SimulationStatus.FAILED, SimulationStatus.CANCELLED)
 
+# --- Basarisizlik siniflandirmasi: hangi FAILED run'lar yeniden denenebilir? ---
+#
+# `network_device_test` seciliyken kaynak turu URL degilse (screenshot/
+# ai_generated), run HER ZAMAN ayni `input_snapshot` (immutable) ile tekrar
+# basarisiz olur - bu, run.error metnindeki HAM (ic) mesaj uzerinden
+# frontend'in substring kontrolu yapmasindansa, burada TEK bir merkezden
+# (`classify_run_failure`) hesaplanan bir `failure_code`/`retryable` alani
+# olarak API response'una tasinir (bkz. app.routers.simulations). Gecici
+# network/timeout/5xx gibi GERCEKTEN yeniden denenebilir hatalarda
+# (`ModuleProcessingError` -> "analyzer'a ulasilamadi"/"analyzer hatasi")
+# `retryable=True` kalir - yalnizca BU spesifik, yapisal olarak duzelemeyen
+# durum icin `retryable=False` dondurulur.
+NETWORK_DEVICE_TEST_REQUIRES_URL_CODE = "network_device_test_requires_url"
+
+NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE = (
+    "Bu çalışma ekran görüntüsüyle Ağ ve cihaz testi seçildiği için yeniden denenemez. "
+    "Yeni bir test oluşturup bu modülü kaldırın veya bütün kaynakları URL olarak seçin."
+)
+
+
+def classify_run_failure(run: SimulationRun) -> tuple[bool, str | None]:
+    """FAILED bir run icin `(retryable, failure_code)` dondurur.
+
+    FAILED olmayan run'lar icin de guvenli bir varsayilan (`True, None`)
+    dondurulur (cagiran taraf zaten yalnizca FAILED durumunda bu alanlari
+    anlamli sekilde gosterir, bkz. `app.routers.simulations._to_response`).
+    """
+
+    if run.status != SimulationStatus.FAILED:
+        return True, None
+
+    modules: list[str] = run.input_snapshot.get("modules") or []
+    url = run.input_snapshot.get("url")
+    source_type = run.input_snapshot.get("source_type")
+    # `url` dolu ise (gercek bir URL kaynagi basariyla launch edilmis, hata
+    # analyzer/network tarafinda GECICI bir sebeple olusmus demektir) HER
+    # ZAMAN retryable kalir - `source_type` alani (eski/legacy run'larda hic
+    # bulunmayabilir) burada TEK BASINA belirleyici degildir. Yalnizca `url`
+    # BOS/None VE kaynak turu acikca screenshot/AI ise (statik gorsel -
+    # yapisal olarak duzelemez) non-retryable isaretlenir.
+    if (
+        "network_device_test" in modules
+        and not url
+        and source_type in ("screenshot", "ai_generated")
+    ):
+        return False, NETWORK_DEVICE_TEST_REQUIRES_URL_CODE
+
+    return True, None
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -578,6 +627,17 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
             f"Yalnizca 'failed' durumundaki calistirmalar yeniden denenebilir (mevcut: {run.status.value})"
         )
 
+    # Yapisal olarak duzelemeyen bir basarisizlik (ör. ekran goruntusu
+    # kaynagiyla `network_device_test`) AYNI degismez `input_snapshot` ile
+    # HER ZAMAN ayni sekilde basarisiz olur - yeniden kuyruga alinsa bile
+    # hicbir yeni entitlement/Chip rezervasyonu yapilmadan BURADA reddedilir
+    # (bkz. `classify_run_failure`, ayni karar app.routers.simulations
+    # response'undaki `retryable` alaniyla PAYLASILIR - iki yerde ayri ayri
+    # hesaplanmaz).
+    retryable, _failure_code = classify_run_failure(run)
+    if not retryable:
+        raise InvalidSimulationStateError(NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE)
+
     # NOT: bagimsiz `if`ler (elif degil) - bkz. `_resolve_launch_group` ve
     # app.services.test_wizard.launch_draft: bir run hem ucretsiz hak hem de
     # (secili gelismis moduller icin) bir Chip rezervasyonu tasiyabilir.
@@ -737,6 +797,9 @@ __all__ = [
     "CLAIM_BATCH_SIZE",
     "STALE_RUNNING_TIMEOUT_SECONDS",
     "MAX_ATTEMPTS",
+    "NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE",
+    "NETWORK_DEVICE_TEST_REQUIRES_URL_CODE",
+    "classify_run_failure",
     "claim_next_queued_runs",
     "fail_runs_blocked_by_failed_page_analysis",
     "process_run",

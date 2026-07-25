@@ -987,6 +987,11 @@
   cursor: default;
 }
 
+.module-card--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .module-card__actions {
   margin-top: 12px;
 }

@@ -67,6 +67,7 @@ const moduleCatalogResponse = {
       free_entitlement_feature_key: null,
       estimated_duration_minutes: 6,
       selectable_in_wizard: true,
+      supported_source_types: ["url"],
     },
   ],
 };
@@ -362,7 +363,7 @@ describe("TestWizard", () => {
     );
   }
 
-  it("basarili baslatma (ucretsiz hak) sonrasi 'Test başlatıldı' ekranini gosterir", async () => {
+  it("basarili baslatma (ucretsiz hak) sonrasi 'Test kuyruğa alındı' ekranini gosterir", async () => {
     stubLaunchFetch({
       draft: launchReadyDraft(),
       quote: {
@@ -397,12 +398,21 @@ describe("TestWizard", () => {
     fireEvent.click(launchButton);
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Test başlatıldı" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Test kuyruğa alındı" })).toBeInTheDocument(),
     );
+    expect(
+      screen.getByText(
+        "Testiniz başlatıldı. Analiz durumunu Simülasyonlar sayfasından takip edebilirsiniz. Rapor, tüm çalıştırmalar başarıyla tamamlandıktan sonra oluşturulur.",
+      ),
+    ).toBeInTheDocument();
     expect(
       screen.getByText("Test, ücretsiz hakkınız kullanılarak başlatıldı."),
     ).toBeInTheDocument();
     expect(screen.getByText("Simülasyon kuyruğa alındı.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Simülasyonları görüntüle" })).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Analiz başarıyla tamamlandı|Rapor hazır|Test tamamlandı/),
+    ).not.toBeInTheDocument();
   });
 
   it("stale CTA annotation uyarisi varsa dogru tarafa (slot) bagli acik bir mesaj gosterir", async () => {
@@ -446,7 +456,7 @@ describe("TestWizard", () => {
     fireEvent.click(launchButton);
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Test başlatıldı" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Test kuyruğa alındı" })).toBeInTheDocument(),
     );
     expect(
       screen.getByText(/Tasarım değiştiği için önceki CTA seçiminiz temizlendi \(Tasarım A\)/),
@@ -488,7 +498,7 @@ describe("TestWizard", () => {
     fireEvent.click(launchButton);
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Test başlatıldı" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Test kuyruğa alındı" })).toBeInTheDocument(),
     );
     expect(screen.getByText("Test, Chip bakiyenizden düşülerek başlatıldı.")).toBeInTheDocument();
   });
@@ -528,7 +538,7 @@ describe("TestWizard", () => {
         ),
       ).toBeInTheDocument(),
     );
-    expect(screen.queryByRole("heading", { name: "Test başlatıldı" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Test kuyruğa alındı" })).not.toBeInTheDocument();
   });
 
   it("404 gibi 400/402 disindaki bir ApiError'da da gercek backend mesaji gosterilir (jenerik mesaja indirgenmez)", async () => {
@@ -1915,5 +1925,94 @@ describe("TestWizard", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByText(/Bu URL'leri analiz etme yetkisine sahip/)).not.toBeInTheDocument();
+  });
+
+  // --- Kaynak turu screenshot'a cevrildiginde uyumsuz modulun otomatik temizlenmesi --
+
+  it("kaynak URL'den screenshot'a cevrilince secili network_device_test otomatik kaldirilir ve uyari gosterilir", async () => {
+    let currentDraftPayload: Record<string, unknown> = {
+      project_id: "project-1",
+      test_type: "existing_site_basic_ux",
+      current_source_type: "url",
+      current_url: "https://example.com",
+      modules: ["network_device_test"],
+      persona_count: 500,
+      target_audience: "Test kitlesi",
+    };
+    const patchCalls: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/analysis-modules/catalog")) {
+          return jsonResponse(200, moduleCatalogResponse);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, {
+            ...emptyDraft,
+            current_step: 2,
+            payload: currentDraftPayload,
+          });
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          const body = JSON.parse(String(init.body));
+          patchCalls.push(body);
+          currentDraftPayload = { ...currentDraftPayload, ...(body.payload ?? {}) };
+          return jsonResponse(200, {
+            ...emptyDraft,
+            current_step: 2,
+            payload: currentDraftPayload,
+          });
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        if (url.includes("/api/billing/quote")) {
+          return jsonResponse(200, {
+            pricing_version: "2026.1",
+            test_type: "basic_ux_test",
+            persona_count: 500,
+            modules: [],
+            free_entitlement_feature_key: "basic_ux_test",
+            free_entitlement_applicable: true,
+            line_items: [],
+            required_chips: 0,
+            total_chips: 0,
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("2. Tasarım Kaynağı")).toBeInTheDocument());
+
+    const screenshotRadio = screen.getByRole("radio", { name: /Ekran görüntüsü/ });
+    fireEvent.click(screenshotRadio);
+
+    expect(
+      await screen.findByText(/Ağ ve cihaz testi kaldırıldı\. Bu modül yalnızca canlı URL ile çalışır\./),
+    ).toBeInTheDocument();
+
+    await waitFor(() => {
+      const lastCallWithModules = patchCalls.filter((call) => {
+        const payload = call.payload as Record<string, unknown> | undefined;
+        return payload && "modules" in payload;
+      });
+      expect(lastCallWithModules.length).toBeGreaterThan(0);
+      const payload = lastCallWithModules[lastCallWithModules.length - 1].payload as {
+        modules: string[];
+      };
+      expect(payload.modules).toEqual([]);
+    });
   });
 });

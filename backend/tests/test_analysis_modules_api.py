@@ -66,7 +66,7 @@ def test_catalog_lists_seven_active_modules_with_full_metadata(client):
     assert response.status_code == 200
     body = response.json()
 
-    assert body["catalog_version"] == "2026.1"
+    assert body["catalog_version"] == "2026.2"
     assert len(body["modules"]) == 7
 
     by_key = {m["key"]: m for m in body["modules"]}
@@ -80,6 +80,7 @@ def test_catalog_lists_seven_active_modules_with_full_metadata(client):
         "free_entitlement_feature_key",
         "estimated_duration_minutes",
         "selectable_in_wizard",
+        "supported_source_types",
     ):
         assert required_field in by_key["network_device_test"]
 
@@ -87,6 +88,13 @@ def test_catalog_lists_seven_active_modules_with_full_metadata(client):
     assert by_key["synthetic_attention_estimate"]["measurement_type"] == "synthetic_estimate"
     assert by_key["basic_ux_test"]["selectable_in_wizard"] is False
     assert by_key["network_device_test"]["selectable_in_wizard"] is True
+    assert by_key["network_device_test"]["supported_source_types"] == ["url"]
+    assert set(by_key["campaign_cta_test"]["supported_source_types"]) == {"url", "screenshot", "ai_generated"}
+    assert set(by_key["synthetic_attention_estimate"]["supported_source_types"]) == {
+        "url",
+        "screenshot",
+        "ai_generated",
+    }
 
 
 def test_wizard_accepts_new_advanced_module_keys(client):

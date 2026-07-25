@@ -19,6 +19,7 @@ class AnalysisModuleResponse(BaseModel):
     free_entitlement_feature_key: str | None
     estimated_duration_minutes: int
     selectable_in_wizard: bool
+    supported_source_types: list[str]
 
 
 class AnalysisModuleCatalogResponse(BaseModel):
@@ -49,6 +50,7 @@ async def get_catalog(
                 free_entitlement_feature_key=module.free_entitlement_feature_key,
                 estimated_duration_minutes=module.estimated_duration_minutes,
                 selectable_in_wizard=module.selectable_in_wizard,
+                supported_source_types=list(module.supported_source_types),
             )
             for module in modules
         ],

@@ -15,6 +15,7 @@ const selectableModules: AnalysisModuleDefinition[] = [
     free_entitlement_feature_key: null,
     estimated_duration_minutes: 6,
     selectable_in_wizard: true,
+    supported_source_types: ["url"],
   },
   {
     key: "campaign_cta_test",
@@ -26,6 +27,7 @@ const selectableModules: AnalysisModuleDefinition[] = [
     free_entitlement_feature_key: null,
     estimated_duration_minutes: 5,
     selectable_in_wizard: true,
+    supported_source_types: ["url", "screenshot", "ai_generated"],
   },
 ];
 
@@ -130,5 +132,93 @@ describe("Step4Modules", () => {
     expect(
       screen.queryByText(/Chip bakiyeniz bu testi başlatmak için yeterli değil/),
     ).not.toBeInTheDocument();
+  });
+
+  // --- Kaynak-modul uyumluluk (network_device_test yalnizca URL) ---------
+
+  it("URL kaynaginda Ag ve cihaz testi secilebilir (disabled degil)", () => {
+    renderStep4({ payload: { current_source_type: "url", modules: [] } });
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes[0]).not.toBeDisabled();
+  });
+
+  it("screenshot kaynaginda Ag ve cihaz testi disabled olur", () => {
+    renderStep4({ payload: { current_source_type: "screenshot", modules: [] } });
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes[0]).toBeDisabled();
+  });
+
+  it("disabled karti icin erisilebilir bir aciklama gosterir", () => {
+    renderStep4({ payload: { current_source_type: "screenshot", modules: [] } });
+
+    expect(
+      screen.getByText(
+        "Bu modül gerçek sayfa yükleme ve ağ ölçümü yaptığı için yalnızca canlı URL kaynaklarıyla kullanılabilir.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("A/B URL/URL'de Ag ve cihaz testi secilebilir", () => {
+    renderStep4({
+      payload: {
+        test_type: "ab_comparison",
+        current_source_type: "url",
+        new_source_type: "url",
+        modules: [],
+      },
+    });
+
+    expect(screen.getAllByRole("checkbox")[0]).not.toBeDisabled();
+  });
+
+  it("A/B URL/screenshot'ta Ag ve cihaz testi disabled olur", () => {
+    renderStep4({
+      payload: {
+        test_type: "ab_comparison",
+        current_source_type: "url",
+        new_source_type: "screenshot",
+        modules: [],
+      },
+    });
+
+    expect(screen.getAllByRole("checkbox")[0]).toBeDisabled();
+  });
+
+  it("A/B screenshot/URL'de Ag ve cihaz testi disabled olur", () => {
+    renderStep4({
+      payload: {
+        test_type: "ab_comparison",
+        current_source_type: "screenshot",
+        new_source_type: "url",
+        modules: [],
+      },
+    });
+
+    expect(screen.getAllByRole("checkbox")[0]).toBeDisabled();
+  });
+
+  it("A/B screenshot/screenshot'ta Ag ve cihaz testi disabled olur", () => {
+    renderStep4({
+      payload: {
+        test_type: "ab_comparison",
+        current_source_type: "screenshot",
+        new_source_type: "screenshot",
+        modules: [],
+      },
+    });
+
+    expect(screen.getAllByRole("checkbox")[0]).toBeDisabled();
+  });
+
+  it("disabled bir kartin checkbox'ina tiklamak payload'i degistirmez", () => {
+    const { onChange } = renderStep4({
+      payload: { current_source_type: "screenshot", modules: [] },
+    });
+
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

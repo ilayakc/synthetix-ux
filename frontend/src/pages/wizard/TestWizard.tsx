@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   type AnalysisModuleDefinition,
   ApiError,
@@ -15,6 +15,7 @@ import {
   listPersonaPresets,
   patchWizardDraft,
 } from "../../api/client";
+import { incompatibleSelectedModuleKeys } from "./moduleCompatibility";
 import Step1Details from "./Step1Details";
 import Step2Urls from "./Step2Urls";
 import Step3Personas from "./Step3Personas";
@@ -110,6 +111,7 @@ export default function TestWizard() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [moduleClearedNotice, setModuleClearedNotice] = useState<string | null>(null);
   const savedNoticeTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [quote, setQuote] = useState<QuoteResponse | null>(null);
@@ -285,6 +287,36 @@ export default function TestWizard() {
     };
   }, [payload.test_type, payload.persona_count, payload.modules]);
 
+  // --- Kaynak turu (screenshot'a) degistiginde artik uyumsuz olan secili
+  // gelismis modulleri otomatik temizle (bkz. moduleCompatibility.ts) ---
+  //
+  // Yalnizca kaynak turu/test turu/katalog degistiginde tetiklenir -
+  // `payload.modules` KENDISI bagimlilik DEGILDIR: aksi halde bu efektin
+  // kendi `setPayload` cagrisi yeniden tetiklenip sonsuz bir
+  // guncelleme/autosave dongusune yol acardi. Katalog ilk yuklendiginde
+  // (moduleCatalog [] -> dolu) VEYA taslak hydrate edildiginde (query-string
+  // on-secim/eski draft) de bir kez calisir, boylece varsayilan/preselected
+  // uyumsuz bir modul de sessizce kalmaz.
+  useEffect(() => {
+    if (!hydrated.current || moduleCatalog.length === 0) return;
+
+    const incompatibleKeys = incompatibleSelectedModuleKeys(payload, moduleCatalog);
+    if (incompatibleKeys.length === 0) return;
+
+    const removedNames = incompatibleKeys
+      .map((key) => moduleCatalog.find((module) => module.key === key)?.name ?? key)
+      .join(", ");
+
+    setPayload((current) => ({
+      ...current,
+      modules: (current.modules ?? []).filter((key) => !incompatibleKeys.includes(key)),
+    }));
+    setModuleClearedNotice(
+      `Ekran görüntüsü kaynağı seçildiği için ${removedNames} kaldırıldı. Bu modül yalnızca canlı URL ile çalışır.`,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload.current_source_type, payload.new_source_type, payload.test_type, moduleCatalog]);
+
   const handleChange = <K extends keyof WizardDraftPayload>(
     field: K,
     value: WizardDraftPayload[K],
@@ -401,9 +433,17 @@ export default function TestWizard() {
     return (
       <section aria-labelledby="wizard-heading" className="wizard">
         <h1 id="wizard-heading" className="page-heading">
-          Test başlatıldı
+          Test kuyruğa alındı
         </h1>
         <div className="auth-notice">
+          {/* Launch istegi yalnizca isi kuyruga alir - worker asenkron olarak
+              isler (bkz. app.services.simulation_worker). Bu ekran "analiz
+              tamamlandi"/"rapor hazir" gibi YANLIS bir izlenim VERMEMELIDIR -
+              kullanici gercek durumu Simulasyonlar sayfasindan takip eder. */}
+          <p>
+            Testiniz başlatıldı. Analiz durumunu Simülasyonlar sayfasından takip edebilirsiniz. Rapor,
+            tüm çalıştırmalar başarıyla tamamlandıktan sonra oluşturulur.
+          </p>
           <p>
             {launchResult.usedFreeEntitlement
               ? "Test, ücretsiz hakkınız kullanılarak başlatıldı."
@@ -423,9 +463,12 @@ export default function TestWizard() {
           </div>
         )}
         <div className="modal__actions">
-          <button type="button" className="auth-submit" onClick={() => navigate("/projeler")}>
+          <button type="button" className="btn-secondary" onClick={() => navigate("/projeler")}>
             Projelere dön
           </button>
+          <Link to="/simulasyonlar" className="auth-submit">
+            Simülasyonları görüntüle
+          </Link>
         </div>
       </section>
     );
@@ -450,6 +493,15 @@ export default function TestWizard() {
       (payload.new_source_type === "screenshot" || payload.new_source_type === "ai_generated") &&
       !payload.new_design_asset_id);
 
+  // Savunma katmani: normalde yukaridaki otomatik temizleme efekti
+  // uyumsuz bir modulun `payload.modules`te kalmasina IZIN VERMEZ; yine de
+  // (ör. bir yaris durumu/legacy hydration) uyumsuz bir modul hala
+  // payload'daysa Step5'teki baslatma butonu KAPATILIR - frontend kontrolu
+  // bir guvenlik siniri degildir, backend launch-oncesi dogrulamasi
+  // (`app.services.test_wizard.validate_module_source_compatibility`) HER
+  // ZAMAN bagimsiz olarak yeniden calisir.
+  const incompatibleModulesForLaunch = incompatibleSelectedModuleKeys(payload, moduleCatalog);
+
   return (
     <section aria-labelledby="wizard-heading" className="wizard">
       <h1 id="wizard-heading" className="page-heading">
@@ -465,6 +517,11 @@ export default function TestWizard() {
       {savedNotice && (
         <p className="auth-notice" role="status">
           {savedNotice}
+        </p>
+      )}
+      {moduleClearedNotice && (
+        <p className="auth-notice" role="status">
+          {moduleClearedNotice}
         </p>
       )}
 
@@ -525,7 +582,8 @@ export default function TestWizard() {
                 disabled={
                   isLaunching ||
                   payload.authorization_confirmed !== true ||
-                  missingSourceForLaunch
+                  missingSourceForLaunch ||
+                  incompatibleModulesForLaunch.length > 0
                 }
               >
                 {isLaunching ? "Başlatılıyor…" : launchButtonLabel}
@@ -533,6 +591,12 @@ export default function TestWizard() {
               {missingSourceForLaunch && (
                 <p className="wizard-field-hint" role="status">
                   Devam etmeden önce eksik tasarım kaynağını (ekran görüntüsü) tamamlamalısınız.
+                </p>
+              )}
+              {incompatibleModulesForLaunch.length > 0 && (
+                <p className="auth-error" role="status">
+                  Seçili tasarım kaynağıyla uyumsuz bir analiz modülü var (Ağ ve cihaz testi yalnızca
+                  canlı URL ile çalışır). Devam etmeden önce 4. adımdan bu modülü kaldırın.
                 </p>
               )}
             </div>

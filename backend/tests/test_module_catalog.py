@@ -35,14 +35,15 @@ def test_get_active_module_catalog_excludes_inactive_modules():
     inactive_copy = dataclasses.replace(active_modules[0], active=False)
     patched_version = (inactive_copy, *active_modules[1:])
 
-    original = module_catalog.MODULE_CATALOG_VERSIONS["2026.1"]
-    module_catalog.MODULE_CATALOG_VERSIONS["2026.1"] = patched_version
+    current_version = module_catalog.CURRENT_MODULE_CATALOG_VERSION
+    original = module_catalog.MODULE_CATALOG_VERSIONS[current_version]
+    module_catalog.MODULE_CATALOG_VERSIONS[current_version] = patched_version
     try:
         active = module_catalog.get_active_module_catalog()
         assert inactive_copy.key not in {m.key for m in active}
         assert len(active) == len(active_modules) - 1
     finally:
-        module_catalog.MODULE_CATALOG_VERSIONS["2026.1"] = original
+        module_catalog.MODULE_CATALOG_VERSIONS[current_version] = original
 
 
 def test_get_selectable_wizard_module_keys_only_returns_selectable_advanced_modules():
@@ -83,3 +84,42 @@ def test_ai_explanation_module_is_always_free_and_not_selectable():
     ai_module = modules["ai_explanation"]
     assert ai_module.chip_cost == 0
     assert ai_module.selectable_in_wizard is False
+
+
+def test_network_device_test_only_supports_url_source():
+    module = module_catalog.get_module_definition("network_device_test")
+    assert module.supported_source_types == (module_catalog.SOURCE_TYPE_URL,)
+
+
+def test_campaign_cta_and_synthetic_attention_support_screenshot_sources():
+    for key in ("campaign_cta_test", "synthetic_attention_estimate"):
+        module = module_catalog.get_module_definition(key)
+        assert module_catalog.SOURCE_TYPE_URL in module.supported_source_types
+        assert module_catalog.SOURCE_TYPE_SCREENSHOT in module.supported_source_types
+        assert module_catalog.SOURCE_TYPE_AI_GENERATED in module.supported_source_types
+
+
+def test_accessibility_precheck_only_supports_url_source():
+    module = module_catalog.get_module_definition("accessibility_precheck")
+    assert module.supported_source_types == (module_catalog.SOURCE_TYPE_URL,)
+
+
+def test_get_module_definition_rejects_unknown_key():
+    with pytest.raises(ValueError):
+        module_catalog.get_module_definition("does-not-exist")
+
+
+def test_analysis_module_definition_rejects_unknown_source_type():
+    with pytest.raises(ValueError):
+        module_catalog.AnalysisModuleDefinition(
+            key="x",
+            name="x",
+            description="x",
+            outputs=(),
+            measurement_type=module_catalog.TECHNICAL_MEASUREMENT,
+            chip_cost=0,
+            free_entitlement_feature_key=None,
+            estimated_duration_minutes=1,
+            selectable_in_wizard=False,
+            supported_source_types=("not_a_real_source_type",),
+        )

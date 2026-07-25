@@ -50,6 +50,8 @@ class SimulationRunResponse(BaseModel):
     fixture_version: str | None
     error: str | None
     result: dict | None
+    retryable: bool
+    failure_code: str | None
     not_real_user_data_label: str
     methodology_reference: str
     attempt_count: int
@@ -63,6 +65,7 @@ async def _to_response(run: SimulationRun) -> SimulationRunResponse:
     live_progress = await simulation_progress.read_progress(run.id)
     percent = live_progress["percent"] if live_progress else run.progress_percent
     message = live_progress["message"] if live_progress else run.progress_message
+    retryable, failure_code = worker_service.classify_run_failure(run)
 
     return SimulationRunResponse(
         id=run.id,
@@ -78,6 +81,8 @@ async def _to_response(run: SimulationRun) -> SimulationRunResponse:
         fixture_version=run.fixture_version,
         error=run.error,
         result=run.result,
+        retryable=retryable,
+        failure_code=failure_code,
         not_real_user_data_label=NOT_REAL_USER_DATA_LABEL,
         methodology_reference="docs/methodology.md",
         attempt_count=run.attempt_count,

@@ -1,5 +1,6 @@
 import type { AnalysisModuleDefinition, QuoteResponse } from "../../api/client";
 import ModuleCatalogCard from "./ModuleCatalogCard";
+import { NETWORK_DEVICE_TEST_DISABLED_REASON, isModuleCompatibleWithSources } from "./moduleCompatibility";
 import type { StepProps } from "./types";
 
 interface Step4Props extends StepProps {
@@ -23,6 +24,13 @@ export default function Step4Modules({
   const selected = new Set(payload.modules ?? []);
 
   const toggleModule = (moduleKey: string) => {
+    const module = selectableModules.find((m) => m.key === moduleKey);
+    // Ikinci bir savunma katmani: disabled checkbox zaten onChange'i
+    // engeller, ama bu fonksiyon dogrudan cagirilirsa (ör. testlerde) bile
+    // uyumsuz bir modul asla secili hale getirilmez.
+    if (module && !selected.has(moduleKey) && !isModuleCompatibleWithSources(module, payload)) {
+      return;
+    }
     const next = new Set(selected);
     if (next.has(moduleKey)) {
       next.delete(moduleKey);
@@ -47,14 +55,19 @@ export default function Step4Modules({
       <div className="wizard-field">
         <label>Analiz modülleri (isteğe bağlı)</label>
         <div className="module-card-grid">
-          {selectableModules.map((module) => (
-            <ModuleCatalogCard
-              key={module.key}
-              module={module}
-              selected={selected.has(module.key)}
-              onToggle={toggleModule}
-            />
-          ))}
+          {selectableModules.map((module) => {
+            const compatible = isModuleCompatibleWithSources(module, payload);
+            return (
+              <ModuleCatalogCard
+                key={module.key}
+                module={module}
+                selected={selected.has(module.key)}
+                onToggle={toggleModule}
+                disabled={!compatible}
+                disabledReason={!compatible ? NETWORK_DEVICE_TEST_DISABLED_REASON : undefined}
+              />
+            );
+          })}
         </div>
         <p className="wizard-field-hint">
           Temel ücretsiz haklar dışında kalan gelişmiş modüller Chip harcaması gerektirir.

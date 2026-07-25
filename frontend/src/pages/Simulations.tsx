@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   ApiError,
   type SimulationRunResponse,
@@ -7,6 +8,9 @@ import {
   listSimulationRuns,
   retrySimulationRun,
 } from "../api/client";
+
+const NON_RETRYABLE_ERROR_MESSAGE =
+  "Bu çalışma, seçili tasarım kaynağıyla uyumsuz bir analiz modülü nedeniyle tamamlanamadı ve yeniden denenemez.";
 
 const STATUS_LABELS: Record<SimulationRunStatus, string> = {
   queued: "Kuyrukta",
@@ -125,6 +129,12 @@ function SimulationCard({
 }) {
   const isActive = run.status === "queued" || run.status === "running";
   const isFailed = run.status === "failed";
+  // Retryable karari BACKEND'den gelir (bkz. app.services.simulation_worker.
+  // classify_run_failure) - frontend burada HAM hata metninde substring
+  // kontrolu YAPMAZ; `run.retryable`, worker'in ayni degismez input_snapshot
+  // ile her zaman ayni sekilde basarisiz olacagini bildigi durumlarda
+  // (ör. ekran goruntusu kaynagiyla `network_device_test`) false doner.
+  const isNonRetryableFailure = isFailed && !run.retryable;
 
   return (
     <div className="simulation-card">
@@ -137,10 +147,15 @@ function SimulationCard({
               İptal et
             </button>
           )}
-          {isFailed && (
+          {isFailed && run.retryable && (
             <button type="button" className="auth-submit" onClick={() => onRetry(run.id)}>
               Yeniden dene
             </button>
+          )}
+          {isNonRetryableFailure && (
+            <Link to="/tests/new" className="btn-secondary">
+              Yeni test oluştur
+            </Link>
           )}
         </div>
       </div>
@@ -157,7 +172,12 @@ function SimulationCard({
         </div>
       )}
       {run.progress_message && <p className="simulation-card__message">{run.progress_message}</p>}
-      {run.error && <p className="simulation-card__error">Hata: {run.error}</p>}
+      {run.error &&
+        (isNonRetryableFailure ? (
+          <p className="simulation-card__error">{NON_RETRYABLE_ERROR_MESSAGE}</p>
+        ) : (
+          <p className="simulation-card__error">Hata: {run.error}</p>
+        ))}
 
       {run.status === "succeeded" && <SimulationResultCard run={run} />}
     </div>
