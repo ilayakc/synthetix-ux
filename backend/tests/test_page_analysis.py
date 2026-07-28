@@ -23,7 +23,7 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.design_assets import DesignAsset, DesignAssetContentType, DesignAssetStatus
+from app.models.design_assets import DesignAsset
 from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.tenancy import Organization
 from app.services import design_assets as design_assets_service
@@ -175,7 +175,9 @@ def _analyzer_should_not_be_called_client() -> httpx.AsyncClient:
     gerektigini kanitlamak icin kullanilir - herhangi bir istek gelirse test
     basarisiz olur."""
 
-    async def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - hicbir zaman cagrilmamali
+    async def handler(
+        request: httpx.Request,
+    ) -> httpx.Response:  # pragma: no cover - hicbir zaman cagrilmamali
         raise AssertionError(f"analyzer'a beklenmeyen istek yapildi: {request.url}")
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -658,7 +660,9 @@ async def test_process_analysis_url_rejects_decompression_bomb(
     analysis = await _make_queued_analysis(session, organization)
     analysis.status = PageAnalysisStatus.RUNNING
 
-    client = _mock_client(json_body=_fixture_analyzer_snapshot(screenshot_bytes=_png_bytes(width=50, height=40)))
+    client = _mock_client(
+        json_body=_fixture_analyzer_snapshot(screenshot_bytes=_png_bytes(width=50, height=40))
+    )
     try:
         await page_analysis_service.process_analysis(session, analysis, client=client)
     finally:
@@ -690,7 +694,9 @@ async def test_process_analysis_url_rejects_malformed_base64(
 # --- Ortak kaynak sozlesmesi: request dogrulama --------------------------------
 
 
-async def test_create_analysis_accepts_url_only(session: AsyncSession, organization: Organization, monkeypatch):
+async def test_create_analysis_accepts_url_only(
+    session: AsyncSession, organization: Organization, monkeypatch
+):
     monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
     analysis = await page_analysis_service.create_analysis(
         session,
@@ -760,7 +766,9 @@ async def test_create_analysis_design_asset_rejects_other_organization(
         )
 
 
-async def test_create_analysis_rejects_deleted_design_asset(session: AsyncSession, organization: Organization):
+async def test_create_analysis_rejects_deleted_design_asset(
+    session: AsyncSession, organization: Organization
+):
     asset = await _upload_asset(session, organization)
     await design_assets_service.delete_asset(session, organization.id, asset.id)
 
@@ -773,7 +781,9 @@ async def test_create_analysis_rejects_deleted_design_asset(session: AsyncSessio
         )
 
 
-async def test_create_analysis_rejects_expired_design_asset(session: AsyncSession, organization: Organization):
+async def test_create_analysis_rejects_expired_design_asset(
+    session: AsyncSession, organization: Organization
+):
     asset = await _upload_asset(session, organization)
     asset.expires_at = datetime.now(UTC) - timedelta(seconds=1)
     await session.flush()
@@ -787,7 +797,9 @@ async def test_create_analysis_rejects_expired_design_asset(session: AsyncSessio
         )
 
 
-async def test_create_analysis_rejects_asset_with_purged_binary(session: AsyncSession, organization: Organization):
+async def test_create_analysis_rejects_asset_with_purged_binary(
+    session: AsyncSession, organization: Organization
+):
     asset = await _upload_asset(session, organization)
     asset.image_data = None
     await session.flush()
@@ -1309,5 +1321,7 @@ async def test_organization_hard_delete_cascades_without_fk_errors(
     assert remaining_assets_for_deleted_org.scalars().all() == []
 
     # Diger tenant'in kaydi ETKILENMEMIS olmali.
-    other_still_there = await session.execute(select(PageAnalysis).where(PageAnalysis.id == other_analysis_id))
+    other_still_there = await session.execute(
+        select(PageAnalysis).where(PageAnalysis.id == other_analysis_id)
+    )
     assert other_still_there.scalar_one() is not None

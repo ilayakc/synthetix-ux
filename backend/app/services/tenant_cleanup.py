@@ -132,9 +132,7 @@ async def delete_disposable_organization_by_exact_id(
 
     organization = await session.get(Organization, organization_id)
     if organization is None:
-        raise TenantCleanupGuardError(
-            f"Guard failed: organizasyon bulunamadi (id={organization_id})"
-        )
+        raise TenantCleanupGuardError(f"Guard failed: organizasyon bulunamadi (id={organization_id})")
     if organization.name != expected_name:
         raise TenantCleanupGuardError(
             f"Guard failed: name eslesmiyor (beklenen={expected_name!r}, gercek={organization.name!r})"

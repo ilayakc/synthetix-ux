@@ -179,9 +179,7 @@ async def patch_draft(
         raw_value = body.payload[annotation_field]
         expected_asset_id = merged_payload.get(asset_field)
         if expected_asset_id is None or str(raw_value.get("design_asset_id")) != str(expected_asset_id):
-            raise HTTPException(
-                status_code=400, detail=wizard_service.CTA_ANNOTATION_ASSET_MISMATCH_MESSAGE
-            )
+            raise HTTPException(status_code=400, detail=wizard_service.CTA_ANNOTATION_ASSET_MISMATCH_MESSAGE)
         try:
             resolved = await wizard_service.resolve_cta_annotation_patch(
                 session, principal.organization_id, raw_value

@@ -21,9 +21,7 @@ from app.services import simulation_worker
 pytestmark = pytest.mark.integration
 
 
-async def _make_project_and_variant(
-    session: AsyncSession, organization: Organization
-) -> TestVariant:
+async def _make_project_and_variant(session: AsyncSession, organization: Organization) -> TestVariant:
     from app.models.projects import Project
 
     project = Project(organization_id=organization.id, name=f"Proje {uuid.uuid4().hex[:6]}")

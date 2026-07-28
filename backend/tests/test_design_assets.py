@@ -11,7 +11,6 @@ kolay ve daha hizli kontrol saglar.
 from __future__ import annotations
 
 import io
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest

@@ -241,6 +241,7 @@ def run_baseline_simulation(
     if page_feature_snapshot is not None:
         page = page_feature_snapshot
     elif has_url:
+        assert isinstance(url, str)
         page = fixtures.get_page_feature_snapshot(url, role)
     else:
         # Savunma amacli: gercek akiste hicbir zaman tetiklenmez (bkz.

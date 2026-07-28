@@ -55,8 +55,7 @@ async def record_observation(
 
     if run.status != SimulationStatus.SUCCEEDED:
         raise CalibrationRunNotSucceededError(
-            "Kalibrasyon gozlemi yalnizca basariyla tamamlanmis (succeeded) "
-            "bir calistirmaya eklenebilir"
+            "Kalibrasyon gozlemi yalnizca basariyla tamamlanmis (succeeded) " "bir calistirmaya eklenebilir"
         )
 
     metrics = (

@@ -62,9 +62,7 @@ def compose_prod() -> dict:
 
 def test_compose_prod_file_exists():
     if _COMPOSE_PATH is None:
-        pytest.skip(
-            "compose.prod.yaml bu container'dan erisilemiyor (bkz. bu dosyanin ust yorumu)."
-        )
+        pytest.skip("compose.prod.yaml bu container'dan erisilemiyor (bkz. bu dosyanin ust yorumu).")
     assert _COMPOSE_PATH.is_file()
 
 
@@ -101,9 +99,7 @@ def test_backend_and_worker_wait_for_migrate_completion(compose_prod, service_na
 
 
 def test_only_frontend_service_publishes_a_host_port(compose_prod):
-    services_with_ports = [
-        name for name, service in compose_prod["services"].items() if "ports" in service
-    ]
+    services_with_ports = [name for name, service in compose_prod["services"].items() if "ports" in service]
     assert services_with_ports == ["frontend"]
 
 

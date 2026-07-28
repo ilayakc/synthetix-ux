@@ -40,9 +40,7 @@ from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageA
 from app.models.reports import Report
 from app.models.simulations import SimulationRun
 from app.services import design_assets as design_assets_service
-from app.services import image_safety
-from app.services import image_visual_analysis
-from app.services import url_safety
+from app.services import image_safety, image_visual_analysis, url_safety
 from app.services.exceptions import (
     DesignAssetNotFoundError,
     DesignAssetUnavailableError,
@@ -113,6 +111,7 @@ async def create_analysis(
         )
 
     if has_asset:
+        assert design_asset_id is not None
         asset = await design_assets_service.get_owned_asset(session, organization_id, design_asset_id)
         design_assets_service.ensure_asset_usable(asset)
 
@@ -133,6 +132,8 @@ async def create_analysis(
 
     if not authorization_confirmed:
         raise UnauthorizedPageAnalysisError("Bu URL'yi analiz etme yetkisini onaylamadan istek islenemez")
+
+    assert url is not None
 
     # DNS cozumleme engelleyici (blocking) oldugu icin event loop'u
     # kilitlememesi adina bir thread'de calistirilir.
@@ -265,11 +266,14 @@ async def _process_design_asset_source(session: AsyncSession, analysis: PageAnal
     yolda analyzer HTTP servisi hicbir zaman cagrilmaz.
     """
 
+    assert analysis.design_asset_id is not None
+
     try:
         asset = await design_assets_service.get_owned_asset(
             session, analysis.organization_id, analysis.design_asset_id
         )
         design_assets_service.ensure_asset_usable(asset)
+        assert asset.image_data is not None
         image_bytes = asset.image_data
         content_type = asset.content_type
         width, height = _verify_design_asset_snapshot(image_bytes, content_type.value)
@@ -325,6 +329,8 @@ async def process_analysis(
     if client is None:
         client = httpx.AsyncClient()
 
+    assert analysis.url is not None
+
     try:
         snapshot = await _call_analyzer(client, analysis.url)
     except Exception as exc:  # analyzer HTTP hatasi, timeout, baglanti hatasi, SSRF reddi
@@ -346,7 +352,9 @@ async def process_analysis(
         analysis.error = _SCREENSHOT_VALIDATION_FAILED_MESSAGE
         analysis.finished_at = _now()
         await session.flush()
-        logger.warning("URL kaynakli analiz ekran goruntusu base64 cozumlemesi basarisiz (id=%s): %s", analysis.id, exc)
+        logger.warning(
+            "URL kaynakli analiz ekran goruntusu base64 cozumlemesi basarisiz (id=%s): %s", analysis.id, exc
+        )
         return
 
     # Analyzer'in bildirdigi genislik/yukseklik/format TEK BASINA guvenilmez;
@@ -379,7 +387,9 @@ async def process_analysis(
         analysis.error = _SCREENSHOT_VALIDATION_FAILED_MESSAGE
         analysis.finished_at = _now()
         await session.flush()
-        logger.warning("URL kaynakli analiz ekran goruntusu dogrulamasi basarisiz (id=%s): %s", analysis.id, exc)
+        logger.warning(
+            "URL kaynakli analiz ekran goruntusu dogrulamasi basarisiz (id=%s): %s", analysis.id, exc
+        )
         return
 
     with image:

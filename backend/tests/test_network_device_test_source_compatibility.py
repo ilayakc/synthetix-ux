@@ -378,9 +378,7 @@ def _legacy_failed_snapshot(*, modules: list[str], source_type: str) -> dict:
     }
 
 
-async def test_legacy_failed_screenshot_network_run_is_not_retryable(
-    session, organization: Organization
-):
+async def test_legacy_failed_screenshot_network_run_is_not_retryable(session, organization: Organization):
     variant = await _make_variant(session, organization)
     run = SimulationRun(
         organization_id=organization.id,
@@ -431,9 +429,7 @@ async def test_legacy_failed_screenshot_network_run_retry_endpoint_rejects_witho
 # --- 15: gecici provider/network hatali run retryable=True kalir --------------
 
 
-async def test_transient_network_device_test_failure_stays_retryable(
-    session, organization: Organization
-):
+async def test_transient_network_device_test_failure_stays_retryable(session, organization: Organization):
     variant = await _make_variant(session, organization)
     run = SimulationRun(
         organization_id=organization.id,

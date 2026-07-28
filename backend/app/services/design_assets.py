@@ -96,7 +96,9 @@ def _decode_and_validate(raw: bytes) -> tuple[Image.Image, DesignAssetContentTyp
     return image, DesignAssetContentType(content_type_mime)
 
 
-def _reencode_without_metadata(image: Image.Image, content_type: DesignAssetContentType) -> tuple[bytes, int, int]:
+def _reencode_without_metadata(
+    image: Image.Image, content_type: DesignAssetContentType
+) -> tuple[bytes, int, int]:
     """EXIF/ICC-profile gibi tum metadata'yi dusurup yalnizca piksel verisini yeniden encode eder.
 
     `exif_transpose`, EXIF donme bilgisini (varsa) atmadan once piksellere
@@ -248,7 +250,9 @@ async def store_generated_asset(
     return asset
 
 
-async def get_owned_asset(session: AsyncSession, organization_id: uuid.UUID, asset_id: uuid.UUID) -> DesignAsset:
+async def get_owned_asset(
+    session: AsyncSession, organization_id: uuid.UUID, asset_id: uuid.UUID
+) -> DesignAsset:
     result = await session.execute(select(DesignAsset).where(DesignAsset.id == asset_id))
     asset = result.scalar_one_or_none()
     if asset is None or asset.organization_id != organization_id:

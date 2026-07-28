@@ -10,6 +10,7 @@ uretsin.
 
 import uuid
 import zoneinfo
+from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,7 +62,7 @@ async def get_or_create_user_preferences(session: AsyncSession, user_id: uuid.UU
     return prefs
 
 
-_UNSET = object()
+_UNSET: Any = object()
 
 
 async def update_user_preferences(

@@ -232,9 +232,7 @@ def adapt_page_analysis(analysis: PageAnalysis, *, role: str) -> DomAdaptedInput
         text_stats.get("avg_sentence_word_count"), field="text_stats.avg_sentence_word_count"
     )
     heading_count = _require_int(text_stats.get("heading_count"), field="text_stats.heading_count")
-    form_field_count = _require_int(
-        controls.get("form_field_count"), field="controls.form_field_count"
-    )
+    form_field_count = _require_int(controls.get("form_field_count"), field="controls.form_field_count")
 
     snapshot = PageFeatureSnapshot(
         fixture_version=f"{DOM_ADAPTER_VERSION}:{analysis.analyzer_version or 'unknown'}",
@@ -359,9 +357,13 @@ def adapt_visual_page_analysis(
         raise PageAnalysisFeatureError("features.feature_source 'visual_heuristic' degil")
 
     candidates_raw = _require_list(
-        features.get("visual_cta_candidates"), field="visual_cta_candidates", max_length=_MAX_VISUAL_CANDIDATES
+        features.get("visual_cta_candidates"),
+        field="visual_cta_candidates",
+        max_length=_MAX_VISUAL_CANDIDATES,
     )
-    attention = _require_dict(features.get("synthetic_attention_estimate"), field="synthetic_attention_estimate")
+    attention = _require_dict(
+        features.get("synthetic_attention_estimate"), field="synthetic_attention_estimate"
+    )
     if not isinstance(attention.get("cells"), list):
         raise PageAnalysisFeatureError("features.synthetic_attention_estimate.cells eksik")
 
@@ -382,7 +384,12 @@ def adapt_visual_page_analysis(
         valid_candidates.append({**box, "heuristic_score": score})
 
         ratio = candidate.get("regional_visual_contrast_estimate")
-        if isinstance(ratio, (int, float)) and not isinstance(ratio, bool) and math.isfinite(ratio) and ratio >= 0:
+        if (
+            isinstance(ratio, int | float)
+            and not isinstance(ratio, bool)
+            and math.isfinite(ratio)
+            and ratio >= 0
+        ):
             contrast_ratios.append(float(ratio))
 
     if contrast_ratios:

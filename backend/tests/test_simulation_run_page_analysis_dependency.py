@@ -164,8 +164,12 @@ async def _make_run(
 # --- Claim filtresi ----------------------------------------------------------
 
 
-async def test_claim_skips_run_blocked_by_queued_page_analysis(session: AsyncSession, organization: Organization):
-    analysis = await _make_page_analysis(session, organization, status=PageAnalysisStatus.QUEUED, features=None)
+async def test_claim_skips_run_blocked_by_queued_page_analysis(
+    session: AsyncSession, organization: Organization
+):
+    analysis = await _make_page_analysis(
+        session, organization, status=PageAnalysisStatus.QUEUED, features=None
+    )
     run = await _make_run(session, organization, page_analysis_id=analysis.id)
 
     claimed = await simulation_worker.claim_next_queued_runs(session)
@@ -176,8 +180,12 @@ async def test_claim_skips_run_blocked_by_queued_page_analysis(session: AsyncSes
     assert run.attempt_count == 0
 
 
-async def test_claim_skips_run_blocked_by_running_page_analysis(session: AsyncSession, organization: Organization):
-    analysis = await _make_page_analysis(session, organization, status=PageAnalysisStatus.RUNNING, features=None)
+async def test_claim_skips_run_blocked_by_running_page_analysis(
+    session: AsyncSession, organization: Organization
+):
+    analysis = await _make_page_analysis(
+        session, organization, status=PageAnalysisStatus.RUNNING, features=None
+    )
     run = await _make_run(session, organization, page_analysis_id=analysis.id)
 
     claimed = await simulation_worker.claim_next_queued_runs(session)
@@ -185,7 +193,9 @@ async def test_claim_skips_run_blocked_by_running_page_analysis(session: AsyncSe
     assert run.id not in {r.id for r in claimed}
 
 
-async def test_claim_includes_run_with_succeeded_page_analysis(session: AsyncSession, organization: Organization):
+async def test_claim_includes_run_with_succeeded_page_analysis(
+    session: AsyncSession, organization: Organization
+):
     analysis = await _make_page_analysis(session, organization, features=_dom_features())
     run = await _make_run(session, organization, page_analysis_id=analysis.id)
 
@@ -210,7 +220,9 @@ async def test_claim_includes_legacy_run_with_null_page_analysis(
 async def test_fail_runs_blocked_by_failed_page_analysis_fails_run(
     session: AsyncSession, organization: Organization
 ):
-    analysis = await _make_page_analysis(session, organization, status=PageAnalysisStatus.FAILED, features=None)
+    analysis = await _make_page_analysis(
+        session, organization, status=PageAnalysisStatus.FAILED, features=None
+    )
     run = await _make_run(session, organization, page_analysis_id=analysis.id)
 
     count = await simulation_worker.fail_runs_blocked_by_failed_page_analysis(session)
@@ -224,7 +236,9 @@ async def test_fail_runs_blocked_by_failed_page_analysis_fails_run(
 async def test_fail_runs_blocked_by_failed_page_analysis_is_idempotent(
     session: AsyncSession, organization: Organization
 ):
-    analysis = await _make_page_analysis(session, organization, status=PageAnalysisStatus.FAILED, features=None)
+    analysis = await _make_page_analysis(
+        session, organization, status=PageAnalysisStatus.FAILED, features=None
+    )
     await _make_run(session, organization, page_analysis_id=analysis.id)
 
     first = await simulation_worker.fail_runs_blocked_by_failed_page_analysis(session)
@@ -251,9 +265,11 @@ async def test_ab_one_side_page_analysis_failure_releases_full_group(
     )
 
     analysis_a = await _make_page_analysis(session, organization, features=_dom_features())
-    analysis_b = await _make_page_analysis(session, organization, status=PageAnalysisStatus.FAILED, features=None)
+    analysis_b = await _make_page_analysis(
+        session, organization, status=PageAnalysisStatus.FAILED, features=None
+    )
 
-    run_a = await _make_run(
+    await _make_run(
         session,
         organization,
         page_analysis_id=analysis_a.id,
@@ -286,7 +302,9 @@ async def test_process_run_uses_dom_input_and_marks_feature_source_dom(
     session: AsyncSession, organization: Organization, monkeypatch
 ):
     analysis = await _make_page_analysis(session, organization, features=_dom_features())
-    run = await _make_run(session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING)
+    run = await _make_run(
+        session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING
+    )
 
     def _boom(url: str, role: str):  # pragma: no cover - hicbir zaman cagrilmamali
         raise AssertionError("bagli PageAnalysis varken fixtures.get_page_feature_snapshot cagrilmamali")
@@ -318,7 +336,9 @@ async def test_process_run_fails_when_page_analysis_features_missing(
     session: AsyncSession, organization: Organization
 ):
     analysis = await _make_page_analysis(session, organization, features=None)
-    run = await _make_run(session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING)
+    run = await _make_run(
+        session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING
+    )
 
     await simulation_worker.process_run(session, run)
 
@@ -333,7 +353,9 @@ async def test_process_run_fails_when_page_analysis_schema_invalid(
     bad_features = _dom_features()
     bad_features["controls"] = "not-a-dict"
     analysis = await _make_page_analysis(session, organization, features=bad_features)
-    run = await _make_run(session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING)
+    run = await _make_run(
+        session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING
+    )
 
     await simulation_worker.process_run(session, run)
 
@@ -346,7 +368,9 @@ async def test_process_run_fails_when_page_analysis_belongs_to_other_org(
 ):
     other_org = await make_organization(name="Baska Organizasyon")
     analysis = await _make_page_analysis(session, other_org, features=_dom_features())
-    run = await _make_run(session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING)
+    run = await _make_run(
+        session, organization, page_analysis_id=analysis.id, status=SimulationStatus.RUNNING
+    )
 
     await simulation_worker.process_run(session, run)
 
@@ -381,11 +405,17 @@ async def test_process_run_dom_result_differs_for_different_features(
     )
 
     run_rich = await _make_run(
-        session, organization, url="https://example.com/x", page_analysis_id=analysis_rich.id,
+        session,
+        organization,
+        url="https://example.com/x",
+        page_analysis_id=analysis_rich.id,
         status=SimulationStatus.RUNNING,
     )
     run_poor = await _make_run(
-        session, organization, url="https://example.com/x", page_analysis_id=analysis_poor.id,
+        session,
+        organization,
+        url="https://example.com/x",
+        page_analysis_id=analysis_poor.id,
         status=SimulationStatus.RUNNING,
     )
 

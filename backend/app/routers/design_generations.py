@@ -10,7 +10,6 @@ from app.db import get_session
 from app.dependencies import Principal, get_organization_id, require_roles
 from app.models.design_assets import DesignAsset
 from app.models.design_generation import DesignGenerationJob
-from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services.exceptions import (
     DesignGenerationJobNotFoundError,

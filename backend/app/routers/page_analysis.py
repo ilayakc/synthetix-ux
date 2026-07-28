@@ -84,7 +84,9 @@ class AnalysisResponse(BaseModel):
 
 def _to_response(analysis: PageAnalysis) -> AnalysisResponse:
     design_asset_still_linked = (
-        analysis.design_asset_id is not None if analysis.source_kind == PageAnalysisSourceKind.DESIGN_ASSET else None
+        analysis.design_asset_id is not None
+        if analysis.source_kind == PageAnalysisSourceKind.DESIGN_ASSET
+        else None
     )
     return AnalysisResponse(
         id=analysis.id,
@@ -151,7 +153,9 @@ async def create_analysis(
         # tek bir 404 (bkz. app.routers.design_assets ile ayni konvansiyon).
         raise HTTPException(status_code=404, detail="Tasarim gorseli bulunamadi") from exc
     except DesignAssetUnavailableError as exc:
-        raise HTTPException(status_code=422, detail="Tasarim gorseli artik kullanilabilir durumda degil") from exc
+        raise HTTPException(
+            status_code=422, detail="Tasarim gorseli artik kullanilabilir durumda degil"
+        ) from exc
 
     await session.commit()
     await session.refresh(analysis)

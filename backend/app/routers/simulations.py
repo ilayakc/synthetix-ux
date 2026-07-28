@@ -2,11 +2,9 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from pydantic import Field
 
 from app.db import get_session
 from app.dependencies import Principal, get_organization_id, require_roles

@@ -883,7 +883,9 @@ async def _build_detail_response(
             session, organization_id, sibling_report.id, sibling_run, sibling_run.result
         )
         ab_comparison["sibling_heatmap"] = sibling_heatmap.model_dump(mode="json")
-        sibling_cta_overlay = await _build_cta_overlay(session, organization_id, sibling_report.id, sibling_run)
+        sibling_cta_overlay = await _build_cta_overlay(
+            session, organization_id, sibling_report.id, sibling_run
+        )
         ab_comparison["sibling_cta_overlay"] = sibling_cta_overlay.model_dump(mode="json")
 
         # Byte-duzeyinde ayni snapshot karsilastirmasi uyarisi (bkz. plan §8):
@@ -1031,9 +1033,7 @@ async def get_report_heatmap_screenshot(
     await session.commit()
 
     if analysis is None or analysis.screenshot_data is None:
-        raise HTTPException(
-            status_code=404, detail="Ekran goruntusu mevcut degil veya saklama suresi doldu"
-        )
+        raise HTTPException(status_code=404, detail="Ekran goruntusu mevcut degil veya saklama suresi doldu")
 
     return Response(content=analysis.screenshot_data, media_type="image/png")
 

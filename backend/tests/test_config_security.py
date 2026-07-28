@@ -52,9 +52,7 @@ def test_production_dev_default_jwt_secret_is_rejected():
 
 
 def test_production_default_postgres_password_is_rejected():
-    cfg = _make_settings(
-        database_url="postgresql+asyncpg://synthetix:devpassword@db:5432/synthetix_ux"
-    )
+    cfg = _make_settings(database_url="postgresql+asyncpg://synthetix:devpassword@db:5432/synthetix_ux")
     with pytest.raises(ConfigSecurityError) as exc_info:
         validate_production_secrets(cfg)
     assert "DATABASE_URL" in str(exc_info.value) or "POSTGRES_PASSWORD" in str(exc_info.value)

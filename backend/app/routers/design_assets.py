@@ -81,9 +81,7 @@ async def _read_upload_within_limit(file: UploadFile, max_bytes: int) -> bytes:
                 break
             total += len(chunk)
             if total > max_bytes:
-                raise ImageTooLargeError(
-                    f"Dosya boyutu izin verilen sinirin ({max_bytes} bayt) uzerinde"
-                )
+                raise ImageTooLargeError(f"Dosya boyutu izin verilen sinirin ({max_bytes} bayt) uzerinde")
             chunks.append(chunk)
     finally:
         await file.close()
@@ -108,7 +106,9 @@ async def upload_design_asset(
     """
 
     if label is not None and len(label) > MAX_UPLOAD_LABEL_LENGTH:
-        raise HTTPException(status_code=422, detail=f"'label' en fazla {MAX_UPLOAD_LABEL_LENGTH} karakter olabilir")
+        raise HTTPException(
+            status_code=422, detail=f"'label' en fazla {MAX_UPLOAD_LABEL_LENGTH} karakter olabilir"
+        )
 
     try:
         raw_bytes = await _read_upload_within_limit(file, settings.design_asset_max_bytes)

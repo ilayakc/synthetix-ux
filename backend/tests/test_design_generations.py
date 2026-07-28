@@ -136,8 +136,7 @@ async def test_remote_provider_generate_is_not_implemented() -> None:
 
 
 async def test_create_job_requires_authorization_confirmed(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -155,8 +154,7 @@ async def test_create_job_requires_authorization_confirmed(
 
 
 async def test_create_job_rejects_empty_prompt(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -173,8 +171,7 @@ async def test_create_job_rejects_empty_prompt(
 
 
 async def test_create_job_rejects_prompt_over_max_length(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.config import settings
 
@@ -194,8 +191,7 @@ async def test_create_job_rejects_prompt_over_max_length(
 
 
 async def test_create_job_rejects_missing_source_asset(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
 
@@ -211,8 +207,7 @@ async def test_create_job_rejects_missing_source_asset(
 
 
 async def test_create_job_rejects_expired_source_asset(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -231,8 +226,7 @@ async def test_create_job_rejects_expired_source_asset(
 
 
 async def test_create_job_rejects_deleted_source_asset(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -251,8 +245,11 @@ async def test_create_job_rejects_deleted_source_asset(
 
 @pytest.mark.security
 async def test_create_job_rejects_other_tenant_source_asset_without_leaking(
-    session: AsyncSession, organization: Organization,
-    make_user, make_organization, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession,
+    organization: Organization,
+    make_user,
+    make_organization,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _enable_provider(monkeypatch)
     other_org = await make_organization()
@@ -271,8 +268,7 @@ async def test_create_job_rejects_other_tenant_source_asset_without_leaking(
 
 
 async def test_create_job_succeeds_and_queues(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -295,8 +291,7 @@ async def test_create_job_succeeds_and_queues(
 
 
 async def test_job_lifecycle_succeeds_with_mock_provider(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -331,8 +326,7 @@ async def test_job_lifecycle_succeeds_with_mock_provider(
 
 
 async def test_job_fails_when_provider_raises(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -357,8 +351,7 @@ async def test_job_fails_when_provider_raises(
 
 
 async def test_job_fails_when_provider_returns_invalid_image(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -383,8 +376,7 @@ async def test_job_fails_when_provider_returns_invalid_image(
 
 
 async def test_job_fails_when_provider_returns_svg(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -408,8 +400,7 @@ async def test_job_fails_when_provider_returns_svg(
 
 
 async def test_job_fails_when_provider_output_too_large(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.config import settings
 
@@ -435,8 +426,7 @@ async def test_job_fails_when_provider_output_too_large(
 
 
 async def test_job_fails_when_source_asset_expired_between_creation_and_processing(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -463,8 +453,11 @@ async def test_job_fails_when_source_asset_expired_between_creation_and_processi
 
 @pytest.mark.security
 async def test_get_owned_job_tenant_isolation(
-    session: AsyncSession, organization: Organization,
-    make_user, make_organization, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession,
+    organization: Organization,
+    make_user,
+    make_organization,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -490,8 +483,7 @@ async def test_get_owned_job_tenant_isolation(
 
 
 async def test_reap_stale_running_requeues_under_attempt_limit(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -508,16 +500,13 @@ async def test_reap_stale_running_requeues_under_attempt_limit(
     job.updated_at = datetime.now(UTC) - timedelta(seconds=999)
     await session.flush()
 
-    reaped = await design_generation_service.reap_stale_running(
-        session, timeout_seconds=10, max_attempts=3
-    )
+    reaped = await design_generation_service.reap_stale_running(session, timeout_seconds=10, max_attempts=3)
     assert reaped == 1
     assert job.status == DesignGenerationStatus.QUEUED
 
 
 async def test_reap_stale_running_fails_job_at_attempt_limit(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -535,17 +524,14 @@ async def test_reap_stale_running_fails_job_at_attempt_limit(
     job.updated_at = datetime.now(UTC) - timedelta(seconds=999)
     await session.flush()
 
-    reaped = await design_generation_service.reap_stale_running(
-        session, timeout_seconds=10, max_attempts=3
-    )
+    reaped = await design_generation_service.reap_stale_running(session, timeout_seconds=10, max_attempts=3)
     assert reaped == 1
     assert job.status == DesignGenerationStatus.FAILED
     assert job.error_code == "retry_limit_exceeded"
 
 
 async def test_cancel_job_from_queued_succeeds(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -564,8 +550,7 @@ async def test_cancel_job_from_queued_succeeds(
 
 
 async def test_cancel_job_from_running_is_rejected(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -585,8 +570,7 @@ async def test_cancel_job_from_running_is_rejected(
 
 
 async def test_delete_job_does_not_delete_result_asset(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)
@@ -616,8 +600,7 @@ async def test_delete_job_does_not_delete_result_asset(
 
 
 async def test_purge_expired_jobs_clears_prompt_but_keeps_row(
-    session: AsyncSession, organization: Organization,
-    make_user, monkeypatch: pytest.MonkeyPatch
+    session: AsyncSession, organization: Organization, make_user, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _enable_provider(monkeypatch)
     source_asset = await _make_source_asset(session, organization)

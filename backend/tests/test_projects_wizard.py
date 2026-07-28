@@ -647,7 +647,10 @@ def test_wizard_screenshot_source_with_other_tenant_asset_is_rejected_without_le
     assert response.status_code == 400
     # Mesaj, asset'in "baska bir organizasyona ait" oldugunu SIZDIRMAMALI;
     # "yok" durumuyla aynen ayni genel mesaj kullanilmalidir.
-    assert "silinmis" in response.json()["detail"].lower() or "kullanilamiyor" in response.json()["detail"].lower()
+    assert (
+        "silinmis" in response.json()["detail"].lower()
+        or "kullanilamiyor" in response.json()["detail"].lower()
+    )
     assert asset["id"] not in response.json()["detail"]
 
 
@@ -1245,9 +1248,7 @@ def test_wizard_cta_annotation_manual_box_is_saved(client):
         client, draft["id"], {"current_source_type": "screenshot", "current_design_asset_id": asset["id"]}
     )
 
-    result = _patch_draft(
-        client, draft["id"], {"current_cta_annotation": _cta_annotation(asset["id"])}
-    )
+    result = _patch_draft(client, draft["id"], {"current_cta_annotation": _cta_annotation(asset["id"])})
     saved = result["payload"]["current_cta_annotation"]
     assert saved["design_asset_id"] == asset["id"]
     assert saved["selection_source"] == "manual_box"

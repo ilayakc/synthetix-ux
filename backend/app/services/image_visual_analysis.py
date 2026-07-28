@@ -181,9 +181,7 @@ def _find_candidates(bgr: np.ndarray, gray: np.ndarray, edges: np.ndarray) -> li
         center_y = y + h / 2.0
         position_component = max(0.0, 1.0 - (center_y / work_h))
 
-        heuristic_score = round(
-            0.4 * size_component + 0.3 * position_component + 0.3 * contrast_component, 4
-        )
+        heuristic_score = round(0.4 * size_component + 0.3 * position_component + 0.3 * contrast_component, 4)
         if not math.isfinite(heuristic_score):
             continue
 

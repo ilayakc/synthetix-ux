@@ -138,7 +138,10 @@ def test_availability_reports_disabled_by_default(client: TestClient):
     body = response.json()
     assert body["available"] is False
     assert body["disabled_reason"]
-    assert "sağlayıcı" in body["disabled_reason"].lower() or "yapılandırılmadı" in body["disabled_reason"].lower()
+    assert (
+        "sağlayıcı" in body["disabled_reason"].lower()
+        or "yapılandırılmadı" in body["disabled_reason"].lower()
+    )
 
 
 def test_create_generation_returns_503_and_creates_nothing_when_provider_off(client: TestClient):
@@ -273,7 +276,9 @@ def test_cancel_queued_generation_succeeds(client: TestClient, monkeypatch: pyte
     assert response.json()["status"] == "cancelled"
 
 
-def test_delete_generation_succeeds_and_keeps_accepted_asset(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+def test_delete_generation_succeeds_and_keeps_accepted_asset(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     _enable_provider_settings(monkeypatch)
     _register(client)
     asset = _upload_design_asset(client)
@@ -312,7 +317,9 @@ def _ab_base_payload(project_id: str) -> dict:
     }
 
 
-def test_wizard_accepts_succeeded_ai_generation_as_design_b(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+def test_wizard_accepts_succeeded_ai_generation_as_design_b(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     _enable_provider_settings(monkeypatch)
     _register(client)
     project = _create_project(client)
@@ -353,7 +360,11 @@ def test_wizard_rejects_ai_generation_not_yet_succeeded(client: TestClient, monk
 
     job = client.post(
         "/api/design-generations",
-        json={"source_asset_id": source_asset["id"], "prompt": "Baslik kisalt", "authorization_confirmed": True},
+        json={
+            "source_asset_id": source_asset["id"],
+            "prompt": "Baslik kisalt",
+            "authorization_confirmed": True,
+        },
         headers=_csrf_headers(client),
     ).json()
     # Is kasitli olarak ISLENMEDEN (hala 'queued') draft'a baglanmaya calisilir.
@@ -366,7 +377,9 @@ def test_wizard_rejects_ai_generation_not_yet_succeeded(client: TestClient, monk
     assert response.status_code == 400
 
 
-def test_wizard_rejects_mismatched_asset_and_generation_id(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+def test_wizard_rejects_mismatched_asset_and_generation_id(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     _enable_provider_settings(monkeypatch)
     _register(client)
     project = _create_project(client)
@@ -376,7 +389,11 @@ def test_wizard_rejects_mismatched_asset_and_generation_id(client: TestClient, m
 
     job = client.post(
         "/api/design-generations",
-        json={"source_asset_id": source_asset["id"], "prompt": "Baslik kisalt", "authorization_confirmed": True},
+        json={
+            "source_asset_id": source_asset["id"],
+            "prompt": "Baslik kisalt",
+            "authorization_confirmed": True,
+        },
         headers=_csrf_headers(client),
     ).json()
     anyio.run(_enable_provider_and_process_job, job["id"])
@@ -415,7 +432,11 @@ def test_wizard_rejecting_ai_result_keeps_existing_manual_design_b_source(
     # Kullanici AI ile yeniden uretim dener (basarisiz olur) ama draft'a HIC dokunmaz.
     job = client.post(
         "/api/design-generations",
-        json={"source_asset_id": source_asset["id"], "prompt": "Baslik kisalt", "authorization_confirmed": True},
+        json={
+            "source_asset_id": source_asset["id"],
+            "prompt": "Baslik kisalt",
+            "authorization_confirmed": True,
+        },
         headers=_csrf_headers(client),
     ).json()
     anyio.run(_enable_provider_and_process_job, job["id"])
@@ -433,20 +454,28 @@ def test_wizard_regenerated_unaccepted_result_does_not_become_active_source(
 
     _enable_provider_settings(monkeypatch)
     _register(client)
-    project = _create_project(client)
+    _create_project(client)
     draft = _create_draft(client)
     source_asset = _upload_design_asset(client)
 
     job1 = client.post(
         "/api/design-generations",
-        json={"source_asset_id": source_asset["id"], "prompt": "Baslik kisalt", "authorization_confirmed": True},
+        json={
+            "source_asset_id": source_asset["id"],
+            "prompt": "Baslik kisalt",
+            "authorization_confirmed": True,
+        },
         headers=_csrf_headers(client),
     ).json()
     anyio.run(_enable_provider_and_process_job, job1["id"])
 
     job2 = client.post(
         "/api/design-generations",
-        json={"source_asset_id": source_asset["id"], "prompt": "Kartlari genislet", "authorization_confirmed": True},
+        json={
+            "source_asset_id": source_asset["id"],
+            "prompt": "Kartlari genislet",
+            "authorization_confirmed": True,
+        },
         headers=_csrf_headers(client),
     ).json()
     anyio.run(_enable_provider_and_process_job, job2["id"])
@@ -459,7 +488,9 @@ def test_wizard_regenerated_unaccepted_result_does_not_become_active_source(
     assert reloaded["payload"].get("new_design_asset_id") is None
 
 
-def test_launch_succeeds_when_ai_generated_source_accepted(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+def test_launch_succeeds_when_ai_generated_source_accepted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     """Paket 4 Final: kabul edilmis (SUCCEEDED, dogru `result_asset_id`
     eslesen) bir AI uretim sonucuyla launch artik engellenmez - saglayici
     burada mock'lansa da (`_enable_provider_and_process_job`), gercek
@@ -474,7 +505,11 @@ def test_launch_succeeds_when_ai_generated_source_accepted(client: TestClient, m
 
     job = client.post(
         "/api/design-generations",
-        json={"source_asset_id": source_asset["id"], "prompt": "Baslik kisalt", "authorization_confirmed": True},
+        json={
+            "source_asset_id": source_asset["id"],
+            "prompt": "Baslik kisalt",
+            "authorization_confirmed": True,
+        },
         headers=_csrf_headers(client),
     ).json()
     anyio.run(_enable_provider_and_process_job, job["id"])

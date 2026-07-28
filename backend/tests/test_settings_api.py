@@ -59,7 +59,7 @@ def _as_role(client: TestClient, session: dict, role: str) -> None:
 
 
 def test_get_and_patch_own_preferences(client):
-    session = _register(client)
+    _register(client)
 
     response = client.get("/api/settings/me")
     assert response.status_code == 200, response.text
@@ -85,7 +85,7 @@ def test_get_and_patch_own_preferences(client):
 
 
 def test_owner_can_update_company_name_and_currency(client):
-    session = _register(client)
+    _register(client)
 
     response = client.patch(
         "/api/settings/organization",

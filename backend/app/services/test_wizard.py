@@ -79,9 +79,7 @@ AI_GENERATION_UNAVAILABLE_MESSAGE = (
     "AI ile uretilen tasarim taslagi kullanilamiyor (bulunamadi, henuz tamamlanmamis veya "
     "baska bir organizasyona ait olabilir); lutfen sonucu yeniden kontrol edin."
 )
-AI_GENERATION_ASSET_MISMATCH_MESSAGE = (
-    "new_design_asset_id, kabul edilen AI uretim sonucuyla eslesmiyor."
-)
+AI_GENERATION_ASSET_MISMATCH_MESSAGE = "new_design_asset_id, kabul edilen AI uretim sonucuyla eslesmiyor."
 
 # --- Kullanici CTA onayi (Paket 4C+4D) ---------------------------------------
 #
@@ -101,7 +99,8 @@ CTA_ANNOTATION_FIELD_TO_ASSET_FIELD = {
     "new_cta_annotation": "new_design_asset_id",
 }
 _SLOT_ASSET_FIELD_TO_ANNOTATION_FIELD = {
-    asset_field: annotation_field for annotation_field, asset_field in CTA_ANNOTATION_FIELD_TO_ASSET_FIELD.items()
+    asset_field: annotation_field
+    for annotation_field, asset_field in CTA_ANNOTATION_FIELD_TO_ASSET_FIELD.items()
 }
 
 _CTA_ANNOTATION_MIN_AREA_FRACTION = 0.0005
@@ -299,7 +298,7 @@ def _validate_cta_annotation_shape(value: object, *, field: str) -> None:
     numeric_box: dict[str, float] = {}
     for key in ("x", "y", "w", "h"):
         raw = box.get(key)
-        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
             raise DraftValidationError(f"'{field}.box.{key}' sayisal olmalidir")
         number = float(raw)
         if not math.isfinite(number):
@@ -755,7 +754,9 @@ def _variant_specs(payload: dict) -> list[tuple[str, dict]]:
     return [("Ana Senaryo", _current_side_spec(payload, role="primary"))]
 
 
-async def _revalidate_launch_sources(session: AsyncSession, organization_id: uuid.UUID, payload: dict) -> None:
+async def _revalidate_launch_sources(
+    session: AsyncSession, organization_id: uuid.UUID, payload: dict
+) -> None:
     """Launch aninda, PATCH sirasinda zaten yapilan sahiplik/kullanilabilirlik
     kontrollerini (bkz. app.routers.test_wizard.patch_draft) AYNEN tekrar
     calistirir - son PATCH ile launch arasinda asset silinmis/expire olmus
@@ -774,7 +775,10 @@ async def _revalidate_launch_sources(session: AsyncSession, organization_id: uui
         if source_type in (SOURCE_TYPE_SCREENSHOT, SOURCE_TYPE_AI_GENERATED) and asset_id_raw:
             await validate_screenshot_asset_ownership(session, organization_id, uuid.UUID(str(asset_id_raw)))
 
-    if payload.get("test_type") == AB_COMPARISON and effective_new_source_type(payload) == SOURCE_TYPE_AI_GENERATED:
+    if (
+        payload.get("test_type") == AB_COMPARISON
+        and effective_new_source_type(payload) == SOURCE_TYPE_AI_GENERATED
+    ):
         new_asset_id_raw = payload.get("new_design_asset_id")
         new_generation_id_raw = payload.get("new_ai_generation_id")
         if not (new_asset_id_raw and new_generation_id_raw):

@@ -253,7 +253,9 @@ async def create_generation_job(
     return job
 
 
-async def get_owned_job(session: AsyncSession, organization_id: uuid.UUID, job_id: uuid.UUID) -> DesignGenerationJob:
+async def get_owned_job(
+    session: AsyncSession, organization_id: uuid.UUID, job_id: uuid.UUID
+) -> DesignGenerationJob:
     result = await session.execute(select(DesignGenerationJob).where(DesignGenerationJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None or job.organization_id != organization_id:
@@ -261,7 +263,9 @@ async def get_owned_job(session: AsyncSession, organization_id: uuid.UUID, job_i
     return job
 
 
-async def cancel_job(session: AsyncSession, organization_id: uuid.UUID, job_id: uuid.UUID) -> DesignGenerationJob:
+async def cancel_job(
+    session: AsyncSession, organization_id: uuid.UUID, job_id: uuid.UUID
+) -> DesignGenerationJob:
     """Yalnizca henuz islenmeye baslanmamis (queued) bir is iptal edilebilir.
 
     Zaten calismakta olan (running) bir uzak cagriyi yari yolda iptal etmek
@@ -297,7 +301,9 @@ async def delete_job(session: AsyncSession, organization_id: uuid.UUID, job_id: 
 # --- Is akisi (queue -> process -> reap -> purge) ------------------------------------
 
 
-async def claim_next_queued(session: AsyncSession, limit: int = CLAIM_BATCH_SIZE) -> list[DesignGenerationJob]:
+async def claim_next_queued(
+    session: AsyncSession, limit: int = CLAIM_BATCH_SIZE
+) -> list[DesignGenerationJob]:
     result = await session.execute(
         select(DesignGenerationJob)
         .where(DesignGenerationJob.status == DesignGenerationStatus.QUEUED)
@@ -397,7 +403,10 @@ async def reap_stale_running(
     cutoff = _now() - timedelta(seconds=timeout_seconds)
     result = await session.execute(
         select(DesignGenerationJob)
-        .where(DesignGenerationJob.status == DesignGenerationStatus.RUNNING, DesignGenerationJob.updated_at < cutoff)
+        .where(
+            DesignGenerationJob.status == DesignGenerationStatus.RUNNING,
+            DesignGenerationJob.updated_at < cutoff,
+        )
         .with_for_update(skip_locked=True)
     )
     stale = list(result.scalars().all())

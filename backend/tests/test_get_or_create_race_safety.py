@@ -28,7 +28,8 @@ from sqlalchemy.pool import NullPool
 from app.models.billing import Entitlement
 from app.models.settings import OrganizationSettings
 from app.models.tenancy import Organization
-from app.services import entitlements, settings as settings_service
+from app.services import entitlements
+from app.services import settings as settings_service
 from tests.conftest import TEST_DATABASE_URL
 
 pytestmark = pytest.mark.integration
@@ -77,10 +78,14 @@ async def test_get_or_create_organization_settings_survives_concurrent_first_acc
 
     async with session_factory() as verify:
         rows = (
-            await verify.execute(
-                select(OrganizationSettings).where(OrganizationSettings.organization_id == org_id)
+            (
+                await verify.execute(
+                    select(OrganizationSettings).where(OrganizationSettings.organization_id == org_id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
 
     async with session_factory() as cleanup:
@@ -116,12 +121,16 @@ async def test_get_or_create_entitlement_survives_concurrent_first_access(sessio
 
     async with session_factory() as verify:
         rows = (
-            await verify.execute(
-                select(Entitlement).where(
-                    Entitlement.organization_id == org_id, Entitlement.feature_key == feature_key
+            (
+                await verify.execute(
+                    select(Entitlement).where(
+                        Entitlement.organization_id == org_id, Entitlement.feature_key == feature_key
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
 
     async with session_factory() as cleanup:

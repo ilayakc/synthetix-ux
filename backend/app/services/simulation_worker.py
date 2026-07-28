@@ -58,12 +58,6 @@ from app.models.reports import Report
 from app.models.simulations import SimulationRun, SimulationStatus
 from app.services import chip_ledger, device_network_analysis, simulation_progress
 from app.services import entitlements as entitlements_service
-from app.services.page_analysis_adapter import (
-    DomAdaptedInput,
-    PageAnalysisFeatureError,
-    adapt_page_analysis,
-    adapt_visual_page_analysis,
-)
 from app.services.exceptions import (
     ChipReservationNotFoundError,
     EntitlementNotFoundError,
@@ -73,6 +67,12 @@ from app.services.exceptions import (
     ModuleProcessingError,
     PageAnalysisDependencyError,
     SimulationRunNotFoundError,
+)
+from app.services.page_analysis_adapter import (
+    DomAdaptedInput,
+    PageAnalysisFeatureError,
+    adapt_page_analysis,
+    adapt_visual_page_analysis,
 )
 
 logger = logging.getLogger("synthetix.simulation_worker")
@@ -123,11 +123,7 @@ def classify_run_failure(run: SimulationRun) -> tuple[bool, str | None]:
     # bulunmayabilir) burada TEK BASINA belirleyici degildir. Yalnizca `url`
     # BOS/None VE kaynak turu acikca screenshot/AI ise (statik gorsel -
     # yapisal olarak duzelemez) non-retryable isaretlenir.
-    if (
-        "network_device_test" in modules
-        and not url
-        and source_type in ("screenshot", "ai_generated")
-    ):
+    if "network_device_test" in modules and not url and source_type in ("screenshot", "ai_generated"):
         return False, NETWORK_DEVICE_TEST_REQUIRES_URL_CODE
 
     return True, None
@@ -324,9 +320,7 @@ async def _resolve_launch_group(session: AsyncSession, run: SimulationRun) -> No
     if group_key is not None:
         await session.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(str(group_key), 0))))
         result = await session.execute(
-            select(SimulationRun)
-            .where(SimulationRun.launch_run_id == group_key)
-            .order_by(SimulationRun.id)
+            select(SimulationRun).where(SimulationRun.launch_run_id == group_key).order_by(SimulationRun.id)
         )
         group_runs = list(result.scalars().all())
     else:
@@ -412,11 +406,9 @@ async def _load_page_feature_input(session: AsyncSession, run: SimulationRun) ->
             user_confirmed_cta = run.input_snapshot.get("user_confirmed_cta")
             return adapt_visual_page_analysis(analysis, role=role, user_confirmed_cta=user_confirmed_cta)
         return adapt_page_analysis(analysis, role=role)
-    except PageAnalysisFeatureError:
-        logger.warning(
-            "PageAnalysis %s icin features semasi gecersiz (run_id=%s)", analysis.id, run.id
-        )
-        raise PageAnalysisDependencyError(_PAGE_ANALYSIS_FAILED_MESSAGE)
+    except PageAnalysisFeatureError as exc:
+        logger.warning("PageAnalysis %s icin features semasi gecersiz (run_id=%s)", analysis.id, run.id)
+        raise PageAnalysisDependencyError(_PAGE_ANALYSIS_FAILED_MESSAGE) from exc
 
 
 async def _process_selected_modules(run: SimulationRun, dom_input: DomAdaptedInput | None) -> dict:

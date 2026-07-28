@@ -39,9 +39,11 @@ async def add_chips(email: str, amount: int, org_slug: str | None) -> None:
             logger.error("kullanici bulunamadi: '%s'", email)
             sys.exit(1)
 
-        membership_query = select(Membership, Organization).join(
-            Organization, Membership.organization_id == Organization.id
-        ).where(Membership.user_id == user.id)
+        membership_query = (
+            select(Membership, Organization)
+            .join(Organization, Membership.organization_id == Organization.id)
+            .where(Membership.user_id == user.id)
+        )
         if org_slug is not None:
             membership_query = membership_query.where(Organization.slug == org_slug)
         rows = (await session.execute(membership_query)).all()

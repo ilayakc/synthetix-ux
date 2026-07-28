@@ -125,7 +125,10 @@ def test_upload_rejects_svg_disguised_as_png(client: TestClient):
         files={"file": ("fake.png", svg_payload, "image/png")},
     )
     assert response.status_code == 422
-    assert "gecerli bir" in response.json()["detail"].lower() or "desteklenmeyen" in response.json()["detail"].lower()
+    assert (
+        "gecerli bir" in response.json()["detail"].lower()
+        or "desteklenmeyen" in response.json()["detail"].lower()
+    )
 
 
 @pytest.mark.security

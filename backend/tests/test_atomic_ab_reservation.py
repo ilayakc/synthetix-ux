@@ -318,7 +318,9 @@ async def test_ab_a_success_b_timeout_reaped_releases_fully(
     await session.execute(
         SimulationRun.__table__.update()
         .where(SimulationRun.id == run_b.id)
-        .values(updated_at=__import__("datetime").datetime(2000, 1, 1, tzinfo=__import__("datetime").timezone.utc))
+        .values(
+            updated_at=__import__("datetime").datetime(2000, 1, 1, tzinfo=__import__("datetime").timezone.utc)
+        )
     )
 
     reaped = await simulation_worker.reap_stale_running_runs(session, timeout_seconds=1)
@@ -448,7 +450,9 @@ async def test_ab_entitlement_both_success_consumes_once(session: AsyncSession, 
     )
 
     await _finalize(session, run_a, SimulationStatus.SUCCEEDED)
-    entitlement = await entitlements.get_or_create_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST)
+    entitlement = await entitlements.get_or_create_entitlement(
+        session, organization.id, FEATURE_BASIC_UX_TEST
+    )
     assert entitlement.status == EntitlementStatus.RESERVED  # B hala terminal degil
 
     await _finalize(session, run_b, SimulationStatus.SUCCEEDED)
@@ -473,7 +477,9 @@ async def test_ab_entitlement_one_failure_releases_and_available_again(
     await _finalize(session, run_a, SimulationStatus.SUCCEEDED)
     await _finalize(session, run_b, SimulationStatus.FAILED)
 
-    entitlement = await entitlements.get_or_create_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST)
+    entitlement = await entitlements.get_or_create_entitlement(
+        session, organization.id, FEATURE_BASIC_UX_TEST
+    )
     assert entitlement.status == EntitlementStatus.AVAILABLE
     assert entitlement.reserved_run_id is None
 
@@ -495,7 +501,9 @@ async def test_entitlement_resolution_replay_is_idempotent(session: AsyncSession
 
     # Ikinci cagri hata firlatmamali ve durumu degistirmemeli.
     await simulation_worker._resolve_launch_group(session, run_a)
-    entitlement = await entitlements.get_or_create_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST)
+    entitlement = await entitlements.get_or_create_entitlement(
+        session, organization.id, FEATURE_BASIC_UX_TEST
+    )
     assert entitlement.status == EntitlementStatus.CONSUMED
 
 

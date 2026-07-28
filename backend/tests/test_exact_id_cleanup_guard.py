@@ -61,7 +61,9 @@ async def _make_disposable_org(session: AsyncSession, *, name: str, email: str) 
 async def test_delete_disposable_organization_succeeds_with_exact_matching_identity(
     session: AsyncSession,
 ):
-    org, user = await _make_disposable_org(session, name="Smoke Org exact-test", email="smoke-exact@example.com")
+    org, user = await _make_disposable_org(
+        session, name="Smoke Org exact-test", email="smoke-exact@example.com"
+    )
     session.add(Project(organization_id=org.id, name="Smoke Project"))
     await session.flush()
 
@@ -78,7 +80,9 @@ async def test_delete_disposable_organization_succeeds_with_exact_matching_ident
     assert counts.projects == 1
     assert counts.memberships == 1
 
-    remaining = (await session.execute(select(Organization).where(Organization.id == org.id))).scalar_one_or_none()
+    remaining = (
+        await session.execute(select(Organization).where(Organization.id == org.id))
+    ).scalar_one_or_none()
     assert remaining is None
 
 
@@ -93,7 +97,9 @@ async def test_delete_disposable_organization_rejects_name_mismatch(session: Asy
             expected_slug=org.slug,
         )
 
-    still_there = (await session.execute(select(Organization).where(Organization.id == org.id))).scalar_one_or_none()
+    still_there = (
+        await session.execute(select(Organization).where(Organization.id == org.id))
+    ).scalar_one_or_none()
     assert still_there is not None
 
 
@@ -108,7 +114,9 @@ async def test_delete_disposable_organization_rejects_slug_mismatch(session: Asy
             expected_slug="totally-wrong-slug",
         )
 
-    still_there = (await session.execute(select(Organization).where(Organization.id == org.id))).scalar_one_or_none()
+    still_there = (
+        await session.execute(select(Organization).where(Organization.id == org.id))
+    ).scalar_one_or_none()
     assert still_there is not None
 
 
@@ -124,7 +132,9 @@ async def test_delete_disposable_organization_rejects_owner_email_mismatch(sessi
             expected_owner_email="not-the-real-owner@example.com",
         )
 
-    still_there = (await session.execute(select(Organization).where(Organization.id == org.id))).scalar_one_or_none()
+    still_there = (
+        await session.execute(select(Organization).where(Organization.id == org.id))
+    ).scalar_one_or_none()
     assert still_there is not None
 
 
@@ -142,7 +152,9 @@ async def test_delete_disposable_organization_rejects_created_at_mismatch(sessio
             expected_created_at=datetime(2000, 1, 1, tzinfo=UTC),
         )
 
-    still_there = (await session.execute(select(Organization).where(Organization.id == org.id))).scalar_one_or_none()
+    still_there = (
+        await session.execute(select(Organization).where(Organization.id == org.id))
+    ).scalar_one_or_none()
     assert still_there is not None
 
 
@@ -151,7 +163,9 @@ async def test_delete_disposable_organization_unrelated_organizations_untouched(
     ile silinirken, ADI/PREFIX'I benzer BASKA hicbir organizasyon etkilenmez."""
 
     target, _ = await _make_disposable_org(session, name="Smoke Org target", email="smoke-target@example.com")
-    sibling, _ = await _make_disposable_org(session, name="Smoke Org target 2", email="smoke-sibling@example.com")
+    sibling, _ = await _make_disposable_org(
+        session, name="Smoke Org target 2", email="smoke-sibling@example.com"
+    )
     unrelated, _ = await _make_disposable_org(session, name="Smoke Org", email="smoke-unrelated@example.com")
 
     await tenant_cleanup.delete_disposable_organization_by_exact_id(
@@ -162,17 +176,16 @@ async def test_delete_disposable_organization_unrelated_organizations_untouched(
     )
     await session.flush()
 
-    remaining_ids = {
-        row[0]
-        for row in (await session.execute(select(Organization.id))).all()
-    }
+    remaining_ids = {row[0] for row in (await session.execute(select(Organization.id))).all()}
     assert target.id not in remaining_ids
     assert sibling.id in remaining_ids
     assert unrelated.id in remaining_ids
 
 
 async def test_count_related_rows_is_read_only_and_accurate(session: AsyncSession):
-    org, _user = await _make_disposable_org(session, name="Smoke Org counted", email="smoke-count@example.com")
+    org, _user = await _make_disposable_org(
+        session, name="Smoke Org counted", email="smoke-count@example.com"
+    )
     session.add(Project(organization_id=org.id, name="P1"))
     session.add(Project(organization_id=org.id, name="P2"))
     await session.flush()
@@ -181,5 +194,7 @@ async def test_count_related_rows_is_read_only_and_accurate(session: AsyncSessio
     assert counts.projects == 2
     assert counts.total() >= 2
 
-    still_there = (await session.execute(select(Organization).where(Organization.id == org.id))).scalar_one_or_none()
+    still_there = (
+        await session.execute(select(Organization).where(Organization.id == org.id))
+    ).scalar_one_or_none()
     assert still_there is not None

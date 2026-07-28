@@ -535,9 +535,7 @@ async def test_heatmap_resolves_via_page_analysis_fk_even_when_url_does_not_matc
     bulunur; eski URL string eslestirmesi burada YANLIS (baska bir)
     PageAnalysis'i bulurdu ya da hic bulamazdi."""
 
-    linked_analysis = await _make_page_analysis(
-        session, organization, url="https://fk-linked.example.com/"
-    )
+    linked_analysis = await _make_page_analysis(session, organization, url="https://fk-linked.example.com/")
     # Ayni organizasyonda, run'in KENDI input_snapshot URL'siyle eslesen
     # BASKA (yanlis) bir PageAnalysis de bilerek olusturulur - eski string
     # eslestirme yolu bunu (yanlis capture'i) bulurdu.
@@ -820,9 +818,7 @@ async def test_ab_comparison_present_for_two_variant_definition(
     assert "same_snapshot_sha256" in detail.ab_comparison
 
 
-async def test_ab_comparison_flags_identical_snapshot_hash(
-    session: AsyncSession, organization: Organization
-):
+async def test_ab_comparison_flags_identical_snapshot_hash(session: AsyncSession, organization: Organization):
     """Iki taraf da AYNI PageAnalysis capture'ina (dolayisiyla ayni
     content_sha256'ya) baglanmissa, bu acikca isaretlenir - byte-duzeyinde
     ayni snapshot karsilastirildigi anlamina gelir, gorsel farklilik
@@ -831,7 +827,9 @@ async def test_ab_comparison_flags_identical_snapshot_hash(
     project = Project(organization_id=organization.id, name=f"Proje {uuid.uuid4().hex[:6]}")
     session.add(project)
     await session.flush()
-    definition = TestDefinition(organization_id=organization.id, project_id=project.id, name="A/B ayni snapshot")
+    definition = TestDefinition(
+        organization_id=organization.id, project_id=project.id, name="A/B ayni snapshot"
+    )
     session.add(definition)
     await session.flush()
     variant_a = TestVariant(

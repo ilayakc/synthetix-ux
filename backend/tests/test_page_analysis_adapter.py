@@ -67,7 +67,9 @@ def _features(**overrides) -> dict:
     return base
 
 
-def _analysis(*, features: dict | None, url: str = "https://example.com/", organization_id=None) -> PageAnalysis:
+def _analysis(
+    *, features: dict | None, url: str = "https://example.com/", organization_id=None
+) -> PageAnalysis:
     return PageAnalysis(
         id=uuid.uuid4(),
         organization_id=organization_id or uuid.uuid4(),
@@ -190,9 +192,15 @@ def test_missing_content_sha256_raises():
 @pytest.mark.parametrize(
     "bad_features",
     [
-        {**_features(), "text_stats": {"word_count": "not-a-number", "avg_sentence_word_count": 1, "heading_count": 1}},
+        {
+            **_features(),
+            "text_stats": {"word_count": "not-a-number", "avg_sentence_word_count": 1, "heading_count": 1},
+        },
         {**_features(), "controls": "not-a-dict"},
-        {**_features(), "text_stats": {"word_count": float("nan"), "avg_sentence_word_count": 1, "heading_count": 1}},
+        {
+            **_features(),
+            "text_stats": {"word_count": float("nan"), "avg_sentence_word_count": 1, "heading_count": 1},
+        },
     ],
 )
 def test_invalid_schema_raises(bad_features):
