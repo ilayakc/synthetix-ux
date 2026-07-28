@@ -20,6 +20,7 @@ veya repo kokunun mount edildigi bir CI ortaminda) calistirilarak dogrulanir
 """
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -156,3 +157,50 @@ def test_backend_healthcheck_uses_ready_endpoint(compose_prod):
     healthcheck = compose_prod["services"]["backend"]["healthcheck"]["test"]
     joined = " ".join(healthcheck)
     assert "/api/ready" in joined
+
+
+# --- db-backup (yedekleme) servisi -----------------------------------------
+
+
+def test_db_backup_service_exists_and_publishes_no_port(compose_prod):
+    assert "db-backup" in compose_prod["services"]
+    assert "ports" not in compose_prod["services"]["db-backup"]
+
+
+def test_db_backup_uses_dedicated_named_volume(compose_prod):
+    volumes = compose_prod["services"]["db-backup"]["volumes"]
+    assert any("pgbackups_prod" in v for v in volumes)
+    assert "pgbackups_prod" in compose_prod["volumes"]
+    # Yedekler `pgdata_prod` ile AYNI volume'e YAZILMAMALI (aksi halde db
+    # verisiyle ayni disk basarisizligina karsi hicbir koruma saglamaz -
+    # bkz. docs/production.md "Bilinen sinirlamalar").
+    assert not any("pgdata_prod" in v for v in volumes)
+
+
+def test_db_backup_waits_for_db_healthy(compose_prod):
+    depends_on = compose_prod["services"]["db-backup"]["depends_on"]
+    assert depends_on["db"]["condition"] == "service_healthy"
+
+
+def test_db_backup_does_not_run_migrations(compose_prod):
+    command = compose_prod["services"]["db-backup"]["command"]
+    joined = " ".join(command) if isinstance(command, list) else str(command)
+    assert "alembic" not in joined.lower()
+
+
+def test_db_backup_restarts_unless_stopped(compose_prod):
+    assert compose_prod["services"]["db-backup"].get("restart") == "unless-stopped"
+
+
+def test_db_backup_script_does_not_leak_compose_time_variable_refs(compose_prod):
+    # `command:` yaml'dan okundugunda `$$` YAML/compose tarafindan
+    # DEGISTIRILMEZ (yalnizca gercek `docker compose` calistirmasi sirasinda
+    # `$$` -> `$` interpolasyonu yapilir) - bu yuzden burada script metninde
+    # HALA `$$` olarak gormeliyiz. Kacirilmis (tek `$`) bir referans, o
+    # degiskenin compose tarafindan yanlislikla (ve container calisma
+    # zamaninda BOS bir deger olarak) erkenden cozumlenecegi anlamina gelir.
+    command = compose_prod["services"]["db-backup"]["command"]
+    script = command[-1] if isinstance(command, list) else str(command)
+
+    leaked = re.findall(r"(?<!\$)\$(?:\{\w+\}|\w+|\()", script)
+    assert leaked == [], f"kacirilmamis (compose-time'da cozumlenecek) degisken referansi bulundu: {leaked}"

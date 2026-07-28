@@ -12,6 +12,7 @@ from app.config import Settings
 from app.config import settings as default_settings
 from app.config_security import validate_production_secrets
 from app.db import engine, get_session
+from app.logging_config import configure_logging
 from app.redis_client import check_redis_connection
 from app.routers.ai_explanations import router as ai_explanations_router
 from app.routers.analysis_modules import router as analysis_modules_router
@@ -26,6 +27,12 @@ from app.routers.reports import router as reports_router
 from app.routers.settings import router as settings_router
 from app.routers.simulations import router as simulations_router
 from app.routers.test_wizard import router as test_wizard_router
+
+# Modul importunda BIR KEZ yapilandirilir (gercek calisma zamani ortamina
+# gore) - `create_app()`'in kendisi degil, cunku bu fabrika testlerde farkli
+# `Settings` ile TEKRAR TEKRAR cagrilir ve log formati her cagrida
+# degismemelidir (bkz. app.logging_config.configure_logging idempotentligi).
+configure_logging(default_settings.environment)
 
 _CSP = (
     "default-src 'self'; "

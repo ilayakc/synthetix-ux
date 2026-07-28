@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 
 from app.browser import DEVICE_NETWORK_PROFILES, AnalysisError, analyze_device_network, analyze_url
 from app.config import settings
+from app.logging_config import configure_logging
 from app.schemas import (
     AnalyzeRequest,
     DeviceNetworkAnalysisRequest,
@@ -14,8 +15,8 @@ from app.schemas import (
 )
 from app.url_safety import UnsafeUrlError
 
+configure_logging(settings.environment)
 logger = logging.getLogger("analyzer.main")
-logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Synthetix UX Analyzer", version="0.1.0")
 

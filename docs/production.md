@@ -23,6 +23,11 @@ ortaminda calistirilabilir kilmaktir.
   `alembic upgrade head` calistirir. `backend` ve `worker`, bu servisin
   **basariyla tamamlanmasini** (`service_completed_successfully`) bekler;
   migration'i baska hicbir servis calistirmaz.
+- **db-backup**: `db` ile ayni imajdan (`postgres:16.4-alpine`) calisan,
+  periyodik olarak `pg_dump | gzip` alip ayri bir named volume'e
+  (`pgbackups_prod`) yazan bagimsiz bir kenar servis. Hicbir servis bunu
+  BEKLEMEZ (basarisiz/gecikmis bir yedek, uygulamanin ayaga kalkmasini
+  engellemez) - bkz. asagida "Yedekleme ve geri yukleme".
 
 Proje adi (`name: synthetix-ux-prod`) development stack'inden (`synthetix-ux`)
 kasitli olarak farklidir - ayni volume/network/container isim uzayini
@@ -78,9 +83,10 @@ Calisma sirasi (compose `depends_on` ile garanti edilir):
 5. `frontend`, `backend` saglikli oldugunda baslar.
 
 > **Backup uyarisi**: gercek (var olan veri iceren) bir production
-> veritabaninda migration calistirmadan once HER ZAMAN yedek (backup)
-> alin. Bu paket kapsaminda bir backup/restore script'i YOKTUR (bkz.
-> "Kapsam disi" asagida) - bu, sonraki bir paketin konusudur.
+> veritabaninda migration calistirmadan once HER ZAMAN elle ek bir yedek
+> alin (bkz. asagidaki "Yedekleme ve geri yukleme" - `db-backup` servisinin
+> periyodik dongusu, bir migration'dan hemen once tetiklenecek sekilde
+> zamanlanmis DEGILDIR).
 
 ## 4. Health / readiness kontrolu
 
@@ -99,7 +105,74 @@ uzerinden backend'e ulasir - ayri bir backend portu ACILMAZ.
 docker compose -f compose.prod.yaml --env-file .env.production logs -f backend worker frontend
 ```
 
-## 6. Stack'i durdurma
+`backend` ve `worker` (bkz. `app.logging_config.configure_logging`),
+`ENVIRONMENT=production` oldugunda tek satirlik JSON log ciktisi uretir
+(`{"timestamp": "...", "level": "...", "logger": "...", "message": "..."}`);
+`analyzer` de ayni davranisi kendi `app.logging_config` kopyasiyla
+uygular. Bu, bir log toplama aracina (ornegin bir dosyaya yonlendirip
+`jq` ile filtrelemeye) beslenebilir:
+
+```powershell
+docker compose -f compose.prod.yaml --env-file .env.production logs --no-color backend | Select-String -Pattern '"level": "ERROR"'
+```
+
+`frontend` (nginx) kendi erisim/hata log formatini kullanir - bu
+degistirilmedi. Uvicorn'un kendi `uvicorn.access` log satirlari (istek
+basina, ornegin `INFO: 127.0.0.1:... - "GET /api/health HTTP/1.1" 200 OK`)
+JSON'a CEVRILMEZ - yalnizca uygulama kodunun (`app.services.*` vb.)
+`logging.getLogger(...)` uzerinden urettigi loglar JSON formatindadir; bu
+kasitli bir sinirlamadir (uvicorn'un kendi log yapilandirmasini degistirmek
+bu paketin kapsami disindadir).
+
+## 6. Yedekleme ve geri yukleme
+
+`db-backup` servisi, `db` saglikli oldugunda baslar ve arka planda surekli
+calisir: her `BACKUP_INTERVAL_SECONDS` (varsayilan 86400s = gunde bir) `db`
+uzerinde `pg_dump | gzip` calistirip sonucu `pgbackups_prod` named
+volume'une (`/backups/synthetix_ux_<UTC-zaman-damgasi>.sql.gz`) yazar;
+`BACKUP_RETENTION_DAYS`'den (varsayilan 7 gun) eski dosyalar otomatik
+silinir. Bir yedek denemesi basarisiz olursa (ör. `db` gecici olarak
+erisilemez) yarim/bozuk bir dosya birakilmaz (`.tmp` uzantili gecici
+dosyaya yazilip yalnizca basari halinde asil ada tasinir) ve servis bir
+sonraki denemede tekrar calisir - `restart: unless-stopped` sayesinde
+container'in kendisi coksa bile yeniden baslar.
+
+Yedek listesini gormek icin:
+
+```powershell
+docker compose -f compose.prod.yaml --env-file .env.production exec db-backup ls -la /backups
+```
+
+Bir yedegi host'a cikarmak icin (`docker compose cp`, named volume'den de
+kopyalayabilir - ayrica bir bind-mount gerekmez):
+
+```powershell
+docker compose -f compose.prod.yaml --env-file .env.production cp db-backup:/backups/synthetix_ux_20260728T120000Z.sql.gz .
+```
+
+Geri yuklemek icin (DIKKAT: `db` uzerindeki MEVCUT veriyi etkileyebilir -
+bkz. asagidaki not):
+
+```powershell
+docker compose -f compose.prod.yaml --env-file .env.production cp synthetix_ux_20260728T120000Z.sql.gz db-backup:/backups/restore.sql.gz
+docker compose -f compose.prod.yaml --env-file .env.production exec db-backup sh -c 'gunzip -c /backups/restore.sql.gz | psql -h db -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
+(`$POSTGRES_USER`/`$POSTGRES_DB`, PowerShell tarafindan degil - tek tirnak
+sayesinde - `db-backup` container'inin KENDI ortaminda, `sh` tarafindan
+degerlendirilir; bu container zaten `compose.prod.yaml`'da bu degiskenlerle
+baslatilir.)
+
+> **Onemli**: bu, bir "sifirdan geri yukleme" komutudur - dump icindeki
+> `CREATE TABLE`/`INSERT` ifadeleri, hedef veritabaninda AYNI tablolar zaten
+> varsa CAKISABILIR. Gercek bir felaket kurtarma senaryosunda once `db`
+> servisini durdurup `pgdata_prod` volume'unu bosaltmak (`docker volume rm
+> synthetix-ux-prod_pgdata_prod`, ardindan `db`'yi yeniden olusturmak) ve
+> ANCAK OYLECE geri yuklemek gerekir - bu, veri kaybina yol acabilecek
+> DESTRUCTIVE bir islemdir, otomatik bir script'e BILINCLI OLARAK
+> baglanmamistir.
+
+## 7. Stack'i durdurma
 
 ```powershell
 docker compose -f compose.prod.yaml --env-file .env.production down
@@ -115,8 +188,15 @@ tutulmustur.
 - **Rollback**: bu pakette henuz tamamlanmamistir. `migrate` servisi yalnizca
   `alembic upgrade head` calistirir; bir migration'i geri almak icin (gerekirse)
   su an manuel `alembic downgrade` mudahalesi gerekir.
-- Gercek deployment (internet, domain, TLS/HSTS, CI workflow, backup script,
-  rate limiting, JSON logging) bu paketin kapsami disindadir.
+- **Yedekleme yalnizca yerel/host-ici'dir**: `db-backup` yedekleri, `db`'nin
+  kendi verisiyle (`pgdata_prod`) AYNI Docker host'unda, ayri bir named
+  volume'de (`pgbackups_prod`) durur. Bu, host'un/diskin tamamen kaybi
+  (donanim arizasi, VM silinmesi vb.) senaryosuna karsi KORUMA SAGLAMAZ -
+  gercek bir felaket kurtarma stratejisi icin yedeklerin duzenli olarak
+  off-site/off-host bir konuma (ornegin bir nesne depolama servisine)
+  kopyalanmasi gerekir; bu, bu paketin kapsami disindadir.
+- Gercek deployment (internet, domain, TLS/HSTS, CI workflow, off-site
+  backup, rate limiting, JSON logging) bu paketin kapsami disindadir.
 - HSTS header'i eklenmemistir: yalnizca gercek bir HTTPS deployment'inda
   anlamlidir; yerel HTTP smoke testini bozmamak icin bu asamada
   DOKUMANTE EDILMIS ama eklenmemistir - gercek TLS deployment asamasinda

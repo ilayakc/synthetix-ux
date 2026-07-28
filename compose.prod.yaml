@@ -24,6 +24,10 @@
 # - backend ve worker AYNI image'tan (backend/Dockerfile, bind-mount YOK,
 #   `--reload` YOK) uretilir; container restart'i asla eski/degistirilmis
 #   koddan calismaz (kod image icine COPY ile gomulmustur).
+# - `db-backup`, ayri bir named volume'e (`pgbackups_prod`) periyodik
+#   `pg_dump` yedegi alan, kendi named volume'unden baska hicbir servisin
+#   BEKLEMEDIGI bagimsiz bir kenar servistir (bkz. docs/production.md
+#   "Yedekleme ve geri yukleme").
 
 name: synthetix-ux-prod
 
@@ -44,6 +48,59 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    restart: unless-stopped
+
+  # Periyodik PostgreSQL yedegi: `db` ile AYNI imajı (postgres:16.4-alpine,
+  # bu yuzden pg_dump surumu her zaman db ile eslesir) kullanan, bind-mount
+  # veya ozel bir Dockerfile GEREKTIRMEYEN, tek satirlik bir dongu servisi.
+  # Yedekler ayri bir named volume'e (`pgbackups_prod`) yazilir - `pgdata_prod`
+  # ile AYNI DISK uzerinde kaldigi icin bu, disk/host duzeyinde bir felakete
+  # (ornegin volume'un kendisinin kaybi) karsi KORUMA SAGLAMAZ; yalnizca
+  # yanlislikla veri silme/bozulma/basarisiz migration gibi senaryolara karsi
+  # bir kurtarma noktasi sunar. Gercek bir off-site/off-host yedekleme (bkz.
+  # docs/production.md "Bilinen sinirlamalar") bu paketin kapsami disindadir.
+  db-backup:
+    image: postgres:16.4-alpine
+    env_file:
+      - .env.production
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - pgbackups_prod:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    # ONEMLI: asagidaki script `docker compose`'un KENDI ${VAR} interpolasyonundan
+    # GECER (compose, bir servisin `command:` alanini da - ayni .env dosyasindaki
+    # gibi - satir satir interpole eder). Bu yuzden container'in KENDI calisma
+    # zamaninda (sh tarafindan) cozumlenmesi gereken HER degisken `$$` ile
+    # kacirilmistir (`$$VAR` -> compose bunu literal `$VAR`'a cevirir, `sh` bunu
+    # container'in `environment:` alanindan okur); `$$`'siz birakilan tek yer,
+    # gomulu (nested) interpolasyon olmadigini dogrulayan bir yorum degil, kasitli
+    # olarak YOKTUR - bkz. backend/tests/test_compose_prod_config.py
+    # test_db_backup_script_does_not_leak_compose_time_variable_refs.
+    command:
+      - |
+        set -eu
+        echo "db-backup basladi (interval=$${BACKUP_INTERVAL_SECONDS}s, retention=$${BACKUP_RETENTION_DAYS} gun)"
+        while true; do
+          timestamp="$$(date -u +%Y%m%dT%H%M%SZ)"
+          dest="/backups/synthetix_ux_$${timestamp}.sql.gz"
+          if pg_dump -h db -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}" | gzip > "$${dest}.tmp"; then
+            mv "$${dest}.tmp" "$${dest}"
+            echo "yedek tamamlandi: $${dest}"
+          else
+            echo "yedek BASARISIZ, dosya yazilmadi: $${dest}" >&2
+            rm -f "$${dest}.tmp"
+          fi
+          find /backups -name 'synthetix_ux_*.sql.gz' -mtime "+$${BACKUP_RETENTION_DAYS}" -delete
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+        done
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   redis:
@@ -190,3 +247,4 @@ services:
 volumes:
   pgdata_prod:
   redis_data_prod:
+  pgbackups_prod:

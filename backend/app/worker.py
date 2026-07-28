@@ -5,13 +5,14 @@ from arq.connections import RedisSettings
 
 from app.config import settings
 from app.config_security import validate_production_secrets
+from app.logging_config import configure_logging
 from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import page_analysis as page_analysis_service
 from app.services.simulation_worker import run_fail_blocked_cycle, run_queue_cycle, run_reap_cycle
 
+configure_logging(settings.environment)
 logger = logging.getLogger("synthetix.worker")
-logging.basicConfig(level=logging.INFO)
 
 
 async def ping_redis(ctx: dict) -> bool:
