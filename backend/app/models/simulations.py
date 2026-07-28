@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -92,3 +92,58 @@ class SimulationRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     launch_run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     free_entitlement_feature_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     chip_reservation_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+
+
+class CalibrationObservation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Gonullu, acik rizali GERCEK kullanilabilirlik testi sonucu (bkz.
+    docs/methodology.md "Kalibrasyon plani", adim 1).
+
+    Bu, motorun agirliklarini (`app.engine.rules_config`) OTOMATIK OLARAK
+    degistirmez/kalibre ETMEZ - yalnizca ilgili `SimulationRun`'in sentetik
+    tahminiyle ileride (bagimsiz bir surecte, manuel gozden gecirmeyle)
+    karsilastirilabilecek gercek olcum sonucunu SAKLAR. Bir run icin birden
+    fazla gozlem eklenebilir (ornegin farkli kohortlardan/zamanlardan gelen
+    testler); bu nedenle `simulation_run_id` UZERINDE bir benzersizlik
+    kisiti YOKTUR - gecmis gozlemler asla ustune yazilmaz/silinmez.
+
+    `simulation_run_id` FK'si `ondelete="CASCADE"`dir: bir SimulationRun
+    (yalnizca organizasyon hard-delete'i ile, bkz. app.models.simulations.
+    SimulationRun) silinirse ona bagli gozlemlerin de silinmesi dogaldir -
+    bagimsiz bir "yetim" gozlem hicbir anlam tasimaz (karsilastirilacak
+    sentetik tahmin de yok olmustur).
+    """
+
+    __tablename__ = "calibration_observations"
+    __table_args__ = (
+        Index("ix_calibration_observations_organization_id", "organization_id"),
+        Index("ix_calibration_observations_simulation_run_id", "simulation_run_id"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    simulation_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("simulation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    recorded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Acik riza onayi (bkz. app.services.calibration.record_observation) -
+    # `authorization_confirmed` (app.models.page_analysis) ile ayni desen:
+    # servis katmani `False` durumunda kaydi hic OLUSTURMAZ, bu alan yalnizca
+    # onaylanmis (`True`) durumun denetim izi (audit trail) icin saklanir.
+    consent_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Dorttu, `docs/methodology.md` "Metrikler ve formuller" bolumundeki
+    # sentetik karsiliklarina (gorev tamamlama/sure/yanlis tiklama/terk)
+    # birebir denk dusecek sekilde tasarlanmistir; her biri bagimsiz olarak
+    # opsiyoneldir (gercek testte hepsi olculmemis olabilir) - en az birinin
+    # dolu olmasi servis katmaninda zorunlu kilinir.
+    real_task_completion_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    real_median_task_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    real_misclick_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    real_abandonment_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    sample_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_note: Mapped[str | None] = mapped_column(Text, nullable=True)

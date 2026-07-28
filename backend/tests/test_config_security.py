@@ -16,6 +16,7 @@ pytestmark = pytest.mark.unit
 _STRONG_JWT_SECRET = "a" * 64
 _STRONG_ANALYZER_TOKEN = "b" * 64
 _STRONG_DB_URL = "postgresql+asyncpg://synthetix:S3cur3-Rand0m-P4ssw0rd@db:5432/synthetix_ux"
+_VALID_ALLOWED_HOSTS = "app.example.test"
 
 
 def _make_settings(**overrides) -> Settings:
@@ -24,6 +25,7 @@ def _make_settings(**overrides) -> Settings:
         "jwt_secret_key": _STRONG_JWT_SECRET,
         "analyzer_shared_token": _STRONG_ANALYZER_TOKEN,
         "database_url": _STRONG_DB_URL,
+        "allowed_hosts": _VALID_ALLOWED_HOSTS,
     }
     base.update(overrides)
     return Settings(**base)

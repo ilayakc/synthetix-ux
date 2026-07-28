@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     # Yalnizca yapilandirilmis frontend origin'ine izin verilir (CORS).
     cors_allowed_origin: str = "http://localhost:5173"
 
+    # Production'da `TrustedHostMiddleware` icin virgulle ayrilmis host
+    # allowlist'i (bkz. app.main, app.config_security). Development'ta bu
+    # middleware hic eklenmedigi icin varsayilan "*" zararsizdir; production'da
+    # ise "*" veya bos deger fail-closed olarak REDDEDILIR (bkz.
+    # app.config_security.validate_production_secrets) - gercek bir host
+    # allowlist'i acikca belirtilmeden production baslamaz.
+    allowed_hosts: str = "*"
+
     # Giris denemesi hiz siniri (Redis tabanli, IP+e-posta anahtarli).
     login_rate_limit_max_attempts: int = 5
     login_rate_limit_window_seconds: int = 5 * 60

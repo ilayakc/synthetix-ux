@@ -76,9 +76,18 @@ def decode_and_validate_image(
     allowed = allowed_formats or STANDARD_IMAGE_FORMATS
 
     try:
-        probe = Image.open(io.BytesIO(raw))
-        probe_format = probe.format
-        width, height = probe.size
+        with warnings.catch_warnings():
+            # Bu ilk acilis yalnizca basligi okur (piksel veri yuklenmez);
+            # asil decompression-bomb reddi asagidaki genislik/yukseklik/piksel
+            # kontrolleriyle VE ikinci (gercek yukleme) asamadaki `error`
+            # filtresiyle yapilir. Burada yalnizca Pillow'un ayni uyariyi bu
+            # erken asamada da basmasini (ve boylece sahte bir "bastirilmamis
+            # uyari" gibi sizmasini) engelliyoruz - `Image.MAX_IMAGE_PIXELS`
+            # DEGERI DEGISTIRILMEZ/DEVRE DISI BIRAKILMAZ.
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            probe = Image.open(io.BytesIO(raw))
+            probe_format = probe.format
+            width, height = probe.size
     except Image.DecompressionBombError as exc:
         raise InvalidImageError("Gorsel guvenlik nedeniyle reddedildi (decompression-bomb siniri)") from exc
     except (UnidentifiedImageError, OSError, ValueError) as exc:

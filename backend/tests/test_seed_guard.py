@@ -6,7 +6,7 @@ reddeder (bkz. app/seed.py). Bu test gercek gelistirme veritabanina
 baglanmadan, yalnizca guard'in DB'ye ulasmadan devreye girdigini kanitlar.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,7 +29,12 @@ def test_seed_refuses_to_run_in_production(monkeypatch):
 def test_seed_runs_in_development(monkeypatch):
     monkeypatch.setattr(seed.settings, "environment", "development")
 
-    with patch.object(seed, "seed"), patch("asyncio.run") as mock_run:
+    # `new_callable=MagicMock` (AsyncMock DEGIL): `seed.seed` bir `async def`
+    # oldugu icin patch.object varsayilan olarak AsyncMock kullanirdi -
+    # `asyncio.run` da mock'landigindan `seed()`'in urettigi coroutine hicbir
+    # zaman awaitlenmez ve "coroutine was never awaited" RuntimeWarning'i
+    # (GC anina bagli olarak, alakasiz baska bir testte) yayilirdi.
+    with patch.object(seed, "seed", new_callable=MagicMock), patch("asyncio.run") as mock_run:
         seed.main()
 
     mock_run.assert_called_once()

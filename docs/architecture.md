@@ -117,6 +117,7 @@ test_definitions 1──* test_variants
 organizations 1──* persona_presets
 test_variants 1──* simulation_runs *──0..1 persona_presets
 simulation_runs 1──* reports
+simulation_runs 1──* calibration_observations *──0..1 users (recorded_by)
 organizations 1──* entitlements
 organizations 1──* chip_ledger_entries
 organizations 1──* audit_logs *──0..1 users (actor)
@@ -128,8 +129,8 @@ alanı üzerinden) ve bir organizasyona `memberships` (rol tasıyan
 çok-a-çok ilişki) üzerinden bağlanır — bu, ileride bir kullanıcının birden
 fazla organizasyona üye olabilmesini mümkün kılar. Kiracıya ait diğer tüm
 tablolar (`projects`, `test_definitions`, `test_variants`, `persona_presets`,
-`simulation_runs`, `reports`, `entitlements`, `chip_ledger_entries`,
-`audit_logs`) doğrudan bir `organization_id` (NOT NULL, indekslenmiş, `ON
+`simulation_runs`, `reports`, `calibration_observations`, `entitlements`,
+`chip_ledger_entries`, `audit_logs`) doğrudan bir `organization_id` (NOT NULL, indekslenmiş, `ON
 DELETE CASCADE`) taşır; bir organizasyon silindiğinde tüm verisi kademeli
 olarak silinir.
 
@@ -149,6 +150,12 @@ başlığı değiştirerek başka bir organizasyonun verisine erişemez (bkz.
 `audit_logs` ekle-sadece (append-only) tablolardır: `updated_at` alanları
 yoktur ve güncel bir bakiye hücresi tutulmaz — bakiye, defter satırları
 toplanarak hesaplanır (hesaplama mantığı sonraki bir aşamaya bırakılmıştır).
+
+`calibration_observations` (bkz. [docs/methodology.md](methodology.md)
+"Kalibrasyon planı"), gönüllü/açık rızalı GERÇEK kullanılabilirlik testi
+sonuçlarını ilgili `simulation_runs` satırına bağlı olarak saklar; bir run
+birden fazla gözlem alabilir (benzersizlik kısıtı yoktur) ve bu kayıt
+`calibration_status`u hiçbir zaman otomatik olarak değiştirmez.
 
 ## Migration ve seed
 

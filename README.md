@@ -46,6 +46,10 @@ Tüm servisler `healthy`/`running` durumuna geçtikten sonra:
 - Backend readiness (DB + Redis durumu): http://localhost:8000/api/ready
 - Frontend: http://localhost:5173
 
+Production-benzeri (ayri, izole) bir compose stack'i icin bkz.
+[docs/production.md](docs/production.md) - bu, gercek bir deployment
+kilavuzu degildir.
+
 ## Testler
 
 Tüm test paketini (backend lint/type/test/coverage, frontend lint/type/

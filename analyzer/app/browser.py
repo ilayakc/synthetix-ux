@@ -462,6 +462,17 @@ DEVICE_NETWORK_PROFILES: dict[str, dict] = {
         },
         "network": None,
     },
+    "desktop_constrained_wifi": {
+        "device_label": "Masaustu",
+        "network_label": "Kisitli Wi-Fi/DSL (~1.5 Mbps indirme, 100ms gecikme)",
+        "context_options": {
+            "viewport": {"width": 1440, "height": 900},
+            "device_scale_factor": 1,
+            "is_mobile": False,
+            "has_touch": False,
+        },
+        "network": {"download_bytes_per_sec": 1536 * 1024 // 8, "upload_bytes_per_sec": 768 * 1024 // 8, "latency_ms": 100},
+    },
 }
 
 _TIMING_EXTRACTION_JS = """

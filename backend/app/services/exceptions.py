@@ -101,6 +101,23 @@ class PageAnalysisDependencyError(Exception):
     sarti altinda fixture'a sessizce duselmez (bkz. Paket 4B kapsami)."""
 
 
+class CalibrationConsentRequiredError(Exception):
+    """Gercek kullanilabilirlik testi sonucu, acik riza onayi
+    (`consent_confirmed=true`) olmadan kaydedilmeye calisildi (bkz.
+    app.services.calibration.record_observation)."""
+
+
+class CalibrationRunNotSucceededError(Exception):
+    """Kalibrasyon gozlemi, henuz basariyla (succeeded) tamamlanmamis bir
+    SimulationRun'a eklenmeye calisildi - karsilastirilacak bir sentetik
+    tahmin (sonuc) yok."""
+
+
+class CalibrationObservationRequiresMetricError(Exception):
+    """Kalibrasyon gozleminde dort gercek metrikten (tamamlama/sure/yanlis
+    tiklama/terk) hicbiri verilmedi - bos bir gozlem anlamsizdir."""
+
+
 class ModuleProcessingError(Exception):
     """Bir gelismis analiz modulunun (network_device_test/campaign_cta_test/
     synthetic_attention_estimate) islenmesi kurtarilamaz bir hatayla basarisiz oldugunda

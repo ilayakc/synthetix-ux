@@ -6,14 +6,20 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pydantic import Field
+
 from app.db import get_session
 from app.dependencies import Principal, get_organization_id, require_roles
 from app.engine.baseline import compare_baseline_results
-from app.models.simulations import SimulationRun, SimulationStatus
+from app.models.simulations import CalibrationObservation, SimulationRun, SimulationStatus
 from app.models.tests import TestDefinition, TestVariant
+from app.services import calibration as calibration_service
 from app.services import simulation_progress
 from app.services import simulation_worker as worker_service
 from app.services.exceptions import (
+    CalibrationConsentRequiredError,
+    CalibrationObservationRequiresMetricError,
+    CalibrationRunNotSucceededError,
     ChipReservationNotFoundError,
     EntitlementNotFoundError,
     EntitlementUnavailableError,
@@ -180,6 +186,109 @@ async def retry_run(
 
     await session.commit()
     return await _to_response(run)
+
+
+class CalibrationObservationCreateRequest(BaseModel):
+    # Acik riza onayi (bkz. app.services.calibration.record_observation) -
+    # `authorization_confirmed` (app.routers.page_analysis) ile ayni desen:
+    # varsayilan False, istemci acikca True gondermeden kayit reddedilir.
+    consent_confirmed: bool = False
+    real_task_completion_rate: float | None = Field(default=None, ge=0, le=1)
+    real_median_task_duration_seconds: float | None = Field(default=None, ge=0)
+    real_misclick_rate: float | None = Field(default=None, ge=0, le=1)
+    real_abandonment_rate: float | None = Field(default=None, ge=0, le=1)
+    sample_size: int | None = Field(default=None, ge=1)
+    source_note: str | None = Field(default=None, max_length=2000)
+
+
+class CalibrationObservationResponse(BaseModel):
+    id: uuid.UUID
+    simulation_run_id: uuid.UUID
+    recorded_by_user_id: uuid.UUID | None
+    real_task_completion_rate: float | None
+    real_median_task_duration_seconds: float | None
+    real_misclick_rate: float | None
+    real_abandonment_rate: float | None
+    sample_size: int | None
+    source_note: str | None
+    created_at: datetime
+
+
+def _to_observation_response(observation: CalibrationObservation) -> CalibrationObservationResponse:
+    return CalibrationObservationResponse(
+        id=observation.id,
+        simulation_run_id=observation.simulation_run_id,
+        recorded_by_user_id=observation.recorded_by_user_id,
+        real_task_completion_rate=observation.real_task_completion_rate,
+        real_median_task_duration_seconds=observation.real_median_task_duration_seconds,
+        real_misclick_rate=observation.real_misclick_rate,
+        real_abandonment_rate=observation.real_abandonment_rate,
+        sample_size=observation.sample_size,
+        source_note=observation.source_note,
+        created_at=observation.created_at,
+    )
+
+
+@router.post(
+    "/runs/{run_id}/calibration-observations",
+    response_model=CalibrationObservationResponse,
+    status_code=201,
+)
+async def create_calibration_observation(
+    run_id: uuid.UUID,
+    body: CalibrationObservationCreateRequest,
+    principal: Principal = Depends(require_roles(*WRITE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> CalibrationObservationResponse:
+    """Bu calistirmaya gonullu, acik rizali bir GERCEK kullanilabilirlik testi
+    sonucu ekler (bkz. docs/methodology.md "Kalibrasyon plani").
+
+    Bu, motorun agirliklarini/`calibration_status`unu OTOMATIK OLARAK
+    degistirmez - yalnizca ileride bagimsiz bir surecte gozden gecirilecek
+    ham gercek-veri gozlemini saklar.
+    """
+
+    run = await _get_owned_run(session, principal.organization_id, run_id)
+
+    try:
+        observation = await calibration_service.record_observation(
+            session,
+            run=run,
+            recorded_by_user_id=principal.user_id,
+            consent_confirmed=body.consent_confirmed,
+            real_task_completion_rate=body.real_task_completion_rate,
+            real_median_task_duration_seconds=body.real_median_task_duration_seconds,
+            real_misclick_rate=body.real_misclick_rate,
+            real_abandonment_rate=body.real_abandonment_rate,
+            sample_size=body.sample_size,
+            source_note=body.source_note,
+        )
+    except CalibrationConsentRequiredError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except CalibrationObservationRequiresMetricError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except CalibrationRunNotSucceededError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    await session.commit()
+    return _to_observation_response(observation)
+
+
+@router.get(
+    "/runs/{run_id}/calibration-observations",
+    response_model=list[CalibrationObservationResponse],
+)
+async def list_calibration_observations(
+    run_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_organization_id),
+    session: AsyncSession = Depends(get_session),
+) -> list[CalibrationObservationResponse]:
+    await _get_owned_run(session, organization_id, run_id)
+    observations = await calibration_service.list_observations_for_run(
+        session, organization_id=organization_id, run_id=run_id
+    )
+    await session.commit()
+    return [_to_observation_response(observation) for observation in observations]
 
 
 class ComparisonResponse(BaseModel):

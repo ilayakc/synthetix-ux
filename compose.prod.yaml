@@ -1,0 +1,192 @@
+# Production compose stack (Paket 5B).
+#
+# BU DOSYA GERCEK BIR DEPLOYMENT DEGILDIR - internete acmaz, domain/TLS
+# baglamaz, cloud/VPS olusturmaz. Yerel/izole bir Docker ortaminda,
+# `compose.yaml` (development) stack'inden TAMAMEN AYRI bir proje adiyla
+# calisir (bkz. asagidaki `name:`), boylece development container/volume/
+# network/veritabanina hic dokunmaz.
+#
+# Kullanim (bkz. docs/production.md):
+#   copy .env.production.example .env.production   # gercek secret'larla doldurun
+#   docker compose -f compose.prod.yaml --env-file .env.production config
+#   docker compose -f compose.prod.yaml --env-file .env.production up -d --build
+#
+# Mimari (kabul edilen tasarim, bkz. docs/production.md):
+# - Frontend (nginx), derlenmis statik dosyalari sunar VE ayni origin
+#   uzerinden `/api` isteklerini backend'e reverse-proxy eder - disariya
+#   ACIK OLAN TEK PORT budur.
+# - backend/worker/analyzer/db/redis hicbir host portu yayinlamaz; yalnizca
+#   docker compose ic agi uzerinden birbirlerine erisir.
+# - Migration, backend/worker'in ikisinin de degil, YALNIZCA tek bir
+#   one-shot `migrate` servisinin sorumlulugundadir; backend ve worker
+#   `migrate`'in basariyla TAMAMLANMASINI (service_completed_successfully)
+#   bekler - yarisan/tekrarlayan migration calismasi yoktur.
+# - backend ve worker AYNI image'tan (backend/Dockerfile, bind-mount YOK,
+#   `--reload` YOK) uretilir; container restart'i asla eski/degistirilmis
+#   koddan calismaz (kod image icine COPY ile gomulmustur).
+
+name: synthetix-ux-prod
+
+services:
+  db:
+    image: postgres:16.4-alpine
+    env_file:
+      - .env.production
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    # Kalici named volume + AOF: worker/backend arasindaki kuyruk durumu
+    # (arq) container restart'inda kaybolmaz.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  analyzer:
+    build:
+      context: ./analyzer
+    env_file:
+      - .env.production
+    environment:
+      ANALYZER_SHARED_TOKEN: ${ANALYZER_SHARED_TOKEN}
+    # Host'a hicbir port yayinlanmaz (bkz. docs/security.md); yalnizca ic
+    # agdan backend/worker tarafindan cagrilir.
+    mem_limit: 2g
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # One-shot migration servisi: `alembic upgrade head` calistirip basariyla
+  # BITER (restart: "no"). backend/worker bu servisin basarili tamamlanmasini
+  # (service_completed_successfully) bekler - migration'i YALNIZCA bu servis
+  # calistirir, backend/worker asla kendi baslarina migrate ETMEZ.
+  migrate:
+    build:
+      context: ./backend
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - .env.production
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+    # Acik ve deterministik production komutu: `--reload` YOK, bind-mount
+    # YOK (kod image icine COPY ile gomulu, bkz. backend/Dockerfile).
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - .env.production
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      ANALYZER_BASE_URL: http://analyzer:8100
+      ANALYZER_SHARED_TOKEN: ${ANALYZER_SHARED_TOKEN}
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      ENVIRONMENT: production
+    # Host'a hicbir port yayinlanmaz; yalnizca frontend'in reverse-proxy'si
+    # ic agdan erisir.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      analyzer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+    command: ["arq", "app.worker.WorkerSettings"]
+    env_file:
+      - .env.production
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      ANALYZER_BASE_URL: http://analyzer:8100
+      ANALYZER_SHARED_TOKEN: ${ANALYZER_SHARED_TOKEN}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      ENVIRONMENT: production
+    # backend ile AYNI image/commit'ten uretilir (ayni `build.context`);
+    # bind-mount YOK - restart sonrasi worker asla eski koddan calismaz.
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      analyzer:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker_healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Ayni-origin `/api` yaklasimi: belirli bir domain'e hardcode
+        # edilmez, nginx `/api` isteklerini ic agdaki backend'e proxy eder
+        # (bkz. frontend/nginx.prod.conf).
+        VITE_API_BASE_URL: ""
+    # DISARIYA ACIK OLAN TEK PORT budur.
+    ports:
+      - "${PROD_FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  pgdata_prod:
+  redis_data_prod:

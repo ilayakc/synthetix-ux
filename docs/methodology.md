@@ -212,8 +212,9 @@ birbirinin yerine sunulmaz.
 - **`network_device_test` (TECHNICAL_MEASUREMENT, gercek)**: sentetik
   degildir. `app.services.device_network_analysis`, analyzer container'inda
   gercekten calisan Playwright'i (`analyzer/app/browser.py:
-  analyze_device_network`) 4 sabit cihaz/ag profilinde (`desktop_broadband`,
-  `mobile_4g`, `mobile_slow_3g`, `tablet_wifi`) cagirir; her profil icin CDP
+  analyze_device_network`) 5 sabit cihaz/ag profilinde (`desktop_broadband`,
+  `mobile_4g`, `mobile_slow_3g`, `tablet_wifi`, `desktop_constrained_wifi`)
+  cagirir; her profil icin CDP
   `Network.emulateNetworkConditions` ile gercek ag kosullari simule edilir ve
   gercek sayfa yukleme zamanlamalari + axe-core erisilebilirlik ihlal sayisi
   olculur. Tek bir profilin basarisiz olmasi (timeout vb.) tum modulu
@@ -321,10 +322,20 @@ durumlarini destekleyecek sekilde modellenmistir (bkz.
 otomatik gecis yoktur ve **hicbir surum kendini "calibrated" olarak
 isaretleyemez**. Gelecekte planlanan yaklasim:
 
-1. Gercek kullanilabilirlik testi sonuclarini (gorev tamamlama, sure,
-   hata orani) gonullu musteri projelerinden, acik riza ile toplamak.
-2. Bu gercek sonuclari, ayni girdilerle uretilmis sentetik tahminlerle
-   (ayni `input_snapshot_hash`) eslestirip sapmayi olcmek.
+1. **(Yapildi)** Gercek kullanilabilirlik testi sonuclarini (gorev
+   tamamlama, sure, yanlis tiklama, terk orani) gonullu musteri
+   projelerinden, acik riza ile toplamak: `app.models.simulations.
+   CalibrationObservation` tablosu + `POST/GET /api/simulations/runs/
+   {run_id}/calibration-observations` uc noktalari (bkz. `app.services.
+   calibration`). Eslestirme, ayri bir `input_snapshot_hash` alani yerine
+   dogrudan `simulation_run_id` FK'siyle yapilir - ayni run'a birden fazla
+   gozlem eklenebilir, hicbiri uzerine yazilmaz/silinmez. Kayit, yalnizca
+   `consent_confirmed=true` VE en az bir gercek metrik verildiginde VE
+   ilgili run `succeeded` durumundayken olusturulur; bu adim
+   `calibration_status`u OTOMATIK OLARAK DEGISTIRMEZ - yalnizca ham veriyi
+   saklar.
+2. Bu gercek sonuclari, ayni run'in zaten hesaplanmis sentetik
+   tahminleriyle (`SimulationRun.result`) eslestirip sapmayi olcmek.
 3. Yeterli buyuklukte ve cesitlilikte bir kalibrasyon veri kumesi
    toplandiginda (metodoloji ekibince onaylanmis bir esik), ilgili
    `rules_version` icin `calibrating` durumuna gecmek ve agirliklari bu

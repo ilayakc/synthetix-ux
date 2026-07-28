@@ -94,3 +94,15 @@ def validate_production_secrets(settings: Settings | None = None) -> None:
             "JWT_SECRET_KEY ve ANALYZER_SHARED_TOKEN ayni degere sahip olamaz. "
             "Her biri icin ayri, benzersiz bir deger uretin."
         )
+
+    allowed_hosts = [h.strip() for h in cfg.allowed_hosts.split(",") if h.strip()]
+    if not allowed_hosts:
+        raise ConfigSecurityError(
+            "ALLOWED_HOSTS production ortaminda zorunludur ve bos olamaz. "
+            "Gercek host adlarini virgulle ayirarak belirtin (bkz. .env.production.example)."
+        )
+    if "*" in allowed_hosts:
+        raise ConfigSecurityError(
+            "ALLOWED_HOSTS icinde '*' (hepsine izin ver) production'da guvensizdir. "
+            "Gercek, bilinen host adlarini acikca belirtin."
+        )

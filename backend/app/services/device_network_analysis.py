@@ -30,6 +30,7 @@ NETWORK_DEVICE_PROFILE_KEYS: tuple[str, ...] = (
     "mobile_4g",
     "mobile_slow_3g",
     "tablet_wifi",
+    "desktop_constrained_wifi",
 )
 
 
