@@ -22,6 +22,9 @@ python-multipart==0.0.20
 # Harici vision API cagrisi yapilmaz, gorseller ucuncu taraflara gonderilmez.
 numpy==2.1.3
 opencv-python-headless==4.10.0.84
+# OpenAI Responses API provider adaptoru (bkz. app.services.ai_pipeline.openai_provider).
+# Yalnizca resmi `openai` SDK; Agents SDK veya baska bir OpenAI paketi eklenmez.
+openai==2.52.1
 
 # --- test ---
 pytest==8.3.4

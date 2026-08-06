@@ -9,7 +9,8 @@ pytestmark = pytest.mark.unit
 
 def test_get_module_catalog_returns_current_version_by_default():
     modules = module_catalog.get_module_catalog()
-    assert len(modules) == 7
+    # Faz 3C.2B1: guncel surum (2026.3) `ai_report`i ekler -> 8 modul.
+    assert len(modules) == 8
     assert {m.key for m in modules} == {
         "basic_ux_test",
         "accessibility_precheck",
@@ -18,7 +19,17 @@ def test_get_module_catalog_returns_current_version_by_default():
         "campaign_cta_test",
         "synthetic_attention_estimate",
         "ai_explanation",
+        "ai_report",
     }
+
+
+def test_prior_catalog_version_2026_2_is_frozen_without_ai_report():
+    """Eski surum (2026.2) byte-for-byte korunur - `ai_report` yalnizca yeni
+    2026.3 surumune eklenir, onceki surum degistirilmez."""
+
+    modules = module_catalog.get_module_catalog("2026.2")
+    assert len(modules) == 7
+    assert "ai_report" not in {m.key for m in modules}
 
 
 def test_get_module_catalog_rejects_unknown_version():
@@ -48,7 +59,15 @@ def test_get_active_module_catalog_excludes_inactive_modules():
 
 def test_get_selectable_wizard_module_keys_only_returns_selectable_advanced_modules():
     keys = module_catalog.get_selectable_wizard_module_keys()
-    assert set(keys) == {"network_device_test", "campaign_cta_test", "synthetic_attention_estimate"}
+    # Katalog-seviyesinde `ai_report` de `selectable_in_wizard=True`dir; GERCEK
+    # sihirbaz gorunurlugu ayrica calisma-zamani hazirlik bayragiyla kapilanir
+    # (bkz. get_wizard_visible_modules / test_ai_report_module_catalog.py).
+    assert set(keys) == {
+        "network_device_test",
+        "campaign_cta_test",
+        "synthetic_attention_estimate",
+        "ai_report",
+    }
     # Test turleri (test_type) ve her zaman ucretsiz AI aciklamasi sihirbazin
     # 4. adiminda AYRICA secilebilir olarak listelenmemeli.
     assert "basic_ux_test" not in keys

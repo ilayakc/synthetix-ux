@@ -28,6 +28,7 @@ export default function Step3Personas({ payload, fieldErrors, onChange }: StepPr
   const mode = currentMode(payload);
 
   const [dimensions, setDimensions] = useState<PersonaDimensionInfo[]>([]);
+  const [dimensionsError, setDimensionsError] = useState<string | null>(null);
   const [presets, setPresets] = useState<PersonaPresetResponse[] | null>(null);
   const [presetsError, setPresetsError] = useState<string | null>(null);
 
@@ -36,12 +37,41 @@ export default function Step3Personas({ payload, fieldErrors, onChange }: StepPr
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([listPersonaDimensions(), listPersonaPresets()])
-      .then(([dims, presetList]) => {
-        setDimensions(dims);
-        setPresets(presetList);
+    let cancelled = false;
+
+    // Iki BAGIMSIZ istek ayri ayri ele alinir: biri digerini gizlememeli
+    // (ornegin boyut semasi yuklenemezse preset listesi yine de kullanilabilir
+    // kalmali - AI raporu icin kritik olan preset secimidir) VE gercek hata
+    // SESSIZCE YUTULMAMALIDIR. Onceki tek `Promise.all(...).catch(() => set(
+    // jenerik metin))` deseni asil nedeni (401/5xx/ag hatasi) hem maskeliyor
+    // hem de iki istegi birbirine baglayarak birinin hatasini digerine mal
+    // ediyordu; burada her hata ayrica `console.error` ile teshis edilebilir
+    // kilinir ve mumkunse gercek `ApiError.message` gosterilir.
+    void listPersonaDimensions()
+      .then((dims) => {
+        if (!cancelled) setDimensions(dims);
       })
-      .catch(() => setPresetsError("Persona presetleri yüklenemedi."));
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Persona boyutlari yuklenemedi:", err);
+        setDimensionsError(
+          err instanceof ApiError ? err.message : "Persona boyutları yüklenemedi.",
+        );
+      });
+
+    void listPersonaPresets()
+      .then((presetList) => {
+        if (!cancelled) setPresets(presetList);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Persona presetleri yuklenemedi:", err);
+        setPresetsError(err instanceof ApiError ? err.message : "Persona presetleri yüklenemedi.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -200,11 +230,14 @@ export default function Step3Personas({ payload, fieldErrors, onChange }: StepPr
       )}
 
       {mode === "custom" && (
-        <PersonaDistributionEditor
-          dimensions={dimensions}
-          distribution={payload.persona_distribution ?? {}}
-          onChange={(next) => onChange("persona_distribution", next)}
-        />
+        <>
+          {dimensionsError && <p className="auth-error">{dimensionsError}</p>}
+          <PersonaDistributionEditor
+            dimensions={dimensions}
+            distribution={payload.persona_distribution ?? {}}
+            onChange={(next) => onChange("persona_distribution", next)}
+          />
+        </>
       )}
 
       {mode !== "none" && (

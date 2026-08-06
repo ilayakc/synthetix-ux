@@ -11,6 +11,7 @@ const sessionResponse = {
   organization_id: "00000000-0000-0000-0000-000000000000",
   organization_name: "Test Org",
   role: "owner",
+  is_platform_admin: false,
 };
 
 afterEach(() => {

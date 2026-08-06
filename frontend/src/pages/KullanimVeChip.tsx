@@ -52,13 +52,19 @@ export default function KullanimVeChip() {
 
   return (
     <section aria-labelledby="kullanim-ve-chip-heading">
-      <h1 id="kullanim-ve-chip-heading" className="page-heading">
-        Kullanım ve Chip
-      </h1>
-      <p className="page-placeholder">
-        Chip bakiyeniz ve ücretsiz kullanım haklarınızın durumu aşağıda listelenir.{" "}
-        <Link to="/chip-yukle">Chip yükle</Link>
-      </p>
+      <div className="usage-overview__header">
+        <div>
+          <h1 id="kullanim-ve-chip-heading" className="page-heading">
+            Kullanım ve Chip
+          </h1>
+          <p className="page-placeholder">
+            Bakiyenizi ve ücretsiz test haklarınızı tek yerden takip edin.
+          </p>
+        </div>
+        <Link to="/chip-yukle" className="auth-submit usage-overview__topup-button">
+          Chip Yükle
+        </Link>
+      </div>
 
       {isLoading && <p className="page-placeholder">Yükleniyor…</p>}
       {error && <p className="page-placeholder">{error}</p>}

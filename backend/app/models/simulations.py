@@ -1,12 +1,17 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.ai_pipeline import AIPipelineRun
+    from app.models.personas import Persona
 
 
 class SimulationStatus(str, enum.Enum):
@@ -92,6 +97,30 @@ class SimulationRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     launch_run_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
     free_entitlement_feature_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     chip_reservation_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    # `chip_reservation_id` (baseline/modul Chip'i) ile AYNI desende, ama AYRI
+    # bir referans: `ai_report` seciliyse launch grubu basina rezerve edilen
+    # TEK AI Chip rezervasyonu (bkz. app.services.test_wizard.launch_draft,
+    # app.services.pricing.AI_REPORT_CHIP_COST). A/B'nin iki run'i AYNI id'yi
+    # tasir; AI secilmemis run'larda NULL kalir (eski run'lar icin backfill
+    # YOKTUR). Baseline `chip_reservation_id` semantigi DEGISMEZ. `chip_
+    # reservation_id` gibi bu alan da bilerek plain (FK'siz, indekssiz) bir
+    # UUID'dir - rezervasyonun kanonik durumu `chip_reservations` tablosunda
+    # tutulur, bu yalnizca zayif bir referanstir.
+    ai_chip_reservation_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+
+    # `passive_deletes=True`: fiili silme, DB'deki `ondelete="CASCADE"` FK'si
+    # (bkz. app.models.personas.Persona) tarafindan yapilir; ORM burada
+    # ayrica tek tek DELETE yayinlamaz, yalnizca ayni transaction icinde
+    # `run.personas` erisimini/iliskisini saglar.
+    personas: Mapped[list["Persona"]] = relationship(
+        back_populates="simulation_run", cascade="all, delete-orphan", passive_deletes=True
+    )
+    # Bir SimulationRun icin en fazla bir AI pipeline kaydi olabilir (bkz.
+    # app.models.ai_pipeline.AIPipelineRun.simulation_run_id UNIQUE
+    # constraint'i) - bu yuzden liste degil, tekil/opsiyonel iliski.
+    ai_pipeline_run: Mapped["AIPipelineRun | None"] = relationship(
+        back_populates="simulation_run", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 class CalibrationObservation(UUIDPrimaryKeyMixin, TimestampMixin, Base):

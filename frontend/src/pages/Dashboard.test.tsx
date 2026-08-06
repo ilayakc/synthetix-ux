@@ -11,6 +11,7 @@ const sessionResponse = {
   organization_id: "00000000-0000-0000-0000-000000000000",
   organization_name: "Örnek Organizasyon",
   role: "owner",
+  is_platform_admin: false,
 };
 
 function jsonResponse(status: number, body: unknown) {
@@ -211,7 +212,7 @@ describe("Dashboard", () => {
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "42");
   });
 
-  it("aktif test yoksa aciklamali bos durum ve Yeni Test Başlat baglantisi gosterir", async () => {
+  it("aktif test yoksa bos durumda Yeni Test eylemini tekrarlamaz", async () => {
     stubDashboardFetch({});
 
     renderDashboard();
@@ -221,8 +222,17 @@ describe("Dashboard", () => {
     );
     const activeTestSection = screen.getByText("Aktif Test").closest("section");
     expect(
-      within(activeTestSection as HTMLElement).getByRole("link", { name: "Yeni Test Başlat" }),
-    ).toHaveAttribute("href", "/tests/new");
+      within(activeTestSection as HTMLElement).queryByRole("link", { name: /Yeni Test/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Yeni test oluştur" })).toHaveAttribute(
+      "href",
+      "/tests/new",
+    );
+    expect(screen.getAllByRole("link", { name: "Yeni Test Başlat" })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Yeni Test Başlat" })).toHaveAttribute(
+      "href",
+      "/tests/new",
+    );
   });
 
   it("son aktivitelerde yalnizca gercek API verilerinden turetilen olaylari, en fazla 5 tanesini gosterir", async () => {

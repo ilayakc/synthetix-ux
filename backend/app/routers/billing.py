@@ -82,6 +82,9 @@ class QuoteResponse(BaseModel):
     free_entitlement_applicable: bool
     line_items: list[QuoteLineItemResponse]
     required_chips: int
+    # `ai_report` seciliyse 50, degilse 0 - baseline `required_chips`ten AYRI
+    # tutulan AI raporu ucreti (bkz. app.services.quotes.QuoteResult).
+    ai_report_chips: int = 0
     total_chips: int
 
 
@@ -125,6 +128,7 @@ async def post_quote(
             for item in quote.line_items
         ],
         required_chips=quote.required_chips,
+        ai_report_chips=quote.ai_report_chips,
         total_chips=quote.total_chips,
     )
 

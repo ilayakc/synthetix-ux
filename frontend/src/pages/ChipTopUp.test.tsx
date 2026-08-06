@@ -74,28 +74,18 @@ describe("ChipTopUp", () => {
     expect(screen.getByText(/Ölçek paketi/)).toBeInTheDocument();
   });
 
-  it("kart bilgileri alani gorsel bir onizlemedir; girilen degerler talep govdesine eklenmez", async () => {
+  it("sahte kart alanlarini gostermez ve yalnizca secilen paketi gonderir", async () => {
     stubFetch({});
 
     render(<ChipTopUp />);
 
     await waitFor(() => expect(screen.getByText(/Büyüme paketi/)).toBeInTheDocument());
 
-    // Alanlar gorunur (UI'da "gercekmis gibi" gorunmesi istendi) ama tipe/CVV
-    // gibi hicbir deger asla `input[type="password"]` degildir (tarayici
-    // otomatik doldurma/parola yoneticisi tetiklenmesin) ve `autoComplete="off"`.
-    const cardNumberInput = screen.getByLabelText(/kart numarası/i);
-    expect(cardNumberInput).toHaveAttribute("autocomplete", "off");
-    expect(document.querySelector('input[type="password"]')).not.toBeInTheDocument();
-
-    fireEvent.change(cardNumberInput, { target: { value: "4111111111111111" } });
-    fireEvent.change(screen.getByLabelText(/kart üzerindeki isim/i), {
-      target: { value: "Test Kullanici" },
-    });
-    fireEvent.change(screen.getByLabelText(/son kullanma tarihi/i), {
-      target: { value: "12/30" },
-    });
-    fireEvent.change(screen.getByLabelText(/güvenlik kodu/i), { target: { value: "123" } });
+    expect(screen.queryByLabelText(/kart numarası/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/kart üzerindeki isim/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/son kullanma tarihi/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/güvenlik kodu/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Ödeme sağlayıcısı henüz aktif değildir/)).toBeInTheDocument();
 
     const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
     fireEvent.click(screen.getByText("Yükleme talebi gönder"));
@@ -112,7 +102,6 @@ describe("ChipTopUp", () => {
     expect(topupCall).toBeDefined();
     const requestBody = JSON.parse((topupCall![1] as RequestInit).body as string);
     expect(requestBody).toEqual({ package_key: expect.any(String) });
-    expect(JSON.stringify(requestBody)).not.toMatch(/4111111111111111|Test Kullanici|123/);
   });
 
   it("talep gonderme basarili olunca bakiyenin degismedigini belirten bilgilendirme gosterir", async () => {
@@ -143,7 +132,10 @@ describe("ChipTopUp", () => {
 
     render(<ChipTopUp />);
 
-    await waitFor(() => expect(screen.getByText(/100 Chip \(starter\)/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/100 Chip · Başlangıç paketi/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/\(starter\)/)).not.toBeInTheDocument();
     expect(screen.getByText("Beklemede")).toBeInTheDocument();
   });
 });

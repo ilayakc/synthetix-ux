@@ -13,6 +13,7 @@ from app.config import settings as default_settings
 from app.config_security import validate_production_secrets
 from app.db import engine, get_session
 from app.logging_config import configure_logging
+from app.logging_middleware import install_request_logging
 from app.redis_client import check_redis_connection
 from app.routers.ai_explanations import router as ai_explanations_router
 from app.routers.analysis_modules import router as analysis_modules_router
@@ -32,7 +33,11 @@ from app.routers.test_wizard import router as test_wizard_router
 # gore) - `create_app()`'in kendisi degil, cunku bu fabrika testlerde farkli
 # `Settings` ile TEKRAR TEKRAR cagrilir ve log formati her cagrida
 # degismemelidir (bkz. app.logging_config.configure_logging idempotentligi).
-configure_logging(default_settings.environment)
+configure_logging(
+    default_settings.environment,
+    log_level=default_settings.log_level,
+    log_format=default_settings.log_format,
+)
 
 _CSP = (
     "default-src 'self'; "
@@ -132,6 +137,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
             response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
             return response
+
+    # En son eklenir ki (Starlette middleware yigini "son eklenen en dista"
+    # sirasiyla kurulur) CORS/TrustedHost/guvenlik-header katmanlarini da
+    # SARSIN - boylece bu katmanlar tarafindan reddedilen istekler de
+    # (ornekin bilinmeyen bir Host header'i) suresi/durumuyla loglanir.
+    install_request_logging(app, cfg)
 
     app.include_router(ai_explanations_router)
     app.include_router(analysis_modules_router)

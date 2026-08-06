@@ -306,6 +306,23 @@ async def test_repeated_fetch_of_same_report_is_stable(session: AsyncSession, or
     assert first.created_at == second.created_at
 
 
+async def test_report_detail_includes_simulation_run_id(session: AsyncSession, organization: Organization):
+    """Rapor detayi, ait oldugu SimulationRun'in id'sini dondurur - frontend
+    bunu tamamlanmis `ai_report` pipeline'ina (GET /ai-pipeline|/ai-report)
+    ulasmak icin kullanir (bkz. app.routers.reports.ReportDetailResponse)."""
+
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(session, organization, variant)
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+
+    assert detail.simulation_run_id == run.id
+    # Rapor id'si ile karistirilmamali (ayri kimlikler).
+    assert detail.simulation_run_id == report.simulation_run_id
+    assert detail.id == report.id
+
+
 # --- Belirsizlik gorunumu ve erisilebilir grafik ozeti -------------------------
 
 

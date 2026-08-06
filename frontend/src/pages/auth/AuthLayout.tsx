@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 interface AuthLayoutProps {
   title: string;
@@ -9,7 +10,7 @@ interface AuthLayoutProps {
 
 const BENEFITS = [
   "Dakikalar içinde senaryo bazlı tasarım geri bildirimi",
-  "Sınırsız sentetik persona ile erken risk tespiti",
+  "Esnek sentetik persona senaryolarıyla erken risk tespiti",
   "Ekiplerle paylaşılabilir, aksiyon alınabilir raporlar",
 ];
 
@@ -17,13 +18,15 @@ export default function AuthLayout({ title, subtitle, children, footer }: AuthLa
   return (
     <div className="auth-page">
       <aside className="auth-promo" aria-hidden="true">
-        <div className="auth-promo__brand">Synthetix UX</div>
+        <Link to="/" className="auth-promo__brand">
+          Synthetix UX
+        </Link>
 
         <h2 className="auth-promo__headline">
           Tasarım risklerini gerçek kullanıcı araştırmasından önce sentetik senaryolarla keşfedin
         </h2>
         <p className="auth-promo__description">
-          Synthetix UX, ürün kararlarınızı gerçek kullanıcılarla test etmeden önce yapay zeka
+          Synthetix UX, ürün kararlarınızı gerçek kullanıcılarla test etmeden önce yapay zekâ
           destekli sentetik personalarla sınar; tasarım risklerini erken ve düşük maliyetle
           yakalamanızı sağlar.
         </p>
@@ -115,7 +118,9 @@ export default function AuthLayout({ title, subtitle, children, footer }: AuthLa
 
       <div className="auth-content">
         <div className="auth-card" role="main" aria-labelledby="auth-heading">
-          <div className="auth-card__brand">Synthetix UX</div>
+          <Link to="/" className="auth-card__brand">
+            Synthetix UX
+          </Link>
           <h1 id="auth-heading" className="auth-card__title">
             {title}
           </h1>

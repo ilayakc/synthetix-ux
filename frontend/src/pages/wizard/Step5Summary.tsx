@@ -35,11 +35,12 @@ export default function Step5Summary({
 }: Step5Props) {
   const moduleNamesByKey = new Map(moduleCatalog.map((module) => [module.key, module.name]));
   const modules = payload.modules ?? [];
+  // Bakiye kontrolu, gercekten rezerve edilecek TOPLAM tutara gore yapilir
+  // (`total_chips` = baseline `required_chips` + ayri `ai_report` ucreti); bkz.
+  // Step4Modules'teki ayni duzeltme. Ucretsiz baseline + 50 AI durumunda bile
+  // yetersiz bakiye dogru yakalanir (total 0 iken uyari zaten cikmaz).
   const insufficientBalance =
-    quote !== null &&
-    !quote.free_entitlement_applicable &&
-    chipBalance !== null &&
-    chipBalance < quote.required_chips;
+    quote !== null && chipBalance !== null && chipBalance < quote.total_chips;
 
   const isAbComparison = payload.test_type === "ab_comparison";
   const isScreenshotSource = payload.current_source_type === "screenshot";
@@ -270,12 +271,12 @@ export default function Step5Summary({
           <div className="wizard-quote-total">
             <span>Toplam</span>
             <span>
-              {quote.free_entitlement_applicable
+              {quote.total_chips === 0
                 ? "Ücretsiz hak"
-                : `${quote.required_chips.toLocaleString("tr-TR")} Chip`}
+                : `${quote.total_chips.toLocaleString("tr-TR")} Chip`}
             </span>
           </div>
-          {chipBalance !== null && !quote.free_entitlement_applicable && (
+          {chipBalance !== null && quote.total_chips > 0 && (
             <p className="wizard-field-hint">
               Mevcut Chip bakiyeniz: {chipBalance.toLocaleString("tr-TR")}
             </p>

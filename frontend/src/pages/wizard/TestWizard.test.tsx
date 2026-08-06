@@ -230,6 +230,97 @@ describe("TestWizard", () => {
     expect(screen.getByLabelText("Hedef kitle")).toHaveValue("Yeni musteriler");
   });
 
+  it("4. adimda ai_report secili ama persona secimi yoksa Ileri kullaniciyi persona adimina yonlendirir", async () => {
+    const draftAtStep4 = {
+      ...emptyDraft,
+      current_step: 4,
+      payload: {
+        project_id: project.id,
+        name: "AI raporu testi",
+        target_task: "Odeme tamamla",
+        test_type: "existing_site_basic_ux",
+        current_url: "https://example.com",
+        persona_count: 500,
+        target_audience: "Genel kullanicilar",
+        modules: ["ai_report"],
+      },
+    };
+    const catalogWithAiReport = {
+      catalog_version: "2026.3",
+      modules: [
+        ...moduleCatalogResponse.modules,
+        {
+          key: "ai_report",
+          name: "AI raporu",
+          description: "AI destekli nihai rapor",
+          outputs: ["AI raporu"],
+          measurement_type: "synthetic_estimate",
+          chip_cost: 50,
+          free_entitlement_feature_key: null,
+          estimated_duration_minutes: 10,
+          selectable_in_wizard: true,
+          supported_source_types: ["url", "screenshot", "ai_generated"],
+        },
+      ],
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, draftAtStep4);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, draftAtStep4);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/analysis-modules/catalog")) {
+          return jsonResponse(200, catalogWithAiReport);
+        }
+        if (url.includes("/api/personas/dimensions")) return jsonResponse(200, []);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 100,
+            entitlements: [],
+            pricing_version: "2026.3",
+          });
+        }
+        if (url.includes("/api/billing/quote")) {
+          return jsonResponse(200, {
+            pricing_version: "2026.3",
+            test_type: "basic_ux_test",
+            persona_count: 500,
+            modules: ["ai_report"],
+            free_entitlement_feature_key: "basic_ux_test",
+            free_entitlement_applicable: true,
+            line_items: [],
+            required_chips: 50,
+            total_chips: 50,
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    // 4. adim yuklendi.
+    await waitFor(() =>
+      expect(screen.getByText("Analiz modülleri (isteğe bağlı)")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByText("İleri"));
+
+    // Persona adimina (3) yonlendirildi: persona alani gorunur.
+    await waitFor(() => expect(screen.getByLabelText(/Persona sayısı/)).toBeInTheDocument());
+    // Neden banner'da (role="alert") aciklanir.
+    expect(
+      screen.getByText(/AI raporu modülü temsili personalar üzerinde çalışır/),
+    ).toBeInTheDocument();
+  });
+
   it("yetki onayi verilmeden baslatma dugmesi devre disi kalir", async () => {
     const readyForLaunchDraft = {
       ...emptyDraft,
@@ -566,7 +657,7 @@ describe("TestWizard", () => {
     const launchButton = await screen.findByText("Ücretsiz hakkı kullan ve başlat");
     fireEvent.click(launchButton);
 
-    await waitFor(() => expect(screen.getByText("Taslak bulunamadi")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Taslak bulunamadı")).toBeInTheDocument());
     expect(
       screen.queryByText("Test başlatılamadı. Lütfen tekrar deneyin."),
     ).not.toBeInTheDocument();
@@ -597,9 +688,7 @@ describe("TestWizard", () => {
     const launchButton = await screen.findByText("Ücretsiz hakkı kullan ve başlat");
     fireEvent.click(launchButton);
 
-    await waitFor(() =>
-      expect(screen.getByText(/API istegi basarisiz: 500/)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/API isteği başarısız: 500/)).toBeInTheDocument());
   });
 
   it("persona sayisi tam 100 oldugunda bir sonraki adima gecisi saglar (alt sinir)", async () => {
@@ -939,9 +1028,7 @@ describe("TestWizard", () => {
 
     // "basic_ux_test" katalogda var ama secilebilir degil; "does_not_exist" hic yok;
     // "does-not-exist" da preset listesinde bulunmayan bir kimlik.
-    renderWizard(
-      "/tests/new?modules=does_not_exist,basic_ux_test&persona_preset=does-not-exist",
-    );
+    renderWizard("/tests/new?modules=does_not_exist,basic_ux_test&persona_preset=does-not-exist");
 
     await waitFor(() => expect(screen.getByText("1. Test Detayları")).toBeInTheDocument());
 
@@ -1254,7 +1341,11 @@ describe("TestWizard", () => {
     fireEvent.click(screen.getByRole("radio", { name: /Ekran görüntüsü/ }));
 
     await waitFor(() =>
-      expect(patchCalls.some((call) => (call.payload as Record<string, unknown>)?.current_source_type === "screenshot")).toBe(true),
+      expect(
+        patchCalls.some(
+          (call) => (call.payload as Record<string, unknown>)?.current_source_type === "screenshot",
+        ),
+      ).toBe(true),
     );
   });
 
@@ -1865,7 +1956,8 @@ describe("TestWizard", () => {
       "fetch",
       vi.fn().mockImplementation((url: string, init?: RequestInit) => {
         if (
-          (url.includes("/api/design-assets/asset-a") || url.includes("/api/design-assets/asset-b")) &&
+          (url.includes("/api/design-assets/asset-a") ||
+            url.includes("/api/design-assets/asset-b")) &&
           (init?.method ?? "GET") === "GET"
         ) {
           return jsonResponse(200, {
@@ -2000,7 +2092,9 @@ describe("TestWizard", () => {
     fireEvent.click(screenshotRadio);
 
     expect(
-      await screen.findByText(/Ağ ve cihaz testi kaldırıldı\. Bu modül yalnızca canlı URL ile çalışır\./),
+      await screen.findByText(
+        /Ağ ve cihaz testi kaldırıldı\. Bu modül yalnızca canlı URL ile çalışır\./,
+      ),
     ).toBeInTheDocument();
 
     await waitFor(() => {

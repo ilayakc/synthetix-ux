@@ -17,8 +17,10 @@ from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.design_assets import DesignAssetStatus
 from app.models.design_generation import DesignGenerationStatus
+from app.models.personas import Persona
 from app.models.simulations import SimulationRun, SimulationStatus
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
 from app.models.tests import TestDefinition, TestVariant
@@ -27,6 +29,7 @@ from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import entitlements as entitlements_service
 from app.services import page_analysis as page_analysis_service
+from app.services.ai_pipeline import stage_sources as ai_context
 from app.services.exceptions import (
     DesignAssetNotFoundError,
     DesignGenerationJobNotFoundError,
@@ -158,6 +161,82 @@ PATCHABLE_FIELDS = {
     "authorization_confirmed",
     "device_profile",
 }
+
+# --- AI raporu (`ai_report`) hazirlik/readiness sozlesmesi (Faz 3C.2B1) -------
+#
+# `ai_report` modulu, GERCEK bir AI rapor saglayicisi henuz olmadigi icin
+# yalnizca `settings.ai_report_enabled` acikca `True` iken launch edilebilir.
+# Hazirlik `False` (guvenli varsayilan) iken launch, HICBIR yan etki (Chip
+# rezervasyonu, SimulationRun, PageAnalysis, pipeline) uretilmeden reddedilir -
+# `validate_ai_report_readiness` `launch_draft`ta tum DB mutasyonlarindan ONCE
+# cagrilir. Environment eksikligi bir Mock/yedek saglayiciya DUSMEZ.
+AI_REPORT_NOT_READY_MESSAGE = (
+    "AI raporu modulu su anda kullanilamiyor (saglayici henuz etkin degil); "
+    "bu modulu kaldirip testi baslatabilirsiniz."
+)
+
+
+def validate_ai_report_readiness(payload: dict) -> None:
+    """`ai_report` secili AMA hazirlik bayragi kapaliysa launch'i reddeder.
+
+    `launch_draft` bunu, quote/rezervasyon dahil HICBIR yan etki uretilmeden
+    ONCE cagirir; boylece kapali provider durumunda ne Chip rezervasyonu ne de
+    SimulationRun/pipeline olusur (bkz. AI_REPORT_NOT_READY_MESSAGE)."""
+
+    modules = payload.get("modules") or []
+    if module_catalog.AI_REPORT_MODULE_KEY in modules and not settings.ai_report_enabled:
+        raise DraftValidationError(AI_REPORT_NOT_READY_MESSAGE)
+
+
+# --- AI raporu (`ai_report`) persona zorunlulugu sozlesmesi ------------------
+#
+# `ai_report` pipeline'i, tanim geregi TEMSILI personalar uzerinde calisir:
+# Stage 2+ persona-basli davranis uretimi icin en az bir kalici `Persona`
+# satiri gerekir (bkz. app.services.ai_pipeline.orchestration._validate_persona_
+# set - persona yoksa `invalid_persona_set` ile reddeder VE hicbir pipeline/
+# stage olusmaz). Ancak persona satirlari YALNIZCA sihirbazda bir persona
+# secimi (preset VEYA ozel dagilim) yapilmissa olusturulur (bkz.
+# `_resolve_persona_sample` / `_payload_has_persona_selection`); "Belirtme"
+# secildiginde (geriye donuk uyumluluk) hicbir persona yazilmaz.
+#
+# Bu yuzden `ai_report` secili AMA hicbir persona secimi yoksa launch, TUM yan
+# etkilerden (baseline/AI Chip rezervasyonu, SimulationRun, PageAnalysis,
+# pipeline) ONCE reddedilir - aksi halde (gozlenen hata) baseline calisir, 50
+# AI Chip rezerve edilir, sonra pipeline init `invalid_persona_set` ile
+# basarisiz olur ve AI ucreti gec iade edilir (kotu UX). "Belirtme" icin
+# otomatik/varsayilan bir dagilim URETILMEZ - bu bir urun karari olurdu ve
+# sihirbazin "isteğe bagli persona" tasariminla celisirdi. Persona-suz temel
+# (ai_report'suz) testlerin geriye donuk uyumlulugu BOZULMAZ.
+AI_REPORT_PERSONA_REQUIRED_MESSAGE = (
+    "AI raporu modulu temsili personalar uzerinde calisir: once 3. adimda bir "
+    "persona preset'i secin veya ozel bir persona dagilimi tanimlayin, sonra "
+    "testi baslatin."
+)
+
+
+def _payload_has_persona_selection(payload: dict) -> bool:
+    """Sihirbaz payload'inda gecerli bir persona secimi (preset veya ozel
+    dagilim) var mi? `_resolve_persona_sample`in dallanma kosuluyla BIREBIR
+    ayni truthiness'i kullanir - bos bir `persona_distribution={}` (custom mod
+    secilip hicbir boyut girilmemis) da orada oldugu gibi BURADA da "secim yok"
+    sayilir; boylece bu iki yer asla ayrisamaz (TEK dogruluk kaynagi)."""
+
+    return bool(payload.get("persona_preset_id")) or bool(payload.get("persona_distribution"))
+
+
+def validate_ai_report_persona_requirement(payload: dict) -> None:
+    """`ai_report` secili AMA hicbir persona secimi yoksa launch'i reddeder.
+
+    `launch_draft` bunu, `validate_ai_report_readiness`ten hemen SONRA ve
+    quote/rezervasyon dahil HICBIR yan etki uretilmeden ONCE cagirir (bkz.
+    AI_REPORT_PERSONA_REQUIRED_MESSAGE). Bu, frontend gizlemesinden BAGIMSIZ,
+    zorunlu bir sunucu tarafi kapisidir - gecersiz kombinasyon pipeline init
+    asamasina kadar HIC ilerlemez."""
+
+    modules = payload.get("modules") or []
+    if module_catalog.AI_REPORT_MODULE_KEY in modules and not _payload_has_persona_selection(payload):
+        raise DraftValidationError(AI_REPORT_PERSONA_REQUIRED_MESSAGE)
+
 
 ENGINE_NOT_AVAILABLE_MESSAGE = (
     "Is 'queued' durumuna alindi; heuristic sentetik simulasyon motoru "
@@ -670,12 +749,18 @@ async def _resolve_persona_sample(
     organization_id: uuid.UUID,
     payload: dict,
     deterministic_seed: int,
-) -> dict | None:
+) -> tuple[dict | None, personas.CohortSampleResult | None]:
     """Sihirbazda secilen preset/ozel dagilimdan deterministik bir cohort ozeti kurar.
 
     Persona secimi bu adimda zorunlu tutulmaz (geriye donuk uyumluluk icin):
-    ne `persona_preset_id` ne de `persona_distribution` verilmisse `None`
+    ne `persona_preset_id` ne de `persona_distribution` verilmisse `(None, None)`
     dondurulur ve `input_snapshot`'a hicbir persona ornekleme verisi eklenmez.
+
+    Iki deger dondurur: (1) `input_snapshot["persona_sample"]`e AYNEN yazilan,
+    degismeyen JSON-uyumlu sozluk (motorun kaynak gercekligi) ve (2) ayni
+    ornekleme sonucunun HAM `CohortSampleResult`'i - `build_representative_personas`
+    (bkz. `launch_draft`) BU ikinci degeri kullanir, boylece ayni dagilim
+    ikinci kez sample edilmez/yeni bir seed uretilmez.
     """
 
     distribution: dict | None = None
@@ -694,10 +779,10 @@ async def _resolve_persona_sample(
         distribution = payload["persona_distribution"]
 
     if distribution is None:
-        return None
+        return None, None
 
     result = personas.sample_cohorts(distribution, payload["persona_count"], deterministic_seed)
-    return {
+    persona_sample_snapshot = {
         "generator_version": result.generator_version,
         "distribution_snapshot": result.distribution_snapshot,
         "segments": [
@@ -712,6 +797,74 @@ async def _resolve_persona_sample(
         ],
         "sample_hash": result.sample_hash,
     }
+    return persona_sample_snapshot, result
+
+
+def _build_persona_projection(
+    cohort_sample: personas.CohortSampleResult,
+    expected_persona_count: int,
+) -> tuple[personas.PersonaProjection, ...]:
+    """Bir `CohortSampleResult`i en fazla `MAX_REPRESENTATIVE_PERSONAS` saf
+    persona DTO'suna indirger - launch basina TAM OLARAK BIR KEZ cagrilir
+    (bkz. `launch_draft`: varyant dongusunden ONCE) ve donen tuple, o launch'in
+    TUM varyantlari arasinda PAYLASILIR (her varyant kendi ORM `Persona`
+    nesnelerini bu AYNI DTO listesinden turetir, bkz. `_persona_rows_from_projection`)
+    - boylece A/B karsilastirmasinin iki tarafi da birebir ayni cohort'u
+    (index/label/attributes/population_weight) gorur, yalnizca test edilen
+    tasarim degisir.
+
+    `build_representative_personas` zaten agirlik toplaminin `cohort_sample.
+    total_count`e esit oldugunu dogrular/garanti eder (bkz. o fonksiyonun
+    docstring'i); burada bunu AYRICA, acik bir sekilde `expected_persona_count`
+    (yani `payload["persona_count"]`) degerine karsi yeniden dogrularuz -
+    boylece projeksiyon fonksiyonu ileride (ornegin test amacli monkeypatch
+    veya gelecekteki bir degisiklikle) kendi ic garantisini saglamasa bile
+    launch hicbir zaman tutarsiz Persona satirlari kaydetmez.
+
+    Gecersiz bir projeksiyon (`PersonaValidationError` veya toplam uyusmazligi)
+    burada sessizce yutulmaz/duzeltilmez - acik bir `DraftValidationError`
+    olarak cagiran tarafa (`launch_draft`) yukseltilir; bu, launch'in mevcut
+    hata/rollback sozlesmesiyle (bkz. `app.routers.test_wizard.launch_draft`)
+    ayni sekilde ele alinmasini saglar.
+    """
+
+    try:
+        projection = personas.build_representative_personas(cohort_sample)
+    except personas.PersonaValidationError as exc:
+        raise DraftValidationError(f"persona projeksiyonu olusturulamadi: {exc}") from exc
+
+    total_weight = sum(persona.population_weight for persona in projection)
+    if total_weight != expected_persona_count:
+        raise DraftValidationError(
+            "persona projeksiyonu agirlik toplami persona_count ile eslesmiyor "
+            f"(beklenen: {expected_persona_count}, hesaplanan: {total_weight})"
+        )
+
+    return projection
+
+
+def _persona_rows_from_projection(
+    simulation_run_id: uuid.UUID,
+    projection: tuple[personas.PersonaProjection, ...],
+) -> list[Persona]:
+    """Paylasilan (launch basina bir kez hesaplanmis) projeksiyon DTO listesinden,
+    VERILEN run'a ozel, TAZE `Persona` ORM nesneleri uretir (henuz session'a
+    eklenmemis) - ayni ORM nesneleri asla iki run arasinda paylasilmaz; her
+    cagri kendi `attributes` sozluk kopyasini (`dict(persona.attributes)`)
+    olusturur ki bir run'a ait satirin ORM durumu diger run'inkini
+    (kazayla paylasilan referans uzerinden) etkilemesin.
+    """
+
+    return [
+        Persona(
+            simulation_run_id=simulation_run_id,
+            index=persona.index,
+            label=persona.label,
+            attributes=dict(persona.attributes),
+            population_weight=persona.population_weight,
+        )
+        for persona in projection
+    ]
 
 
 def _current_side_spec(payload: dict, *, role: str) -> dict:
@@ -871,6 +1024,23 @@ async def launch_draft(
     # KALIR (eski/bozuk/manuel olusturulmus kayitlar icin).
     validate_module_source_compatibility(draft.payload)
 
+    # AI raporu hazirlik (readiness) kontrolu: `ai_report` secili ama saglayici
+    # etkin degilse launch BURADA, hicbir yan etki (Chip rezervasyonu/
+    # SimulationRun/PageAnalysis/pipeline) uretilmeden reddedilir (bkz.
+    # `validate_ai_report_readiness`). Yalnizca frontend gizlemesine
+    # guvenilmez - bu backend kontrolu ZORUNLUDUR.
+    validate_ai_report_readiness(draft.payload)
+
+    # AI raporu persona zorunlulugu: `ai_report` secili AMA hicbir persona
+    # secimi (preset/ozel dagilim) yoksa launch BURADA, `validate_ai_report_
+    # readiness`ten hemen sonra ve yine hicbir yan etki (Chip/AI rezervasyonu,
+    # SimulationRun, PageAnalysis, pipeline) uretilmeden reddedilir (bkz.
+    # `validate_ai_report_persona_requirement`). Aksi halde baseline calisir,
+    # AI Chip rezerve edilir ve pipeline init `invalid_persona_set` ile
+    # basarisiz olurdu (gozlenen hata). Yalnizca frontend gizlemesine
+    # guvenilmez - bu backend kontrolu ZORUNLUDUR.
+    validate_ai_report_persona_requirement(draft.payload)
+
     # Paket 4 Final: her tarafin kaynagi (URL/screenshot/AI) launch aninda
     # BAGIMSIZ olarak yeniden dogrulanir - gecersiz bir taraf (silinmis/
     # expired/cross-tenant asset, kabul edilmemis AI isi) BU NOKTADAN SONRAKI
@@ -926,6 +1096,49 @@ async def launch_draft(
         reserved_chips = quote.required_chips
         chip_reservation_id = reservation.id
 
+    # AYRI AI Chip rezervasyonu (bkz. quote.ai_report_chips / pricing.
+    # AI_REPORT_CHIP_COST): baseline ucretinden BAGIMSIZ, launch grubu basina
+    # TEK bir rezervasyon (A/B'de iki varyant AYNI rezervasyonu paylasir - ayni
+    # idempotency-key `ai-report-launch:{draft.id}` ayni satiri dondurur).
+    #
+    # ATOMIK bakiye: bu ikinci `reserve_chips` cagrisi AYNI transaction icinde,
+    # `_lock_organization`in `SELECT ... FOR UPDATE`i ile AYNI kilitli
+    # organizasyon satirini gorur; bakiye (ilk rezervasyon zaten dusuruldukten
+    # SONRA) yetersizse `InsufficientChipBalanceError` firlatir ve router tum
+    # transaction'i geri alir - YARIM (yalnizca baseline rezerve edilmis)
+    # durum kalmaz, cift ucret olusmaz. AI tamamlanana kadar RESERVED kalir;
+    # bu fazda consume EDILMEZ (bkz. simulation_worker._resolve_launch_group -
+    # yalnizca baseline-basarisizligi durumunda release edilir).
+    ai_chip_reservation_id: uuid.UUID | None = None
+    if quote.ai_report_chips > 0:
+        ai_reservation = await chip_ledger.reserve_chips(
+            session,
+            organization_id,
+            quote.ai_report_chips,
+            f"AI raporu rezervasyonu: {payload.get('name')}",
+            run_id=run_id,
+            idempotency_key=f"ai-report-launch:{draft.id}",
+        )
+        ai_chip_reservation_id = ai_reservation.id
+
+    # Launch aninda `SimulationRun.input_snapshot`a yazilacak, ALLOWLIST'li,
+    # sunucu tarafinda normalize edilmis AUTHORITATIVE baglam alanlari (bkz.
+    # app.services.ai_pipeline.stage_sources.build_task_context_source). Bu
+    # alanlar promptlarda GUVENILMEYEN kullanici verisi olarak islenmelidir
+    # (bkz. sanitize_context_text yorumu) - burada yalnizca duz-metin/kontrol-
+    # karakteri/HTML/uzunluk guvenligi uygulanir, prompt injection'a karsi tam
+    # koruma IDDIA EDILMEZ. `test_description`: sihirbaz payload'inda GERCEK bir
+    # "test aciklamasi" alani YOKTUR; `target_audience` (kitle) YANLIS bir proxy
+    # olacagi icin BILEREK kullanilmaz - alan None birakilir ve stage_sources
+    # deterministik bir fallback'e duser. `methodology_context`: sunucu
+    # kontrollu, surumlenmis SABIT (METHODOLOGY_CONTEXT_V1).
+    authoritative_context = {
+        "target_task": ai_context.sanitize_context_text(payload.get("target_task"), max_len=500),
+        "test_name": ai_context.sanitize_context_text(payload.get("name"), max_len=200),
+        "test_description": ai_context.sanitize_context_text(payload.get("test_description"), max_len=1000),
+        "methodology_context": ai_context.METHODOLOGY_CONTEXT_V1,
+    }
+
     test_definition = TestDefinition(
         organization_id=organization_id,
         project_id=uuid.UUID(str(payload["project_id"])),
@@ -934,6 +1147,25 @@ async def launch_draft(
     )
     session.add(test_definition)
     await session.flush()
+
+    # Persona girdisi (persona_preset_id/persona_distribution/persona_count),
+    # `_variant_specs`in ayirdigi tek sey olan kaynak (URL/DesignAsset) turunun
+    # aksine, TUM varyantlar icin ORTAKTIR - bu yuzden cohort ornekleme, varyant
+    # dongusunden ONCE, TEK bir sabit `persona_sample_seed` ile TAM OLARAK BIR
+    # KEZ yapilir. Bu seed, motor determinizmi icin varyant basina KASITLI
+    # olarak farkli uretilen `SimulationRun.deterministic_seed`den TAMAMEN
+    # BAGIMSIZDIR (bkz. asagidaki `run_deterministic_seed`) - ikisi karistirilirsa
+    # (largest-remainder'in eslik-kalan tie-break'i, bkz. app.services.personas.
+    # _allocate_counts) A/B'nin iki tarafi FARKLI cohort segment sayimlarina
+    # sahip olabilirdi; bu, "A/B karsilastirmasinda yalnizca test edilen tasarim
+    # degisir" ilkesini ihlal ederdi.
+    persona_sample_seed = uuid.uuid4().int & ((1 << 63) - 1)
+    persona_sample, cohort_sample = await _resolve_persona_sample(
+        session, organization_id, payload, persona_sample_seed
+    )
+    persona_projection: tuple[personas.PersonaProjection, ...] | None = None
+    if cohort_sample is not None:
+        persona_projection = _build_persona_projection(cohort_sample, payload["persona_count"])
 
     simulation_run_ids: list[uuid.UUID] = []
     for variant_name, base_config in _variant_specs(payload):
@@ -951,10 +1183,10 @@ async def launch_draft(
         session.add(variant)
         await session.flush()
 
+        # Motor (baseline/advanced_modules) determinizmi icin: her run kendi
+        # BAGIMSIZ seed'ini alir - bu, persona cohort ornekleme seed'inden
+        # (yukarida) AYRI kalmaya devam eder; degistirilmedi.
         run_deterministic_seed = uuid.uuid4().int & ((1 << 63) - 1)
-        persona_sample = await _resolve_persona_sample(
-            session, organization_id, payload, run_deterministic_seed
-        )
 
         # Paket 4B/4 Final: bu varyantin kaynagi (URL VEYA DesignAsset) icin
         # sunucu tarafinda otomatik bir PageAnalysis capture'i olusturulur ve
@@ -1005,6 +1237,14 @@ async def launch_draft(
             "role": config["role"],
             "source_type": config["source_type"],
             "pricing_version": quote.pricing_version,
+            # Authoritative AI baglam alanlari (Faz 3C.2B1) - tum varyantlarda
+            # AYNI (kaynaktan bagimsiz, launch-genelinde ortak). `methodology_
+            # context`in varligi build_task_context_source icin "yeni snapshot"
+            # ayirt edici isaretidir.
+            "target_task": authoritative_context["target_task"],
+            "test_name": authoritative_context["test_name"],
+            "test_description": authoritative_context["test_description"],
+            "methodology_context": authoritative_context["methodology_context"],
         }
         if config["design_asset_id"]:
             input_snapshot["design_asset_id"] = str(config["design_asset_id"])
@@ -1013,6 +1253,7 @@ async def launch_draft(
         if config["source_type"] == SOURCE_TYPE_AI_GENERATED:
             input_snapshot["ai_generation_id"] = payload.get("new_ai_generation_id")
         if persona_sample is not None:
+            input_snapshot["persona_sample_seed"] = persona_sample_seed
             input_snapshot["persona_sample"] = persona_sample
 
         # Kullanicinin sihirbazda onayladigi CTA kutusu (varsa, yalnizca
@@ -1036,11 +1277,30 @@ async def launch_draft(
             launch_run_id=run_id,
             free_entitlement_feature_key=free_entitlement_feature_key,
             chip_reservation_id=chip_reservation_id,
+            ai_chip_reservation_id=ai_chip_reservation_id,
             page_analysis_id=analysis.id,
         )
         session.add(run)
         await session.flush()
         simulation_run_ids.append(run.id)
+
+        # Ayni transaction'in parcasi olarak (ayri bir commit/transaction
+        # ACILMAZ): persona_projection varsa (persona secimi yapilmissa),
+        # TUM varyantlar icin (yukarida) BIR KEZ hesaplanmis, PAYLASILAN
+        # projeksiyon DTO listesinden bu run'a OZEL, taze `Persona` ORM
+        # nesneleri turetilir (bkz. `_persona_rows_from_projection`) - ayni
+        # ORM nesneleri iki run arasinda paylasilmaz, ama A/B'nin iki tarafi
+        # da AYNI DTO kaynagindan geldigi icin index/label/attributes/
+        # population_weight birebir aynidir. Bir sonraki adimda (Chip/
+        # entitlement rezervasyonu zaten bu noktadan ONCE yapildi) herhangi
+        # bir hata olursa, `session.commit()` HICBIR ZAMAN cagrilmadigi icin
+        # (bkz. app.routers.test_wizard.launch_draft / app.db.get_session) bu
+        # Persona satirlari da run/variant/definition ile birlikte geri
+        # alinir (rollback) - yetim Persona satiri kalmaz.
+        if persona_projection is not None:
+            persona_rows = _persona_rows_from_projection(run.id, persona_projection)
+            session.add_all(persona_rows)
+            await session.flush()
 
     draft.status = TestWizardDraftStatus.LAUNCHED
     draft.launch_result = {

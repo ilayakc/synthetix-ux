@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -13,6 +13,7 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    website_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -27,6 +28,12 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     email_normalized: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Organizasyon-ici rolden (bkz. Membership.role) TAMAMEN AYRI, platform
+    # genelinde tekil bir yetki bayragi. Hicbir public request govdesinden
+    # (register/profile) DEGISTIRILEMEZ; tek kaynagi bu DB kolonudur ve
+    # yetkilendirme her admin isteginde buradan (JWT claim'inden DEGIL)
+    # dogrudan okunur (bkz. app.dependencies.require_platform_admin).
+    is_platform_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class Membership(UUIDPrimaryKeyMixin, TimestampMixin, Base):

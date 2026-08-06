@@ -1,5 +1,5 @@
 import { type ComponentType, useEffect, useRef } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import {
   ActivityIcon,
   ChipCoinIcon,
@@ -9,7 +9,6 @@ import {
   HelpCircleIcon,
   HomeIcon,
   LayersIcon,
-  PlusIcon,
   UsersIcon,
 } from "./icons";
 
@@ -20,9 +19,7 @@ interface NavItem {
   icon: ComponentType<{ className?: string }>;
 }
 
-// Ana islemler: kullanicinin en sik basvurdugu bes akis. "Yeni Test" burada
-// sade bir baglanti olarak tekrarlanmaz; onun yerine altta tek, belirgin bir
-// CTA olarak sunulur (bkz. `sidebar__cta`).
+// Ana işlemler, tekrar eden bir "Yeni Test" CTA'sı olmadan tek listede sunulur.
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Genel Bakış", end: true, icon: HomeIcon },
   { to: "/projeler", label: "Projeler", icon: FolderIcon },
@@ -138,13 +135,6 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
           <NavList items={FOOTER_NAV_ITEMS} onNavigate={onClose} />
         </div>
       </nav>
-
-      <div className="sidebar__footer">
-        <Link to="/tests/new" className="sidebar__cta" onClick={onClose}>
-          <PlusIcon />
-          Yeni Test Başlat
-        </Link>
-      </div>
     </aside>
   );
 }

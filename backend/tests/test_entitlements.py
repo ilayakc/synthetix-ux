@@ -188,17 +188,21 @@ def test_pricing_version_2026_1_is_pinned_and_unaffected_by_new_modules():
 
     from app.services.pricing import CURRENT_PRICING_VERSION, get_pricing_config
 
-    assert CURRENT_PRICING_VERSION == "2026.2"
+    # Faz 3C.2B1: guncel surum 2026.3 (ai_report ucreti eklendi). 2026.1
+    # pinlenmis kalir; yeni gelismis moduller yalnizca 2026.2+ surumlerde vardir.
+    assert CURRENT_PRICING_VERSION == "2026.3"
 
     old = get_pricing_config("2026.1")
     assert old.basic_ux_test_chip_per_persona == 1
     assert old.accessibility_precheck_chip_cost == 30
     assert old.advanced_module_chip_costs == {"advanced_simulation": 50, "extended_reporting": 20}
+    assert old.ai_report_chip_cost == 0  # ai_report eski surumde yok
     with pytest.raises(ValueError):
         old.module_cost("network_device_test")
 
     current = get_pricing_config()
-    assert current.version == "2026.2"
+    assert current.version == "2026.3"
+    assert current.ai_report_chip_cost == 50
     assert current.module_cost("network_device_test") == 40
     assert current.module_cost("campaign_cta_test") == 35
     assert current.module_cost("synthetic_attention_estimate") == 25

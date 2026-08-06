@@ -22,16 +22,7 @@ export default function ChipTopUp() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  // Bu dört alan yalnizca gorsel bir on-izlemedir: hicbir backend cagrisina
-  // eklenmez, hicbir yere gonderilmez veya kaydedilmez (bkz. handleSubmit -
-  // yalnizca `selectedPackage` gonderilir). Gercek bir odeme saglayicisi
-  // baglandiginda bu alanlarin yerini saglayicinin kendi guvenli
-  // formu/SDK'si alacaktir.
-  const [cardNumber, setCardNumber] = useState("");
-  const [cardName, setCardName] = useState("");
-  const [cardExpiry, setCardExpiry] = useState("");
-  const [cardCvv, setCardCvv] = useState("");
+  const packageNames = new Map(packages.map((pkg) => [pkg.key, pkg.name]));
 
   const loadRequests = () => {
     listTopUpRequests()
@@ -89,9 +80,8 @@ export default function ChipTopUp() {
         Chip Yükle
       </h1>
       <p className="page-placeholder">
-        Bir Chip paketi seçip yükleme talebi gönderin. Aşağıdaki kart bilgileri alanı yalnızca bir
-        önizlemedir: girilen değerler hiçbir sunucuya gönderilmez veya kaydedilmez; gerçek ödeme
-        sağlayıcısı entegrasyonu henüz aktif değildir.
+        Bir Chip paketi seçip yükleme talebi gönderin. Ödeme sağlayıcısı henüz aktif değildir; talep
+        oluşturmak bakiyenizi değiştirmez.
       </p>
 
       {isLoading && <p className="page-placeholder">Yükleniyor…</p>}
@@ -126,67 +116,6 @@ export default function ChipTopUp() {
             </div>
           </div>
 
-          <div className="wizard-field" style={{ marginTop: 16 }}>
-            <label>Kart bilgileri</label>
-            <p className="wizard-field-hint">
-              Bu alanlar bir önizlemedir; girdiğiniz bilgiler hiçbir sunucuya gönderilmez veya
-              kaydedilmez. Gerçek ödeme sağlayıcısı entegrasyonu aktif olduğunda kart bilgileriniz
-              yalnızca o sağlayıcının güvenli formu üzerinden alınacaktır.
-            </p>
-            <div className="wizard-field" style={{ marginTop: 8 }}>
-              <label htmlFor="chip-topup-card-number">Kart numarası</label>
-              <input
-                id="chip-topup-card-number"
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                placeholder="0000 0000 0000 0000"
-                maxLength={19}
-                value={cardNumber}
-                onChange={(event) => setCardNumber(event.target.value)}
-              />
-            </div>
-            <div className="wizard-field" style={{ marginTop: 8 }}>
-              <label htmlFor="chip-topup-card-name">Kart üzerindeki isim</label>
-              <input
-                id="chip-topup-card-name"
-                type="text"
-                autoComplete="off"
-                placeholder="Ad Soyad"
-                value={cardName}
-                onChange={(event) => setCardName(event.target.value)}
-              />
-            </div>
-            <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
-              <div className="wizard-field" style={{ flex: 1 }}>
-                <label htmlFor="chip-topup-card-expiry">Son kullanma tarihi</label>
-                <input
-                  id="chip-topup-card-expiry"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  placeholder="AA/YY"
-                  maxLength={5}
-                  value={cardExpiry}
-                  onChange={(event) => setCardExpiry(event.target.value)}
-                />
-              </div>
-              <div className="wizard-field" style={{ flex: 1 }}>
-                <label htmlFor="chip-topup-card-cvv">Güvenlik kodu</label>
-                <input
-                  id="chip-topup-card-cvv"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  placeholder="CVV"
-                  maxLength={4}
-                  value={cardCvv}
-                  onChange={(event) => setCardCvv(event.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-
           <div className="wizard-actions">
             <button
               type="button"
@@ -208,7 +137,8 @@ export default function ChipTopUp() {
               {requests.map((request) => (
                 <li key={request.id}>
                   <span>
-                    {request.chip_amount.toLocaleString("tr-TR")} Chip ({request.package_key})
+                    {request.chip_amount.toLocaleString("tr-TR")} Chip ·{" "}
+                    {packageNames.get(request.package_key) ?? "Paket bilgisi bulunamadı"}
                   </span>
                   <span>{STATUS_LABELS[request.status]}</span>
                 </li>

@@ -66,8 +66,12 @@ def test_catalog_lists_seven_active_modules_with_full_metadata(client):
     assert response.status_code == 200
     body = response.json()
 
-    assert body["catalog_version"] == "2026.2"
+    # Faz 3C.2B1: guncel katalog surumu 2026.3 (ai_report eklendi), ama
+    # ai_report varsayilan hazirlik (settings.ai_report_enabled=False) ile
+    # katalog yanitindan GIZLENIR -> gorunur modul sayisi yine 7.
+    assert body["catalog_version"] == "2026.3"
     assert len(body["modules"]) == 7
+    assert "ai_report" not in {m["key"] for m in body["modules"]}
 
     by_key = {m["key"]: m for m in body["modules"]}
     for required_field in (
@@ -159,7 +163,7 @@ def test_quote_prices_new_advanced_modules(client):
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["pricing_version"] == "2026.2"
+    assert body["pricing_version"] == "2026.3"
 
     costs = {item["key"]: item["chip_cost"] for item in body["line_items"]}
     assert costs["network_device_test"] == 40

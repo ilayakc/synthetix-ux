@@ -15,12 +15,12 @@ import {
   listSimulationRuns,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { normalizeTurkishSystemCopy } from "../lib/turkishCopy";
 import {
   ActivityIcon,
   CheckCircleIcon,
   ChipCoinIcon,
   FolderIcon,
-  InfoIcon,
   ShieldCheckIcon,
   TicketIcon,
 } from "../components/icons";
@@ -185,7 +185,7 @@ function buildActivity(data: DashboardData): ActivityItem[] {
     if (!label) continue;
     items.push({
       id: `ledger-${entry.id}`,
-      label: entry.reason ? `${label}: ${entry.reason}` : label,
+      label: entry.reason ? `${label}: ${normalizeTurkishSystemCopy(entry.reason)}` : label,
       timestamp: entry.created_at,
       href: "/kullanim-ve-chip",
     });
@@ -390,9 +390,6 @@ export default function Dashboard() {
           {data && !activeRun && (
             <div className="empty-state">
               <p>Şu anda devam eden test bulunmuyor.</p>
-              <Link to="/tests/new" className="auth-submit">
-                Yeni Test Başlat
-              </Link>
             </div>
           )}
         </section>
@@ -444,14 +441,6 @@ export default function Dashboard() {
           </Link>
         </div>
       </section>
-
-      <div className="integrity-card" role="note">
-        <InfoIcon className="integrity-card__icon" />
-        <p>
-          Sonuçlar sentetik model tahminleridir; gerçek kullanıcı ölçümü veya doğrulanmış insan
-          davranışı değildir.
-        </p>
-      </div>
     </section>
   );
 }

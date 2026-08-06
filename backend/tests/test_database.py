@@ -5,12 +5,13 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Organization,
+    Persona,
     Project,
     SimulationRun,
     TestDefinition,
@@ -38,6 +39,7 @@ TENANT_TABLES = [
     "chip_ledger_entries",
     "chip_reservations",
     "audit_logs",
+    "ai_pipeline_runs",
 ]
 
 ALL_TABLES = TENANT_TABLES + [
@@ -46,6 +48,8 @@ ALL_TABLES = TENANT_TABLES + [
     "memberships",
     "refresh_tokens",
     "password_reset_tokens",
+    "personas",
+    "ai_pipeline_stages",
 ]
 
 # --- Migration smoke testleri -------------------------------------------------
@@ -206,3 +210,78 @@ async def test_simulation_run_calibration_status_defaults_to_uncalibrated(sessio
     await session.refresh(run)
 
     assert run.calibration_status == CalibrationStatus.UNCALIBRATED
+
+
+# --- Persona tablosu: kisitlar ve CASCADE davranisi -----------------------
+
+
+async def _make_simulation_run(session: AsyncSession) -> SimulationRun:
+    org = Organization(name="Persona Org", slug=f"persona-org-{uuid.uuid4().hex[:8]}")
+    session.add(org)
+    await session.flush()
+
+    project = Project(organization_id=org.id, name="Persona Project")
+    session.add(project)
+    await session.flush()
+
+    test_definition = TestDefinition(organization_id=org.id, project_id=project.id, name="Persona Test")
+    session.add(test_definition)
+    await session.flush()
+
+    variant = TestVariant(
+        organization_id=org.id,
+        test_definition_id=test_definition.id,
+        name="Variant A",
+        config={},
+    )
+    session.add(variant)
+    await session.flush()
+
+    run = SimulationRun(
+        organization_id=org.id,
+        test_variant_id=variant.id,
+        deterministic_seed=42,
+        model_version="v0",
+        input_snapshot={},
+    )
+    session.add(run)
+    await session.flush()
+    return run
+
+
+async def test_persona_deleted_when_simulation_run_is_deleted(session: AsyncSession):
+    run = await _make_simulation_run(session)
+    persona = Persona(
+        simulation_run_id=run.id,
+        index=0,
+        label="Genel",
+        attributes={},
+        population_weight=100,
+    )
+    session.add(persona)
+    await session.flush()
+    persona_id = persona.id
+
+    await session.delete(run)
+    await session.flush()
+
+    result = await session.execute(select(Persona).where(Persona.id == persona_id))
+    assert result.scalar_one_or_none() is None
+
+
+async def test_persona_index_is_unique_per_simulation_run(session: AsyncSession):
+    run = await _make_simulation_run(session)
+    session.add(Persona(simulation_run_id=run.id, index=0, label="A", attributes={}, population_weight=10))
+    await session.flush()
+
+    session.add(Persona(simulation_run_id=run.id, index=0, label="B", attributes={}, population_weight=20))
+    with pytest.raises(IntegrityError):
+        await session.flush()
+
+
+async def test_persona_population_weight_must_be_positive(session: AsyncSession):
+    run = await _make_simulation_run(session)
+    session.add(Persona(simulation_run_id=run.id, index=0, label="A", attributes={}, population_weight=0))
+
+    with pytest.raises(IntegrityError):
+        await session.flush()

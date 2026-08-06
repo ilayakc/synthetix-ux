@@ -422,6 +422,132 @@ class CohortSampleResult:
     sample_hash: str
 
 
+# --- Kalici temsili persona projeksiyonu (bkz. app.models.personas.Persona) --
+
+
+# Bir simulasyon icin DB'ye yazilacak (persist edilecek) en fazla temsili
+# persona sayisi. `sample_cohorts` en fazla MAX_SEGMENTS (2000) segment
+# uretebilir; bu projeksiyon onu goruntulenebilir/incelenebilir kucuk bir
+# kumeye indirger. `input_snapshot["persona_sample"]` (segment/cohort listesi)
+# bu projeksiyonun YERINE GECMEZ - motor icin kaynak gercekligi olmaya devam
+# eder; bu yalnizca gorunurluk/inceleme/ileriki AI pipeline'i icin turetilmis,
+# daha kaba bir kalici goruntudur.
+MAX_REPRESENTATIVE_PERSONAS = 100
+
+
+@dataclass(frozen=True)
+class PersonaProjection:
+    """Kalici `personas` tablosuna yazilacak bir satirin (henuz DB'ye
+    yazilmamis) saf veri temsili. `app.models.personas.Persona` ile
+    birebir alan eslesir (id/simulation_run_id/created_at haric - bunlar
+    persist adiminda cagiran tarafca atanir)."""
+
+    index: int
+    label: str
+    attributes: dict
+    population_weight: int
+
+
+def _segment_distance(a: CohortSegment, b: CohortSegment) -> int:
+    """Iki segment arasindaki kategorik Hamming mesafesi (farkli boyut sayisi)."""
+
+    keys = set(a.dimension_values) | set(b.dimension_values)
+    return sum(1 for key in keys if a.dimension_values.get(key) != b.dimension_values.get(key))
+
+
+def _nearest_representative_key(segment: CohortSegment, representatives: tuple[CohortSegment, ...]) -> str:
+    """`segment`'e (kategorik Hamming mesafesiyle) en yakin temsilcinin key'ini dondurur.
+
+    Esit mesafeli birden fazla aday varsa, en kucuk (lexicographic) segment
+    key'ine sahip olan secilir - bu, `representatives`'in siralamasindan/
+    cagri sirasindan bagimsiz, deterministik bir tie-break saglar.
+    """
+
+    best = min(representatives, key=lambda rep: (_segment_distance(segment, rep), rep.key))
+    return best.key
+
+
+def build_representative_personas(
+    sample: CohortSampleResult,
+    max_personas: int = MAX_REPRESENTATIVE_PERSONAS,
+) -> tuple[PersonaProjection, ...]:
+    """Bir `CohortSampleResult`'i en fazla `max_personas` kalici temsili
+    personaya (saf, DB'siz) indirger.
+
+    - Segment sayisi `max_personas`'i asmiyorsa: her segment birebir bir
+      personaya donusur (zorla `max_personas`'e tamamlanmaz - dogal segment
+      sayisi korunur, sahte cesitlilik uretilmez).
+    - Segment sayisi `max_personas`'i asiyorsa: population count'u en yuksek
+      `max_personas` segment temsilci secilir; kalan (secilmeyen) segmentler,
+      kategorik Hamming mesafesiyle en yakin temsilciye deterministik olarak
+      birlestirilir (count'lari temsilcinin population_weight'ine eklenir).
+
+    Sonuc, segmentlerin (veya `sample.segments` tuple'inin) girdi sirasindan
+    bagimsizdir: kanonik sira daima segment `key`'ine gore artan siralamadir.
+    Girdi (`sample`) mutate edilmez. Ayni `sample` + `max_personas` her
+    zaman ayni sirali sonucu uretir (sample_cohorts zaten deterministiktir;
+    bu fonksiyon ek rastgelelik icermez).
+    """
+
+    if not isinstance(sample, CohortSampleResult):
+        raise PersonaValidationError("sample bir CohortSampleResult olmalidir")
+    if not sample.segments:
+        raise PersonaValidationError("cohort sample bos segment listesi iceremez")
+    if not isinstance(sample.total_count, int) or sample.total_count <= 0:
+        raise PersonaValidationError("cohort sample total_count pozitif bir tam sayi olmalidir")
+    if not isinstance(max_personas, int) or isinstance(max_personas, bool) or max_personas <= 0:
+        raise PersonaValidationError("max_personas pozitif bir tam sayi olmalidir")
+
+    # Kanonik sira: girdi tuple'inin fiili sirasindan bagimsiz olmak icin
+    # segment key'ine gore artan siralama. `sample.segments` burada
+    # kopyalanarak islenir, girdi mutate edilmez.
+    segments_sorted = tuple(sorted(sample.segments, key=lambda segment: segment.key))
+
+    if len(segments_sorted) <= max_personas:
+        representative_segments = segments_sorted
+        weights: dict[str, int] = {segment.key: segment.count for segment in segments_sorted}
+    else:
+        # En buyuk count'a sahip ilk `max_personas` segment temsilci olur;
+        # esitliklerde kanonik key (kucukten buyuge) tie-break eder.
+        selected = sorted(segments_sorted, key=lambda segment: (-segment.count, segment.key))[:max_personas]
+        selected_keys = {segment.key for segment in selected}
+        representative_segments = tuple(sorted(selected, key=lambda segment: segment.key))
+        weights = {segment.key: segment.count for segment in representative_segments}
+
+        remainder_segments = [segment for segment in segments_sorted if segment.key not in selected_keys]
+        for segment in remainder_segments:
+            nearest_key = _nearest_representative_key(segment, representative_segments)
+            weights[nearest_key] += segment.count
+
+    personas = tuple(
+        PersonaProjection(
+            index=index,
+            label=segment.label,
+            attributes=dict(segment.dimension_values),
+            population_weight=weights[segment.key],
+        )
+        for index, segment in enumerate(representative_segments)
+    )
+
+    if not (1 <= len(personas) <= max_personas):
+        raise PersonaValidationError(
+            f"persona projeksiyonu 1 ile {max_personas} arasinda persona icermelidir "
+            f"(hesaplanan: {len(personas)})"
+        )
+    for persona in personas:
+        if persona.population_weight <= 0:
+            raise PersonaValidationError("her persona population_weight'i pozitif olmalidir")
+
+    total_weight = sum(persona.population_weight for persona in personas)
+    if total_weight != sample.total_count:
+        raise PersonaValidationError(
+            "persona projeksiyonu agirlik toplami cohort sample total_count ile eslesmiyor "
+            f"(beklenen: {sample.total_count}, hesaplanan: {total_weight})"
+        )
+
+    return personas
+
+
 def _iter_bucket_combinations(distribution: dict, dimensions: list[str]):
     """Kartezyen kombinasyonlari (segmentleri) MAX_SEGMENTS'i asmadan uretir."""
 
@@ -600,4 +726,7 @@ __all__ = [
     "validate_distribution",
     "sample_cohorts",
     "iter_segment_batches",
+    "MAX_REPRESENTATIVE_PERSONAS",
+    "PersonaProjection",
+    "build_representative_personas",
 ]

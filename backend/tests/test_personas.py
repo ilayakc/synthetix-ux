@@ -366,6 +366,167 @@ def test_iter_segment_batches_covers_all_segments_without_duplication():
     assert sorted(batched_keys) == sorted(s.key for s in result.segments)
 
 
+# --- Kalici temsili persona projeksiyonu (build_representative_personas) ---
+
+
+def _many_bucket_distribution(age_buckets: int, region_buckets: int) -> dict:
+    """`age_buckets * region_buckets` kartezyen kombinasyonu (segment) ureten,
+    agirliklari duzgun dagilmis (sifir olmayan) bir dagilim."""
+
+    age_weight = 100 / age_buckets
+    region_weight = 100 / region_buckets
+    return {
+        personas.AGE_RANGE: [
+            {
+                "key": f"age{i}",
+                "label": f"age{i}",
+                "weight": age_weight,
+                "min_age": i,
+                "max_age": i,
+            }
+            for i in range(age_buckets)
+        ],
+        personas.REGION: [
+            {"key": f"region{i}", "label": f"region{i}", "weight": region_weight}
+            for i in range(region_buckets)
+        ],
+    }
+
+
+def test_build_representative_personas_single_segment_stays_single():
+    """Tek segment varsa tek persona uretilir; zorla 20'ye tamamlanmaz."""
+
+    result = personas.sample_cohorts({}, 500, deterministic_seed=1)
+    representatives = personas.build_representative_personas(result)
+
+    assert len(representatives) == 1
+    assert representatives[0].population_weight == 500
+    assert representatives[0].index == 0
+
+
+def test_build_representative_personas_below_20_segments_keeps_natural_count():
+    """20'den az dogal segment varsa, sahte cesitlilik uretmeden dogal sayi korunur."""
+
+    result = personas.sample_cohorts(_simple_distribution(), 1000, deterministic_seed=1)
+    assert len(result.segments) < 20
+
+    representatives = personas.build_representative_personas(result)
+
+    assert len(representatives) == len(result.segments)
+
+
+def test_build_representative_personas_exactly_100_segments_yields_100_personas():
+    distribution = _many_bucket_distribution(age_buckets=25, region_buckets=4)
+    result = personas.sample_cohorts(distribution, 10_000, deterministic_seed=1)
+    assert len(result.segments) == 100
+
+    representatives = personas.build_representative_personas(result)
+
+    assert len(representatives) == 100
+    assert sum(p.population_weight for p in representatives) == 10_000
+
+
+def test_build_representative_personas_over_100_segments_caps_at_100():
+    distribution = _many_bucket_distribution(age_buckets=20, region_buckets=10)
+    result = personas.sample_cohorts(distribution, 50_000, deterministic_seed=1)
+    assert len(result.segments) == 200
+
+    representatives = personas.build_representative_personas(result)
+
+    assert len(representatives) == personas.MAX_REPRESENTATIVE_PERSONAS
+
+
+@pytest.mark.parametrize("persona_count", [100, 2_500, 50_000])
+def test_build_representative_personas_weight_sum_always_equals_persona_count(persona_count: int):
+    distribution = _many_bucket_distribution(age_buckets=20, region_buckets=10)
+    result = personas.sample_cohorts(distribution, persona_count, deterministic_seed=7)
+
+    representatives = personas.build_representative_personas(result)
+
+    assert sum(p.population_weight for p in representatives) == persona_count
+
+
+def test_build_representative_personas_is_deterministic_for_same_input_and_seed():
+    distribution = _many_bucket_distribution(age_buckets=20, region_buckets=10)
+    result = personas.sample_cohorts(distribution, 50_000, deterministic_seed=11)
+
+    first = personas.build_representative_personas(result)
+    second = personas.build_representative_personas(result)
+
+    assert first == second
+
+
+def test_build_representative_personas_output_is_independent_of_segment_input_order():
+    import dataclasses
+
+    distribution = _many_bucket_distribution(age_buckets=20, region_buckets=10)
+    result = personas.sample_cohorts(distribution, 50_000, deterministic_seed=11)
+
+    reversed_result = dataclasses.replace(result, segments=tuple(reversed(result.segments)))
+
+    canonical = personas.build_representative_personas(result)
+    from_reversed_input = personas.build_representative_personas(reversed_result)
+
+    assert canonical == from_reversed_input
+
+
+def test_build_representative_personas_all_weights_are_positive():
+    distribution = _many_bucket_distribution(age_buckets=20, region_buckets=10)
+    result = personas.sample_cohorts(distribution, 50_000, deterministic_seed=3)
+
+    representatives = personas.build_representative_personas(result)
+
+    assert all(p.population_weight > 0 for p in representatives)
+
+
+def test_build_representative_personas_attributes_only_contain_known_dimensions():
+    distribution = personas.BUILTIN_PRESETS["accessibility_focused_seniors"].distribution
+    result = personas.sample_cohorts(distribution, 5_000, deterministic_seed=9)
+
+    representatives = personas.build_representative_personas(result)
+
+    for representative in representatives:
+        assert set(representative.attributes) <= set(personas.PERSONA_DIMENSIONS)
+
+
+def test_build_representative_personas_never_introduces_banned_inference_keys():
+    distribution = personas.BUILTIN_PRESETS["general_web_users"].distribution
+    result = personas.sample_cohorts(distribution, 5_000, deterministic_seed=9)
+
+    representatives = personas.build_representative_personas(result)
+
+    for representative in representatives:
+        # Projeksiyon yalnizca mevcut segment verisini tasir/birlestirir; yeni
+        # bir alan icat etmez - bu yuzden dogrulanmis segment verisi zaten
+        # yasakli anahtar barindiramaz (bkz. _deep_scan_for_banned_keys).
+        personas._deep_scan_for_banned_keys(representative.attributes)
+
+
+def test_nearest_representative_tie_break_is_deterministic_regardless_of_order():
+    segment_a = personas.CohortSegment(key="a", label="A", dimension_values={"x": "1"}, count=1, share=0.1)
+    segment_b = personas.CohortSegment(key="b", label="B", dimension_values={"x": "2"}, count=1, share=0.1)
+    # `remainder`, hem a hem b'ye esit (1) kategorik mesafede.
+    remainder = personas.CohortSegment(key="c", label="C", dimension_values={"x": "3"}, count=1, share=0.1)
+
+    forward = personas._nearest_representative_key(remainder, (segment_a, segment_b))
+    backward = personas._nearest_representative_key(remainder, (segment_b, segment_a))
+
+    # Esit mesafede kanonik olarak en kucuk key ('a') secilir; temsilcilerin
+    # verilis sirasindan bagimsizdir.
+    assert forward == "a"
+    assert backward == "a"
+
+
+def test_build_representative_personas_rejects_empty_segments():
+    import dataclasses
+
+    result = personas.sample_cohorts({}, 500, deterministic_seed=1)
+    empty_result = dataclasses.replace(result, segments=())
+
+    with pytest.raises(personas.PersonaValidationError):
+        personas.build_representative_personas(empty_result)
+
+
 # --- Sirkete ozel preset CRUD: olusturma / kopyalama / arsivleme -----------
 
 
@@ -716,12 +877,16 @@ def test_wizard_launch_records_immutable_persona_sample_snapshot(client: TestCli
     assert sum(s["count"] for s in persona_sample["segments"]) == 1000
 
     # Ayni dagilim + ayni persona_count + ayni (kalici kaydedilmis)
-    # deterministic_seed her zaman ayni ozeti uretmelidir (bkz.
-    # app.services.personas.sample_cohorts docstring'i).
+    # persona_sample_seed her zaman ayni ozeti uretmelidir (bkz.
+    # app.services.personas.sample_cohorts docstring'i). NOT: bu artik
+    # `run.deterministic_seed` (motor determinizmi icin, varyant basina
+    # BAGIMSIZ) DEGIL, ayrica saklanan `run.input_snapshot["persona_sample_seed"]`
+    # (launch basina tek, TUM varyantlar arasinda PAYLASILAN cohort ornekleme
+    # seed'i, bkz. app.services.test_wizard.launch_draft) kullanir.
     recomputed = personas.sample_cohorts(
         persona_sample["distribution_snapshot"]["distribution"],
         1000,
-        run.deterministic_seed,
+        run.input_snapshot["persona_sample_seed"],
     )
     assert recomputed.sample_hash == persona_sample["sample_hash"]
 

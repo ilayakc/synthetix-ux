@@ -43,7 +43,7 @@ describe("rawFetch hata mesaji cikarimi", () => {
     );
 
     await expect(getHealth()).rejects.toMatchObject({
-      message: "Gecersiz istek",
+      message: "Geçersiz istek",
     } satisfies Partial<ApiError>);
   });
 
@@ -53,7 +53,11 @@ describe("rawFetch hata mesaji cikarimi", () => {
       vi.fn().mockReturnValue(
         jsonResponse(422, {
           detail: [
-            { loc: ["body", "email"], msg: "gecerli bir e-posta adresi giriniz", type: "value_error" },
+            {
+              loc: ["body", "email"],
+              msg: "gecerli bir e-posta adresi giriniz",
+              type: "value_error",
+            },
             { loc: ["body", "password"], msg: "en az 8 karakter olmalidir", type: "value_error" },
           ],
         }),
@@ -61,7 +65,7 @@ describe("rawFetch hata mesaji cikarimi", () => {
     );
 
     await expect(getHealth()).rejects.toMatchObject({
-      message: "gecerli bir e-posta adresi giriniz; en az 8 karakter olmalidir",
+      message: "geçerli bir e-posta adresi giriniz; en az 8 karakter olmalıdır",
     } satisfies Partial<ApiError>);
   });
 
@@ -91,7 +95,7 @@ describe("rawFetch hata mesaji cikarimi", () => {
     vi.stubGlobal("fetch", vi.fn().mockReturnValue(notJsonResponse(503, "Service Unavailable")));
 
     await expect(getHealth()).rejects.toMatchObject({
-      message: "API istegi basarisiz: 503 Service Unavailable",
+      message: "API isteği başarısız: 503 Service Unavailable",
     } satisfies Partial<ApiError>);
   });
 });
@@ -120,9 +124,16 @@ describe("design-assets uc noktalari", () => {
   it("deleteDesignAsset 204 yanitinda hicbir sey dondurmez", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockReturnValue(
-        Promise.resolve({ ok: true, status: 204, statusText: "No Content", json: async () => null }),
-      ),
+      vi
+        .fn()
+        .mockReturnValue(
+          Promise.resolve({
+            ok: true,
+            status: 204,
+            statusText: "No Content",
+            json: async () => null,
+          }),
+        ),
     );
 
     await expect(deleteDesignAsset("asset-1")).resolves.toBeUndefined();
@@ -203,9 +214,9 @@ describe("patchWizardDraft ile CTA annotation gonderimi", () => {
       box: { x: 0.1, y: 0.1, w: 0.2, h: 0.08 },
       selection_source: "manual_box" as const,
     };
-    await expect(patchWizardDraft("draft-1", { current_cta_annotation: raw as never })).resolves.toEqual(
-      responseBody,
-    );
+    await expect(
+      patchWizardDraft("draft-1", { current_cta_annotation: raw as never }),
+    ).resolves.toEqual(responseBody);
 
     const [, init] = fetchMock.mock.calls[0];
     expect(init.method).toBe("PATCH");
@@ -329,6 +340,7 @@ describe("uploadDesignAsset (XMLHttpRequest tabanli multipart yukleme)", () => {
           organization_id: "org-1",
           organization_name: "Org",
           role: "owner",
+          is_platform_admin: false,
         }),
       ),
     );
@@ -352,7 +364,11 @@ describe("uploadDesignAsset (XMLHttpRequest tabanli multipart yukleme)", () => {
     // Tekrar deneme icin YENI bir XHR olusturulmus olmali (ikinci ornek).
     expect(FakeXHR.instances).toHaveLength(2);
     const retryAttempt = FakeXHR.instances[1];
-    retryAttempt.upload.onprogress?.({ lengthComputable: true, loaded: 10, total: 10 } as ProgressEvent);
+    retryAttempt.upload.onprogress?.({
+      lengthComputable: true,
+      loaded: 10,
+      total: 10,
+    } as ProgressEvent);
     retryAttempt.status = 201;
     retryAttempt.responseText = JSON.stringify({ id: "asset-after-refresh" });
     retryAttempt.onload?.();
@@ -401,6 +417,7 @@ describe("uploadDesignAsset (XMLHttpRequest tabanli multipart yukleme)", () => {
           organization_id: "org-1",
           organization_name: "Org",
           role: "owner",
+          is_platform_admin: false,
         }),
       ),
     );

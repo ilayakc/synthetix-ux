@@ -49,6 +49,8 @@ describe("KullanimVeChip", () => {
     expect(screen.getByText("Ücretsiz Erişilebilirlik Ön Kontrolü")).toBeInTheDocument();
     expect(screen.getAllByText("0/1")).toHaveLength(2);
     expect(screen.getAllByText("Kullanılabilir")).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Chip Yükle" })).toHaveAttribute("href", "/chip-yukle");
+    expect(screen.queryByText(/aşağıda listelenir/i)).not.toBeInTheDocument();
   });
 
   it("kullanilmis (consumed) bir hakki 'Kullanıldı' olarak gosterir", async () => {

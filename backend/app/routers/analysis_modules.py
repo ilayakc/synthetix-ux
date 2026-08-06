@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from app.config import settings
 from app.dependencies import get_organization_id
 from app.services import module_catalog
 
@@ -33,9 +34,16 @@ async def get_catalog(
     # API kimlik dogrulamali oldugu icin bu bagimlilik korunur.
     _organization_id: uuid.UUID = Depends(get_organization_id),
 ) -> AnalysisModuleCatalogResponse:
-    """Aktif analiz modullerinin surumlu katalogunu dondurur."""
+    """Aktif analiz modullerinin surumlu katalogunu dondurur.
 
-    modules = module_catalog.get_active_module_catalog()
+    `ai_report` yalnizca calisma-zamani hazirlik bayragi (`settings.
+    ai_report_enabled`) acikken listelenir - saglayici hazir degilken
+    (varsayilan) katalogda GORUNMEZ (bkz. module_catalog.
+    get_wizard_visible_modules); yalnizca frontend gizlemesine guvenilmez,
+    launch dogrulamasi da ayrica zorunludur (bkz. app.services.test_wizard).
+    """
+
+    modules = module_catalog.get_wizard_visible_modules(ai_report_enabled=settings.ai_report_enabled)
 
     return AnalysisModuleCatalogResponse(
         catalog_version=module_catalog.CURRENT_MODULE_CATALOG_VERSION,

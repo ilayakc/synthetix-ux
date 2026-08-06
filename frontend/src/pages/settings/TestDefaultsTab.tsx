@@ -41,8 +41,8 @@ export default function TestDefaultsTab({
     <div>
       {!canEdit && (
         <p className="wizard-field-hint">
-          Bu sekmeyi yalnızca test oluşturma yetkisi olan kullanıcılar (analist, yönetici, şirket sahibi)
-          düzenleyebilir.
+          Bu sekmeyi yalnızca test oluşturma yetkisi olan kullanıcılar (analist, yönetici, şirket
+          sahibi) düzenleyebilir.
         </p>
       )}
 
@@ -129,12 +129,12 @@ export default function TestDefaultsTab({
       </div>
 
       <p className="not-real-data-tag">
-        Sonuçlar gerçek kullanıcı verisi değildir; bu uyarı kapatılamaz.
+        Bilimsel dürüstlük uyarısı tüm sonuç ekranlarında otomatik olarak gösterilir.
       </p>
       <p className="methodology-note">
-        Bu varsayılanlar yalnızca yeni oluşturulacak test sihirbazı taslaklarının başlangıç değerleridir;
-        mevcut taslakları, çalıştırmaları veya rapor anlık görüntülerini etkilemez. Kullanıcı, sihirbaz
-        içinde bu değerleri her zaman değiştirebilir.
+        Bu varsayılanlar yalnızca yeni oluşturulacak test sihirbazı taslaklarının başlangıç
+        değerleridir; mevcut taslakları, çalıştırmaları veya rapor anlık görüntülerini etkilemez.
+        Kullanıcı, sihirbaz içinde bu değerleri her zaman değiştirebilir.
       </p>
     </div>
   );

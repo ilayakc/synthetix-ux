@@ -20,6 +20,12 @@ COPY . .
 ARG VITE_API_BASE_URL=""
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
+# Tarayici konsolu log seviyesi/yavaslik esigi (bkz. frontend/src/lib/logger.ts).
+ARG VITE_LOG_LEVEL="INFO"
+ENV VITE_LOG_LEVEL=$VITE_LOG_LEVEL
+ARG VITE_SLOW_REQUEST_THRESHOLD_MS="1000"
+ENV VITE_SLOW_REQUEST_THRESHOLD_MS=$VITE_SLOW_REQUEST_THRESHOLD_MS
+
 RUN npm run build
 
 FROM nginx:1.27-alpine AS production

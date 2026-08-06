@@ -1,11 +1,10 @@
 import asyncio
 from logging.config import fileConfig
 
+from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
-
-from alembic import context
 
 from app.config import settings
 from app.models import Base
@@ -21,8 +20,16 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+#
+# `disable_existing_loggers=False`: `alembic.ini`'nin `[loggers]` bolumu
+# yalnizca `root`/`sqlalchemy`/`alembic`'i tanimlar; `fileConfig`'in
+# VARSAYILANI (`disable_existing_loggers=True`) bu listede OLMAYAN, o ana
+# kadar zaten olusturulmus HER logger'i (ornegin `synthetix.api`,
+# `app.services.*`) kalici olarak `.disabled = True` yapardi - bu, ayni
+# surecte (ornegin testlerde `alembic upgrade` calistirildiktan SONRA)
+# uygulama loglarinin sessizce kaybolmasina yol acardi.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

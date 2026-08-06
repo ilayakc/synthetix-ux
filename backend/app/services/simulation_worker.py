@@ -221,8 +221,7 @@ async def _is_cancel_requested(session: AsyncSession, run_id: uuid.UUID) -> bool
 async def _resolve_chip_reservation(
     session: AsyncSession, organization_id: uuid.UUID, reservation_id: uuid.UUID, *, consume: bool
 ) -> None:
-    action = "tuketildi" if consume else "serbest birakildi"
-    reason = f"AB/grup karsilastirmasi {action}"
+    reason = "A/B grup karşılaştırması"
     try:
         if consume:
             await chip_ledger.consume_reservation(session, organization_id, reservation_id, reason)
@@ -348,6 +347,22 @@ async def _resolve_launch_group(session: AsyncSession, run: SimulationRun) -> No
 
     for reservation_id in chip_reservation_ids:
         await _resolve_chip_reservation(session, run.organization_id, reservation_id, consume=all_succeeded)
+
+    # AI raporu (`ai_report`) rezervasyonu (Faz 3C.2B1): baseline'dan AYRI,
+    # launch grubu basina TEK (A/B'de iki satir AYNI id'yi paylasir) bir
+    # rezervasyondur. Bu FAZDA yalnizca BASELINE-grup-sonucuna bagli davranir:
+    #   - Grup TAMAMEN basariliysa AI rezervasyonu RESERVED birakilir (bu fazda
+    #     consume EDILMEZ; AI pipeline'i bu fazda hic olusturulmaz - AI'nin
+    #     kendi terminal sonucuna bagli consume/release Faz 3C.2B2'ye aittir).
+    #   - En az bir baseline run FAILED/CANCELLED ise AI rezervasyonu da tam
+    #     RELEASED edilir - paylasilan id yalnizca BIR KEZ islenir (KUME) ve
+    #     `_resolve_chip_reservation` idempotenttir (tekrar/yaris guvenli).
+    if not all_succeeded:
+        ai_chip_reservation_ids = {
+            r.ai_chip_reservation_id for r in group_runs if r.ai_chip_reservation_id is not None
+        }
+        for reservation_id in ai_chip_reservation_ids:
+            await _resolve_chip_reservation(session, run.organization_id, reservation_id, consume=False)
 
     entitlement_feature_keys = {
         r.free_entitlement_feature_key for r in group_runs if r.free_entitlement_feature_key is not None

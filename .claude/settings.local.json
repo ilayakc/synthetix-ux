@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(docker compose *)",
-      "Bash(docker exec *)"
+      "Bash(docker exec *)",
+      "Bash(python -c \"from app.engine.baseline import BANNED_CLAIM_PHRASES; print\\([p for p in BANNED_CLAIM_PHRASES if 'dogrula' in p or 'agirli' in p or 'garanti' in p]\\)\")"
     ]
   }
 }

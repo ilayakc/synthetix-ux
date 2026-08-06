@@ -9,9 +9,24 @@ from app.logging_config import configure_logging
 from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import page_analysis as page_analysis_service
+from app.services.ai_pipeline.mock_provider import MockAIProvider
+from app.services.ai_pipeline.ollama_provider import OllamaProvider
+from app.services.ai_pipeline.openai_provider import OpenAIProvider
+from app.services.ai_pipeline.scheduling import (
+    AI_PIPELINE_PROVIDER_CTX_KEY,
+    run_ai_pipeline_initialization_job,
+    run_ai_pipeline_reap_cycle,
+    run_ai_pipeline_stage_cycle,
+    run_ai_reservation_settlement_job,
+)
 from app.services.simulation_worker import run_fail_blocked_cycle, run_queue_cycle, run_reap_cycle
+from app.worker_constants import ARQ_JOB_TIMEOUT_SECONDS
 
-configure_logging(settings.environment)
+configure_logging(
+    settings.environment,
+    log_level=settings.log_level,
+    log_format=settings.log_format,
+)
 logger = logging.getLogger("synthetix.worker")
 
 
@@ -74,18 +89,104 @@ async def purge_expired_design_generations(ctx: dict) -> None:
     await design_generation_service.run_purge_cycle()
 
 
+async def process_ai_pipeline_stage_job(ctx: dict) -> dict:
+    """AI pipeline: en fazla BIR QUEUED stage'i isler (bkz.
+    app.services.ai_pipeline.scheduling.run_ai_pipeline_stage_cycle).
+
+    Provider ctx'e ACIKCA enjekte edilmemisse (bu fazda gercek adapter yok)
+    hicbir stage claim edilmez ve hicbir sey FAILED yapilmaz - kayitlar QUEUED
+    kalir (bkz. AI_PIPELINE_PROVIDER_CTX_KEY sozlesmesi)."""
+    return await run_ai_pipeline_stage_cycle(ctx)
+
+
+async def reap_stale_ai_pipeline_stages_job(ctx: dict) -> dict:
+    """AI pipeline: RUNNING'de takili kalmis stale stage'leri kurtarir (provider
+    GEREKTIRMEZ, bkz. app.services.ai_pipeline.scheduling.run_ai_pipeline_reap_cycle)."""
+    return await run_ai_pipeline_reap_cycle(ctx)
+
+
+async def initialize_ai_pipeline_groups_job(ctx: dict) -> dict:
+    """AI pipeline lifecycle (Faz 3C.2B2): `ai_report` secilmis, SUCCEEDED,
+    henuz pipeline'i olmayan launch gruplari icin bekleyen AI pipeline
+    initialization'larini isler (bkz. app.services.ai_pipeline.scheduling.
+    run_ai_pipeline_initialization_job / app.services.ai_pipeline.lifecycle.
+    run_ai_pipeline_initialization_cycle). Provider/network GEREKTIRMEZ."""
+    return await run_ai_pipeline_initialization_job(ctx)
+
+
+async def settle_ai_reservations_job(ctx: dict) -> dict:
+    """AI pipeline lifecycle (Faz 3C.2B2): paylasilan AI Chip rezervasyonunu
+    grubun AI pipeline sonuclarina gore CONSUMED/RELEASED yapar (bkz.
+    app.services.ai_pipeline.scheduling.run_ai_reservation_settlement_job /
+    app.services.ai_pipeline.lifecycle.run_ai_reservation_settlement_cycle).
+    Provider/network GEREKTIRMEZ, stage CALISTIRMAZ."""
+    return await run_ai_reservation_settlement_job(ctx)
+
+
 async def on_startup(ctx: dict) -> None:
     # Fail-closed: backend ile ayni dogrulama (bkz. app.config_security) -
     # production'da eksik/zayif/placeholder secret'la worker gorev almaya baslamaz.
     validate_production_secrets()
-    logger.info("worker basladi (redis_url=%s)", settings.redis_url)
+    # AI pipeline provider context sozlesmesi (Faz 3D.1 / 3D.2-LOCAL):
+    # readiness FALSE ise (varsayilan) hicbir client OLUSTURULMAZ, hicbir
+    # ag/health-check/model-pull cagrisi YAPILMAZ - yalnizca yapilandirma
+    # dogrulanir (bkz. Settings.ai_report_provider_ready). readiness TRUE ise
+    # `ai_report_provider`e gore TEK bir provider olusturulup ctx'e enjekte
+    # edilir; baska bir provider'a OTOMATIK DUSULMEZ (bkz.
+    # app.services.ai_pipeline.scheduling).
+    if settings.ai_report_provider_ready:
+        if settings.ai_report_provider == "openai" and settings.openai_api_key is not None:
+            ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = OpenAIProvider(
+                api_key=settings.openai_api_key.get_secret_value(),
+                model=settings.openai_model,
+                reasoning_effort=settings.openai_reasoning_effort,
+                timeout_seconds=settings.openai_timeout_seconds,
+                max_output_tokens=settings.openai_max_output_tokens,
+            )
+            logger.info(
+                "worker basladi: OpenAI AI pipeline provider'i hazir (model=%s)", settings.openai_model
+            )
+        elif settings.ai_report_provider == "ollama":
+            ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = OllamaProvider(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                timeout_seconds=settings.ollama_timeout_seconds,
+                temperature=settings.ollama_temperature,
+                keep_alive=settings.ollama_keep_alive,
+                num_ctx=settings.ollama_num_ctx,
+                max_output_tokens=settings.ollama_max_output_tokens,
+                max_concurrency=settings.ollama_max_concurrency,
+                allow_remote_host=settings.ollama_allow_remote_host,
+                structured_output_mode=settings.ollama_structured_output_mode,
+            )
+            logger.info(
+                "worker basladi: Ollama AI pipeline provider'i hazir (model=%s)", settings.ollama_model
+            )
+        elif settings.ai_report_provider == "mock":
+            ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = MockAIProvider()
+            logger.info("worker basladi: Mock AI pipeline provider'i hazir")
+        else:
+            ctx.setdefault(AI_PIPELINE_PROVIDER_CTX_KEY, None)
+            logger.info("worker basladi (redis_url=%s)", settings.redis_url)
+    else:
+        ctx.setdefault(AI_PIPELINE_PROVIDER_CTX_KEY, None)
+        logger.info("worker basladi (redis_url=%s)", settings.redis_url)
 
 
 async def on_shutdown(ctx: dict) -> None:
+    provider = ctx.get(AI_PIPELINE_PROVIDER_CTX_KEY)
+    if isinstance(provider, OpenAIProvider | OllamaProvider):
+        await provider.aclose()
     logger.info("worker kapatiliyor")
 
 
 class WorkerSettings:
+    # arq'nin kendi 300sn'lik varsayilanina ORTUK olarak guvenmek yerine
+    # ACIKCA `app.worker_constants.ARQ_JOB_TIMEOUT_SECONDS`e baglanir - bu,
+    # provider timeout dogrulamasinin (bkz. app.config.Settings.
+    # _ensure_provider_timeout_below_job_timeout) referans aldigi TEK
+    # dogruluk kaynagidir (Faz 3D.2.1 madde 1).
+    job_timeout = ARQ_JOB_TIMEOUT_SECONDS
     functions = [
         ping_redis,
         process_queued_simulations,
@@ -98,7 +199,39 @@ class WorkerSettings:
         process_queued_design_generations,
         reap_stale_design_generations,
         purge_expired_design_generations,
+        process_ai_pipeline_stage_job,
+        reap_stale_ai_pipeline_stages_job,
+        initialize_ai_pipeline_groups_job,
+        settle_ai_reservations_job,
     ]
+    # AI pipeline zamanlama araliklari (Faz 3B.2D): mevcut simulation/design
+    # polling deseniyle AYNI mantik. Processor tek invocation'da yalnizca BIR
+    # stage isler ve provider yoksa guvenle no-op doner; bu nedenle (provider/LLM
+    # cagrisi ICEREBILEN design uretimindeki gibi) ~5s'lik bir polling araligi
+    # referans alinir - diger job'larla ayni saniyede tetiklenmemesi icin ofset
+    # (4) verilir. Reaper provider gerektirmez ve stale esigi 600s (bkz.
+    # retry_policy.STALE_RUNNING_TIMEOUT_SECONDS) oldugu icin cok daha seyrek
+    # (design reaper gibi 5 dakikada bir, ofset saniye 50) calisir.
+    _AI_STAGE_PROCESSOR_SECONDS = set(range(4, 60, 5))
+    _AI_STALE_REAPER_SECONDS = {50}
+    _AI_STALE_REAPER_MINUTES = set(range(0, 60, 5))
+    # AI pipeline LIFECYCLE zamanlama araliklari (Faz 3C.2B2): initialization/
+    # settlement, uzun baseline-run transaction'larindan AYRI, dakikada iki
+    # kez calisan, bounded/deterministik reconciliation cycle'lardir (bkz.
+    # app.services.ai_pipeline.lifecycle modul dokstring'i). Saniye
+    # degerleri, mevcut is'lerin (processor/reaper/simulation/page-analysis/
+    # design-generation) sabit degerleriyle (0,30 / 5,20,35,50 / 7,22,37,52 /
+    # 10 / 25 / 40 / 35 / 50) BIREBIR CAKISMAYACAK sekilde secilmistir - dakika
+    # bazinda 3'un veya 5'in katlarini kapsayan genis `range(...)` polling
+    # kumeleri (process_queued_simulations/process_queued_page_analyses/
+    # process_queued_design_generations/AI stage processor) tum saniye
+    # eksenini kapladigi icin (pigeonhole) TAM cakismasizlik matematiksel
+    # olarak mumkun degildir - bu, arq'da GUVENLIDIR (bagimsiz, DB-kilitli
+    # cron'lar ayni saniyede tetiklenebilir, birbirini engellemez); burada
+    # yalnizca MEVCUT TEKIL (kucuk, literal) saniye kumeleriyle birebir
+    # AYNI olmamasi saglanmistir.
+    _AI_INIT_CYCLE_SECONDS = {13, 43}
+    _AI_SETTLEMENT_CYCLE_SECONDS = {28, 58}
     cron_jobs = [
         cron(ping_redis, second={0, 30}),
         # Sentetik simulasyon motoru: bekleyen isleri sik araliklarla isler
@@ -118,6 +251,18 @@ class WorkerSettings:
         cron(process_queued_design_generations, second=set(range(2, 60, 5))),
         cron(reap_stale_design_generations, second={40}, minute=set(range(0, 60, 5))),
         cron(purge_expired_design_generations, second={35}, minute=set(range(0, 60, 10))),
+        # AI pipeline (Faz 3B.2D): processor sik araliklarla yalnizca BIR stage
+        # isler (provider yoksa guvenle no-op); reaper seyrek calisir.
+        cron(process_ai_pipeline_stage_job, second=_AI_STAGE_PROCESSOR_SECONDS),
+        cron(
+            reap_stale_ai_pipeline_stages_job,
+            second=_AI_STALE_REAPER_SECONDS,
+            minute=_AI_STALE_REAPER_MINUTES,
+        ),
+        # AI pipeline lifecycle (Faz 3C.2B2): initialization/settlement,
+        # dakikada iki kez calisan bagimsiz reconciliation cycle'lari.
+        cron(initialize_ai_pipeline_groups_job, second=_AI_INIT_CYCLE_SECONDS),
+        cron(settle_ai_reservations_job, second=_AI_SETTLEMENT_CYCLE_SECONDS),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = on_startup

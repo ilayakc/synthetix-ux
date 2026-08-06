@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.billing import EntitlementStatus
 from app.services.entitlements import get_or_create_entitlement
 from app.services.pricing import (
+    AI_REPORT_MODULE_KEY,
     FEATURE_ACCESSIBILITY_PRECHECK,
     FEATURE_BASIC_UX_TEST,
     FREE_BASIC_UX_TEST_PERSONA_LIMIT,
@@ -42,7 +43,15 @@ class QuoteResult:
     free_entitlement_feature_key: str | None = None
     free_entitlement_applicable: bool = False
     line_items: tuple = ()
+    # `required_chips`: baseline/temel + `ai_report` DISINDAKI gelismis modul
+    # Chip'i - launch aninda MEVCUT baseline rezervasyonu icin kullanilir
+    # (davranisi degismez). `ai_report_chips`: yalnizca `ai_report` seciliyse
+    # 50, degilse 0 - AYRI bir AI rezervasyonu icin kullanilir (bkz.
+    # app.services.test_wizard.launch_draft). `total_chips` ikisinin toplamidir
+    # (kullanicinin gorecegi toplam maliyet). AI seciliyse `required_chips`
+    # AI ucretini ICERMEZ (cift ucret/cift rezervasyon olmaz).
     required_chips: int = 0
+    ai_report_chips: int = 0
     total_chips: int = 0
 
 
@@ -74,7 +83,14 @@ async def build_quote(
         test_line, free_applicable = _quote_accessibility_precheck(pricing, entitlement_available)
     line_items.append(test_line)
 
+    # `ai_report`, digger gelismis modullerden AYRI ele alinir: bedeli
+    # `advanced_module_chip_costs`ten (dolayisiyla `required_chips`ten) DEGIL,
+    # `pricing.ai_report_chip_cost`ten gelir ve ayri bir line item + ayri bir
+    # rezervasyon olur (bkz. QuoteResult docstring / test_wizard.launch_draft).
+    ai_report_selected = AI_REPORT_MODULE_KEY in modules
     for module_key in modules:
+        if module_key == AI_REPORT_MODULE_KEY:
+            continue
         unit_cost = pricing.module_cost(module_key)
         line_items.append(
             QuoteLineItem(
@@ -86,7 +102,22 @@ async def build_quote(
             )
         )
 
+    # baseline rezervasyon tutari: `ai_report` HARIC tum line item'lar.
     required_chips = sum(item.chip_cost for item in line_items)
+
+    ai_report_chips = pricing.ai_report_chip_cost if ai_report_selected else 0
+    if ai_report_selected:
+        # AI ucreti ayri bir line item olarak GORUNUR (frontend'de ayrik
+        # gosterim), ama `required_chips`e (baseline) EKLENMEZ.
+        line_items.append(
+            QuoteLineItem(
+                key=AI_REPORT_MODULE_KEY,
+                label="AI raporu (launch grubu basina)",
+                quantity=1,
+                unit_chip_cost=ai_report_chips,
+                chip_cost=ai_report_chips,
+            )
+        )
 
     return QuoteResult(
         pricing_version=pricing.version,
@@ -97,7 +128,8 @@ async def build_quote(
         free_entitlement_applicable=free_applicable,
         line_items=tuple(line_items),
         required_chips=required_chips,
-        total_chips=required_chips,
+        ai_report_chips=ai_report_chips,
+        total_chips=required_chips + ai_report_chips,
     )
 
 

@@ -165,20 +165,70 @@ async def session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         await connection.close()
 
 
+# Truncate teardown'unun gecici kilit cakismalarina (deadlock / lock-not-
+# available) karsi toleransli olmasi icin. AI pipeline testleri (worker /
+# retry-stale) gercek `SELECT ... FOR UPDATE (SKIP LOCKED)` ve iki-session
+# eszamanli reaper senaryolari calistirir; NullPool ile hizli connect/close
+# dongusunde bir onceki testin (rollback/close edilmis ama sunucu tarafinda
+# henuz sonlandirilmamis) RowShareLock tutan baglantisi, bir sonraki
+# TRUNCATE'in (tum tablolarda AccessExclusiveLock) ile kisa bir sure
+# cakisabilir ve PostgreSQL deadlock (40P01) uretir. Bu, teardown'un
+# HATA vermesine ve tablolarin BOSALTILAMAMASINA yol acar; kalan
+# `ai_pipeline_*` satirlari ise global (tum pipeline'lar arasi) claim'i
+# yaniltarak sonraki testlerde `stale_result_rejected` gibi kaskad
+# hatalar dogurur. Deterministik cozum: TRUNCATE'e kisa bir `lock_timeout`
+# koyup (sonsuz bekleme yerine hizli hata), gecici kilit hatalarinda
+# kucuk bir backoff ile SINIRLI sayida yeniden dene. Cakisan baglanti
+# birkac on ms icinde sunucu tarafinda tamamen kapanir ve retry basarir.
+_TRUNCATE_MAX_ATTEMPTS = 8
+_TRUNCATE_TRANSIENT_SQLSTATES = frozenset({"40P01", "55P03"})  # deadlock_detected, lock_not_available
+
+
+def _is_transient_lock_error(exc: BaseException) -> bool:
+    from sqlalchemy.exc import DBAPIError
+
+    if not isinstance(exc, DBAPIError):
+        return False
+    sqlstate = getattr(getattr(exc, "orig", None), "sqlstate", None) or getattr(exc, "code", None)
+    return sqlstate in _TRUNCATE_TRANSIENT_SQLSTATES
+
+
 async def _truncate_all_tables(sqlalchemy_url: str) -> None:
-    """Test DB'sindeki tum tablolari (taze, ayri bir baglantiyla) bosaltir."""
+    """Test DB'sindeki tum tablolari (taze, ayri bir baglantiyla) bosaltir.
 
-    engine = create_async_engine(sqlalchemy_url, poolclass=NullPool)
-    try:
-        table_names = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
-        if not table_names:
+    Gecici kilit cakismalarina karsi toleranslidir (bkz. yukaridaki not):
+    TRUNCATE'e kisa bir `lock_timeout` uygulanir ve deadlock / lock-not-
+    available durumunda kucuk bir backoff ile yeniden denenir. Tum denemeler
+    tukenirse hata YUTULMAZ (tablolarin sessizce dolu kalmasi test izolasyonunu
+    bozacagi icin son hata yeniden firlatilir)."""
+
+    from sqlalchemy import text
+
+    table_names = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
+    if not table_names:
+        return
+
+    last_exc: BaseException | None = None
+    for attempt in range(_TRUNCATE_MAX_ATTEMPTS):
+        engine = create_async_engine(sqlalchemy_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as connection:
+                # Sonsuz beklemek yerine hizli hata ver: cakisan bir kilit
+                # varsa TRUNCATE deadlock/lock-timeout ile duser, biz de retry
+                # ederiz (bekleyen TRUNCATE'in kendisi deadlock'a girmesindense).
+                await connection.execute(text("SET LOCAL lock_timeout = '2s'"))
+                await connection.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
             return
-        async with engine.begin() as connection:
-            from sqlalchemy import text
+        except Exception as exc:  # noqa: BLE001 - gecici kilit hatasini siniflandirip yeniden deniyoruz
+            if not _is_transient_lock_error(exc) or attempt == _TRUNCATE_MAX_ATTEMPTS - 1:
+                raise
+            last_exc = exc
+            await asyncio.sleep(0.05 * (attempt + 1))
+        finally:
+            await engine.dispose()
 
-            await connection.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
-    finally:
-        await engine.dispose()
+    if last_exc is not None:  # pragma: no cover - dongu ya return ya raise ile biter
+        raise last_exc
 
 
 @pytest.fixture

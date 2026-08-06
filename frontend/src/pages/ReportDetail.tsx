@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   ApiError,
   type AIExplanationResponse,
+  type AIPipelineStatusResponse,
   type CtaOverlayClassification,
   type ReportAbComparison,
   type ReportCampaignCta,
@@ -15,10 +16,12 @@ import {
   type ReportNetworkDevice,
   type ReportVisualAttentionCell,
   generateReportAiExplanation,
+  getAiPipelineStatus,
   getReport,
   getReportExportUrl,
   getReportHeatmapScreenshotUrl,
 } from "../api/client";
+import AiReportTab from "./AiReportTab";
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   url: "URL",
@@ -160,9 +163,6 @@ function ExportMenu({ jsonUrl, csvUrl }: { jsonUrl: string; csvUrl: string }) {
   );
 }
 
-const SCIENTIFIC_DISCLAIMER =
-  "Bu rapor sentetik ve kalibre edilmemiş tahminler içerir; gerçek kullanıcı testi değildir.";
-
 // --- Sonuc karti: global bir "kazanan" uydurmaz. Metrikler tam esitse
 // esitlik acikca soylenir ("esit performans kanitlandi" DENMEZ); farkli ise
 // tarafsizca sayisal fark bildirilir, istatistiksel anlamlilik iddia
@@ -228,7 +228,9 @@ function ResultSummaryCard({ report }: { report: ReportDetailResponse }) {
 
   return (
     <div className="result-summary-card">
-      <h2 className="result-summary-card__title">Tasarımlar arasında sentetik metrik farkları var</h2>
+      <h2 className="result-summary-card__title">
+        Tasarımlar arasında sentetik metrik farkları var
+      </h2>
       <p className="result-summary-card__body">
         {labelA} ve {labelB} için gösterilen sentetik tahminler bazı metriklerde farklı. Bu bir
         istatistiksel anlamlılık iddiası değildir; yalnızca simülasyon farkıdır ve tek başına bir
@@ -238,7 +240,8 @@ function ResultSummaryCard({ report }: { report: ReportDetailResponse }) {
         {differing.map((key) => {
           const entry = ab.comparisons[key];
           const isPercent = key !== "task_duration_seconds";
-          const format = (value: number) => (isPercent ? formatPercent(value) : formatSeconds(value));
+          const format = (value: number) =>
+            isPercent ? formatPercent(value) : formatSeconds(value);
           return (
             <li key={key}>
               {METRIC_LABELS[key]}: A {format(entry.variant_a)} — B {format(entry.variant_b)}
@@ -261,7 +264,8 @@ const FINDING_COPY: Record<string, { title: string; action: string }> = {
   },
   low_task_completion: {
     title: "Görev tamamlamayı kolaylaştırın",
-    action: "Form alanlarını ve gezinme adımlarını azaltmayı, birincil CTA'yı ilk ekrana taşımayı değerlendirin.",
+    action:
+      "Form alanlarını ve gezinme adımlarını azaltmayı, birincil CTA'yı ilk ekrana taşımayı değerlendirin.",
   },
   high_abandonment: {
     title: "Terk riskini azaltın",
@@ -323,7 +327,9 @@ function TopFindingsSection({ report }: { report: ReportDetailResponse }) {
                 </span>
                 <h3 className="priority-finding-card__title">{copy?.title ?? finding.text}</h3>
                 <p className="priority-finding-card__desc">{finding.text}</p>
-                <p className="priority-finding-card__action">{copy?.action ?? "İlgili metrikleri gözden geçirin."}</p>
+                <p className="priority-finding-card__action">
+                  {copy?.action ?? "İlgili metrikleri gözden geçirin."}
+                </p>
               </div>
             );
           })}
@@ -384,9 +390,7 @@ function QuickMetricRow({
         <p className="quick-metric-row__range">
           {thisLabel} belirsizlik aralığı:{" "}
           {thisRange ? `${format(thisRange[0])} – ${format(thisRange[1])}` : "—"}.
-          {otherLabel
-            ? ` ${otherLabel} için ayrıntılı aralık verisi bu görünümde yok.`
-            : ""}
+          {otherLabel ? ` ${otherLabel} için ayrıntılı aralık verisi bu görünümde yok.` : ""}
         </p>
       )}
     </div>
@@ -423,7 +427,11 @@ function QuickMetricComparison({ report }: { report: ReportDetailResponse }) {
         {QUICK_METRIC_KEYS.map((key) => {
           const isPercent = key !== "task_duration_seconds";
           const thisValue = valueOf(key);
-          const otherValue = ab ? (thisIsA ? ab.comparisons[key].variant_b : ab.comparisons[key].variant_a) : null;
+          const otherValue = ab
+            ? thisIsA
+              ? ab.comparisons[key].variant_b
+              : ab.comparisons[key].variant_a
+            : null;
           return (
             <QuickMetricRow
               key={key}
@@ -824,7 +832,10 @@ function CtaOverlayBoxMarker({
 }
 
 const CTA_CLASSIFICATION_LEGEND: { classification: CtaOverlayClassification; hint: string }[] = [
-  { classification: "dom_interactive_candidate", hint: "Sayfa yapısından tespit edilen etkileşimli öğe" },
+  {
+    classification: "dom_interactive_candidate",
+    hint: "Sayfa yapısından tespit edilen etkileşimli öğe",
+  },
   { classification: "visual_cta_candidate", hint: "Görsel piksel sezgisinden türetilen aday" },
   { classification: "user_confirmed_cta", hint: "Sizin seçtiğiniz/onayladığınız CTA" },
 ];
@@ -859,10 +870,15 @@ function CtaOverlayAccessibleList({
     <ul className="report-findings">
       {boxes.map((box, index) => (
         <li key={index} className="report-finding report-finding--info">
-          <span className={`cta-overlay-legend__swatch ${CTA_CLASSIFICATION_STYLE_CLASS[box.classification]}`} aria-hidden="true" />
+          <span
+            className={`cta-overlay-legend__swatch ${CTA_CLASSIFICATION_STYLE_CLASS[box.classification]}`}
+            aria-hidden="true"
+          />
           <span>
             <strong>{shortLabels.get(box) ?? box.label}</strong> — {box.label}
-            {box.heuristic_score != null ? ` — aday sıralama skoru: ${box.heuristic_score.toFixed(2)}` : ""}
+            {box.heuristic_score != null
+              ? ` — aday sıralama skoru: ${box.heuristic_score.toFixed(2)}`
+              : ""}
             {" — konum: sol %"}
             {Math.round(box.x * 100)}, üst %{Math.round(box.y * 100)}
           </span>
@@ -971,7 +987,11 @@ function VisualReportPanel({
 
       {hasAnyData && imageAvailable && (
         <>
-          <div className="report-tabs" role="tablist" aria-label={`${title} görsel katman görünümü`}>
+          <div
+            className="report-tabs"
+            role="tablist"
+            aria-label={`${title} görsel katman görünümü`}
+          >
             <button
               type="button"
               role="tab"
@@ -1084,7 +1104,10 @@ function VisualReportPanel({
                   <HeatmapAccessibleTable regions={regions} />
                 ))}
               {hasCtaData && (
-                <CtaOverlayAccessibleList boxes={ctaVisible.visible} shortLabels={ctaShortLabelMap} />
+                <CtaOverlayAccessibleList
+                  boxes={ctaVisible.visible}
+                  shortLabels={ctaShortLabelMap}
+                />
               )}
               {hasCtaData && ctaVisible.hiddenCount > 0 && (
                 <button
@@ -1145,10 +1168,10 @@ function VisualComparisonAbPanels({
     <>
       {ab.same_snapshot_sha256 && (
         <p className="auth-notice" role="status">
-          Byte düzeyinde aynı snapshot karşılaştırılıyor: Tasarım A ve Tasarım B aynı görsel
-          kopyaya bağlı. SHA-256 eşitliği yalnızca byte-düzeyinde özdeşliği gösterir; iki tarafın
-          gerçekten aynı görsel içeriğe sahip olduğunun kanıtıdır (eşitsizlik ise görsel farklılığın
-          kesin kanıtı sayılmaz).
+          Byte düzeyinde aynı snapshot karşılaştırılıyor: Tasarım A ve Tasarım B aynı görsel kopyaya
+          bağlı. SHA-256 eşitliği yalnızca byte-düzeyinde özdeşliği gösterir; iki tarafın gerçekten
+          aynı görsel içeriğe sahip olduğunun kanıtıdır (eşitsizlik ise görsel farklılığın kesin
+          kanıtı sayılmaz).
         </p>
       )}
       <div className="report-ab-columns">
@@ -1188,7 +1211,8 @@ function CampaignCtaSection({ campaignCta }: { campaignCta: ReportCampaignCta })
             </span>
             <span className="uncertainty-bar__value">
               {formatPercent(cta.click_probability.point_estimate)} (
-              {formatPercent(cta.click_probability.low)} – {formatPercent(cta.click_probability.high)})
+              {formatPercent(cta.click_probability.low)} –{" "}
+              {formatPercent(cta.click_probability.high)})
             </span>
           </div>
         </div>
@@ -1295,7 +1319,8 @@ function FindingsAndRecommendationsTab({ report }: { report: ReportDetailRespons
                 </p>
                 <p className="finding-detail-card__row">
                   <strong>Ne yapılmalı?</strong>{" "}
-                  {copy?.action ?? "Belirli bir öneri kaydedilmemiş; ilgili metrikleri gözden geçirin."}
+                  {copy?.action ??
+                    "Belirli bir öneri kaydedilmemiş; ilgili metrikleri gözden geçirin."}
                 </p>
                 <p className="finding-detail-card__row finding-detail-card__tag">
                   <strong>İlgili tasarım:</strong> {designTag}
@@ -1311,9 +1336,7 @@ function FindingsAndRecommendationsTab({ report }: { report: ReportDetailRespons
   return (
     <div>
       {findings.length === 0 ? (
-        <p className="report-section__intro">
-          Tanımlı eşik tabanlı bir bulgu tetiklenmedi.
-        </p>
+        <p className="report-section__intro">Tanımlı eşik tabanlı bir bulgu tetiklenmedi.</p>
       ) : (
         <>
           {renderGroup("Yüksek öncelik", high)}
@@ -1351,12 +1374,7 @@ function AiExplanationSection({ reportId }: { reportId: string }) {
       </p>
 
       {!explanation && (
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={handleGenerate}
-          disabled={loading}
-        >
+        <button type="button" className="btn-secondary" onClick={handleGenerate} disabled={loading}>
           {loading ? "Üretiliyor…" : "Bulguları sade dille açıkla"}
         </button>
       )}
@@ -1432,14 +1450,19 @@ function ContrastResultCard({ report }: { report: ReportDetailResponse }) {
   const isPixelHeuristic = sourceType === "screenshot" || sourceType === "ai_generated";
 
   if (isPixelHeuristic) {
-    const level = contrast.avg_ratio >= contrast.threshold ? "Yüksek" : contrast.avg_ratio >= contrast.threshold * 0.75 ? "Orta" : "Düşük";
+    const level =
+      contrast.avg_ratio >= contrast.threshold
+        ? "Yüksek"
+        : contrast.avg_ratio >= contrast.threshold * 0.75
+          ? "Orta"
+          : "Düşük";
     return (
       <div className="result-metric">
         <span className="result-metric__label">Bölgesel görsel kontrast tahmini</span>
         <span className="result-metric__value">{level}</span>
         <span className="result-metric__range">
-          Tahmini oran: {contrast.avg_ratio}. Bu değer screenshot piksellerinden tahmin edilmiştir;
-          kesin WCAG uygunluk testi değildir.
+          Tahmini oran: {contrast.avg_ratio}. Bu değer ekran görüntüsü piksellerinden tahmin
+          edilmiştir; kesin WCAG uygunluk testi değildir.
         </span>
       </div>
     );
@@ -1505,8 +1528,8 @@ function TechnicalDetailsTab({ report }: { report: ReportDetailResponse }) {
           Belirsizlik dağılımı açıklaması
         </h2>
         <p className="report-section__intro">
-          Nokta tahminleri ile birlikte belirsizlik aralıkları (üçgen dağılım) gösterilir. Bu bir
-          sentetik senaryo tahminidir; gerçek kullanıcı verisi değildir.
+          Nokta tahminleriyle birlikte üçgen dağılım yöntemiyle hesaplanan belirsizlik aralıkları
+          gösterilir.
         </p>
         <div className="result-metric-grid">
           <div className="result-metric">
@@ -1542,7 +1565,11 @@ function TechnicalDetailsTab({ report }: { report: ReportDetailResponse }) {
         <h2 id="report-technical-visual-heading" className="report-section__heading">
           Tam görsel veri tabloları
         </h2>
-        <TechnicalVisualDataPanel heatmap={report.heatmap} ctaOverlay={report.cta_overlay} title="Bu tasarım" />
+        <TechnicalVisualDataPanel
+          heatmap={report.heatmap}
+          ctaOverlay={report.cta_overlay}
+          title="Bu tasarım"
+        />
         {ab && (
           <TechnicalVisualDataPanel
             heatmap={ab.sibling_heatmap}
@@ -1617,12 +1644,26 @@ const TOP_LEVEL_TABS: TabDef[] = [
   { id: "technical", label: "Teknik Detaylar" },
 ];
 
+const AI_REPORT_TAB_ID = "ai-report";
+
+// AI pipeline sondasi: `ai_report` modulu secilmemis run'larda pipeline YOKTUR
+// (kontrollu 404) -> sekme hic gosterilmez. Basarili sonda -> sekme + ilk durum.
+// 404 DISI gercek hata (ag/500/integrity) -> sekme gosterilir ama guvenli bir
+// hata durumuyla acilir (bkz. AiReportTab); boylece kontrollu 404, gercek
+// hatadan ayrilir ve normal rapor davranisi hicbir durumda degismez.
+type AiProbe =
+  | { state: "loading" }
+  | { state: "absent" }
+  | { state: "present"; status: AIPipelineStatusResponse }
+  | { state: "error" };
+
 export default function ReportDetail() {
   const { reportId } = useParams<{ reportId: string }>();
   const [report, setReport] = useState<ReportDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [activeTab, setActiveTab] = useState("summary");
+  const [aiProbe, setAiProbe] = useState<AiProbe>({ state: "loading" });
   const idPrefix = useId();
 
   useEffect(() => {
@@ -1637,6 +1678,33 @@ export default function ReportDetail() {
         }
       });
   }, [reportId]);
+
+  // Rapor yuklendikten sonra, ait oldugu SimulationRun icin bir AI pipeline
+  // olup olmadigini TEK sefer sonda ile belirle (sekme gorunurlugu icin).
+  // Bu, standart rapor yuklemesinden BAGIMSIZDIR: sonda basarisiz olsa bile
+  // normal rapor davranisi degismez.
+  const runId = report?.simulation_run_id;
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    setAiProbe({ state: "loading" });
+    getAiPipelineStatus(runId)
+      .then((status) => {
+        if (!cancelled) setAiProbe({ state: "present", status });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        // Kontrollu 404 (pipeline yok VEYA run baska tenant'a ait) -> sekme yok.
+        if (err instanceof ApiError && err.status === 404) {
+          setAiProbe({ state: "absent" });
+        } else {
+          setAiProbe({ state: "error" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
 
   if (notFound) {
     return (
@@ -1658,6 +1726,12 @@ export default function ReportDetail() {
   }
 
   const isAbReport = Boolean(report.ab_comparison);
+  // Kontrollu 404 (pipeline yok) DISINDAKI her sonuçta sekme gosterilir; boylece
+  // gercek hata sessizce gizlenmez ("absent" -> gizli, "present"/"error" -> acik).
+  const showAiTab = aiProbe.state === "present" || aiProbe.state === "error";
+  const tabs = showAiTab
+    ? [...TOP_LEVEL_TABS, { id: AI_REPORT_TAB_ID, label: "AI Raporu" }]
+    : TOP_LEVEL_TABS;
 
   return (
     <section aria-labelledby="report-detail-heading">
@@ -1695,14 +1769,7 @@ export default function ReportDetail() {
         <ExportMenu jsonUrl={report.export_json_url} csvUrl={report.export_csv_url} />
       </div>
 
-      <p className="report-scientific-note">{SCIENTIFIC_DISCLAIMER}</p>
-
-      <TopLevelTabs
-        tabs={TOP_LEVEL_TABS}
-        activeTab={activeTab}
-        onChange={setActiveTab}
-        idPrefix={idPrefix}
-      />
+      <TopLevelTabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} idPrefix={idPrefix} />
 
       {activeTab === "summary" && (
         <div
@@ -1743,6 +1810,20 @@ export default function ReportDetail() {
           aria-labelledby={`${idPrefix}-tab-technical`}
         >
           <TechnicalDetailsTab report={report} />
+        </div>
+      )}
+
+      {showAiTab && activeTab === AI_REPORT_TAB_ID && (
+        <div
+          role="tabpanel"
+          id={`${idPrefix}-panel-${AI_REPORT_TAB_ID}`}
+          aria-labelledby={`${idPrefix}-tab-${AI_REPORT_TAB_ID}`}
+        >
+          <AiReportTab
+            runId={report.simulation_run_id}
+            initialStatus={aiProbe.state === "present" ? aiProbe.status : null}
+            initialError={aiProbe.state === "error"}
+          />
         </div>
       )}
     </section>

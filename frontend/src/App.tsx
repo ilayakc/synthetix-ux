@@ -1,9 +1,9 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { useRouteChangeLogging } from "./lib/useRouteChangeLogging";
 import ProtectedLayout from "./components/ProtectedLayout";
 import GuestOnly from "./auth/GuestOnly";
 import RouteFallback from "./auth/RouteFallback";
 import ChipTopUp from "./pages/ChipTopUp";
-import Dashboard from "./pages/Dashboard";
 import KullanimVeChip from "./pages/KullanimVeChip";
 import ModuleCatalog from "./pages/ModuleCatalog";
 import Placeholder from "./pages/Placeholder";
@@ -19,10 +19,14 @@ import ForgotPassword from "./pages/auth/ForgotPassword";
 import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import ResetPassword from "./pages/auth/ResetPassword";
+import Home from "./pages/Home";
 
 export default function App() {
+  useRouteChangeLogging();
+
   return (
     <Routes>
+      <Route path="/" element={<Home />} />
       <Route
         path="/giris"
         element={
@@ -44,7 +48,6 @@ export default function App() {
       <Route path="/sifre-sifirla" element={<ResetPassword />} />
 
       <Route element={<ProtectedLayout />}>
-        <Route path="/" element={<Dashboard />} />
         <Route path="/projeler" element={<Projects />} />
         <Route path="/projeler/:projectId" element={<ProjectDetail />} />
         <Route path="/tests/new" element={<TestWizard />} />

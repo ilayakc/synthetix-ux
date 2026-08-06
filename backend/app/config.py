@@ -1,7 +1,41 @@
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Ollama base URL icin varsayilan olarak izin verilen loopback host'lari
+# (bkz. Settings.ollama_allow_remote_host / `_is_allowed_ollama_host`) - SSRF'e
+# karsi: acikca `ollama_allow_remote_host=True` verilmeden BASKA hicbir host
+# kabul edilmez.
+_OLLAMA_ALLOWED_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
+
+
+def _is_allowed_ollama_host(base_url: str, *, allow_remote_host: bool) -> bool:
+    """`base_url`in Ollama icin izinli bir host tasiyip tasimadigini dogrular.
+
+    `allow_remote_host=False` (varsayilan) iken YALNIZCA loopback host'lara
+    (127.0.0.1/localhost/::1) izin verilir. Bos/gecersiz URL veya http(s)
+    disinda bir semaya sahip URL de REDDEDILIR."""
+
+    try:
+        parsed = urlsplit(base_url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    if allow_remote_host:
+        return True
+    return host.lower() in _OLLAMA_ALLOWED_LOOPBACK_HOSTS
+
+
+# `openai.reasoning={"effort": ...}` icin desteklenen degerler (bkz. kurulu
+# `openai` SDK'nin `Reasoning` typed sozlugu) - varsayilan "medium"dur (Faz
+# 3D.1 gorev talimati "Resmi OpenAI kararlari").
+OpenAIReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 class Settings(BaseSettings):
@@ -14,6 +48,19 @@ class Settings(BaseSettings):
     """
 
     environment: str = "development"
+
+    # --- Loglama (bkz. app.logging_config, app.logging_utils) ---
+    # `log_format` bos/None ise environment'a gore otomatik secilir
+    # (production -> json, aksi halde pretty); acikca "json" veya "pretty"
+    # verilerek gecersiz kilinabilir.
+    log_level: str = "INFO"
+    log_format: Literal["json", "pretty"] | None = None
+    # Bu esigi (milisaniye) asan istek/is fonksiyonu sureleri WARNING
+    # seviyesinde loglanir (bkz. app.logging_utils.log_duration).
+    slow_request_threshold_ms: int = 1000
+    # Istek loglama middleware'inin (bkz. app.main) atlayacagi, virgulle
+    # ayrilmis yol listesi - health-check gibi gurultulu uc noktalar icin.
+    log_exclude_paths: str = "/api/health"
 
     database_url: str = "postgresql+asyncpg://synthetix:devpassword@localhost:5432/synthetix_ux"
     redis_url: str = "redis://localhost:6379/0"
@@ -126,6 +173,15 @@ class Settings(BaseSettings):
     # sekilde eksiksiz calisir. "remote" yalnizca ilgili uc nokta/anahtar da
     # ayarlanmissa aktif olur (bkz. `ai_remote_endpoint`).
     ai_provider: Literal["none", "remote"] = "none"
+    # --- AI raporu pipeline modulu (`ai_report`) hazirlik/erisim bayragi ---
+    # (bkz. app.services.module_catalog `ai_report`, Faz 3C.2B1). GERCEK bir AI
+    # rapor saglayicisi henuz YOKTUR; bu bayrak `false` (guvenli varsayilan)
+    # oldugu surece `ai_report` modulu sihirbaz katalogunda gizlenir VE launch
+    # sunucu tarafinda reddedilir (Chip rezervasyonu/SimulationRun/pipeline
+    # OLUSMADAN). `ai_provider="none"` gibi otomatik bir Mock/yedek saglayiciya
+    # DUSULMEZ - hazirlik acikca `true` yapilmadikca (yalnizca testlerde acik
+    # override) ai_report kullanilamaz. Gercek provider/Mock bu fazda EKLENMEZ.
+    ai_report_enabled: bool = False
     ai_remote_endpoint: str | None = None
     ai_remote_api_key: str | None = None
     ai_remote_model_name: str = "unspecified"
@@ -156,6 +212,172 @@ class Settings(BaseSettings):
     design_generation_stale_timeout_seconds: int = 180
     design_generation_max_attempts: int = 3
 
+    # --- AI pipeline (`ai_report`) gercek provider secimi (Faz 3D.1) ---
+    # ONEMLI: yukaridaki `ai_provider` (ai_explanation icin "none"/"remote")
+    # ile KARISTIRILMAMALIDIR - TAMAMEN AYRI bir ozelliktir, bu yuzden ayri bir
+    # alan adi (`ai_report_provider`) kullanilir. `"disabled"` (varsayilan):
+    # hicbir provider olusturulmaz, hicbir OpenAI client/network YOKTUR -
+    # `ai_report_enabled` ile TAMAMEN BAGIMSIZ bir ikinci kapidir (ikisi de
+    # acik olmadan gercek provider readiness'i true OLMAZ, bkz. `ai_report_
+    # provider_ready`). "openai" DISINDA bir deger EKLENMEZ (bu fazda
+    # Anthropic/Gemini/fallback/model picker YOK).
+    # "mock" ve "ollama" (Faz 3D.2-LOCAL): ucretli API zorunlulugu olmadan
+    # gelistirme/test akisi. "mock" -> `MockAIProvider` (network YOK, tamamen
+    # deterministik - otomatik pytest'in DEFAULT'u budur). "ollama" -> yerel
+    # makinede calisan bir Ollama daemon'ina (bkz. `ollama_*` alanlari)
+    # bagli GERCEK bir provider; yalnizca gelistiricinin ACIKCA sectigi
+    # zaman kullanilir, hicbir otomatik fallback YOKTUR. Gemini bu fazda
+    # EKLENMEZ.
+    ai_report_provider: Literal["disabled", "mock", "openai", "ollama"] = "disabled"
+    # Mock'un PRODUCTION'da (environment=="production") gercek bir AI raporu
+    # GIBI sunulmasini/chip tuketmesini onlemek icin KASITLI, varsayilan
+    # olarak KAPALI bir istisna kapisi (Faz 3D.2.1 madde 3) - varsayilan
+    # (False) iken production'da `ai_report_provider="mock"` HEM readiness'i
+    # False dondurur HEM DE `app.config_security.validate_production_secrets`
+    # acikca REDDEDER (fail-closed, worker/backend HIC BASLAMAZ). Development/
+    # diger (production DISI) ortamlarda bu bayragin HICBIR ETKISI YOKTUR -
+    # mock zaten serbesttir.
+    allow_mock_ai_provider: bool = False
+    # SecretStr: repr/log/OpenAPI response'da ASLA duz metin gorunmez (bkz.
+    # gorev talimati madde 4). `.get_secret_value()` YALNIZCA gercek OpenAI
+    # client'i olustururken (bkz. app.services.ai_pipeline.openai_provider)
+    # okunur; hicbir hata mesajina/log satirina eklenmez.
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5.6-terra"
+    openai_reasoning_effort: OpenAIReasoningEffort = "medium"
+    # arq job timeout'undan (bkz. app.worker_constants.ARQ_JOB_TIMEOUT_SECONDS,
+    # TEK dogruluk kaynagi) GUVENLI bir marj ile KISA olmalidir - bu, asagidaki
+    # `_ensure_provider_timeout_below_job_timeout` alan dogrulayicisi
+    # tarafindan ZORLANIR (Faz 3D.2.1 madde 1); varsayilan (120s) bu kurala
+    # rahatlikla uyar.
+    openai_timeout_seconds: int = Field(default=120, gt=0)
+    # Pozitif VE makul bir ust sinirla sinirli (bkz. Faz 3D.2.1 madde 2) -
+    # asiri buyuk bir deger, hem provider suresini/maliyetini kontrolsuz
+    # buyutur hem de arq job timeout'unu (yukarida) asma riskini artirir.
+    openai_max_output_tokens: int = Field(default=2000, gt=0, le=8000)
+
+    # --- Yerel Ollama provider'i (Faz 3D.2-LOCAL / 3D.2.1) ---
+    # ONEMLI: `openai_*` alanlarindan TAMAMEN AYRI, bagimsiz bir yapilandirma.
+    # Varsayilan `ollama_base_url`, yalnizca loopback'e (127.0.0.1/localhost/
+    # ::1) isaret eder - SSRF'e karsi, `ollama_allow_remote_host=True` acikca
+    # verilmeden BASKA hicbir host kabul edilmez (bkz. `_is_allowed_ollama_host`,
+    # `ai_report_provider_ready`, `OllamaProvider.__init__`).
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3:8b"
+    # Faz 3D.2.1: 600s'lik onceki varsayilan, arq job timeout'unu (300s, bkz.
+    # app.worker_constants.ARQ_JOB_TIMEOUT_SECONDS) VE stale/reaper esigini
+    # (600s, bkz. app.services.ai_pipeline.retry_policy.
+    # STALE_RUNNING_TIMEOUT_SECONDS) asiyor/esitliyordu - bu, "provider
+    # timeout < arq job timeout < stale lease/reaper suresi" guvenlik sirasini
+    # BOZUYORDU. Yeni varsayilan (240s) her iki sinirin da GUVENLI sekilde
+    # ALTINDA kalir (bkz. `_ensure_provider_timeout_below_job_timeout`).
+    ollama_timeout_seconds: int = Field(default=240, gt=0)
+    ollama_temperature: float = Field(default=0.0, ge=0.0)
+    ollama_keep_alive: str = "10m"
+    # Ayni anda en fazla kac Ollama istegi calisir (bkz.
+    # app.services.ai_pipeline.ollama_provider - provider seviyesinde bounded
+    # `asyncio.Semaphore`). Yerel makinenin asiri yuklenmemesi icin varsayilan
+    # 1'dir (ayni anda IKI model uretimi BASLAMAZ).
+    ollama_max_concurrency: int = Field(default=1, gt=0)
+    # Opsiyonel baglam penceresi boyutu - verilirse pozitif tam sayi olmalidir.
+    ollama_num_ctx: int | None = Field(default=None, gt=0)
+    # Pozitif VE makul bir ust sinirla sinirli (bkz. Faz 3D.2.1 madde 2) -
+    # `options.num_predict` olarak gonderilir (bkz. OllamaProvider) VE
+    # `configuration_fingerprint`e girer (semantik bir uretim ayaridir).
+    ollama_max_output_tokens: int = Field(default=2000, gt=0, le=8000)
+    # Varsayilan olarak yalnizca loopback host'lara izin verilir; uzak bir
+    # Ollama sunucusu YALNIZCA bu bayrak acikca `True` yapilirsa kabul edilir
+    # (bkz. gorev talimati madde 3 - "Kullanici acikca ayri bir guvenli ayar
+    # vermeden uzak Ollama sunucusu kabul edilmesin").
+    ollama_allow_remote_host: bool = False
+    # Faz 3D.3A.2: Ollama'ya `/api/chat` `format` alaninda NE gonderilecegini
+    # sececer - iki mod birbirini DISLAR, otomatik fallback YOKTUR:
+    #   "json"        -> `format="json"` (gevsek, yalnizca "gecerli JSON uret"
+    #                     kisitlamasi; sema PROMPT metninde acikca verilir,
+    #                     bkz. app.services.ai_pipeline.ollama_provider).
+    #                     VARSAYILAN - gercek bir yerel smoke-test kanitladi ki
+    #                     (0.32.5, qwen3:8b) `format=<json_schema>` ile
+    #                     gonderilen TUM gercek pipeline semalari (ic ice
+    #                     $defs/$ref DUZLESTIRILMIS olsa BILE) Ollama'nin kendi
+    #                     JSON-Schema->GBNF-grammar donusturucusunun urettigi
+    #                     grammar'i, yine kendi grammar parser'i (llama.cpp)
+    #                     PARSE EDEMEDIGI icin HTTP 400 ("failed to parse
+    #                     grammar") ile REDDEDILIYOR - generation'in KENDISI
+    #                     hic baslamiyor.
+    #   "json_schema" -> `format=<normalize edilmis JSON schema>` (bkz.
+    #                     `_inline_schema_refs`) - yalnizca `$defs`/`$ref`
+    #                     duzlestirilir, ama YUKARIDAKI grammar-parser
+    #                     sorunu bu haliyle HALA gozlemlenmistir; bu mod
+    #                     ileride Ollama/llama.cpp surumu duzeldiginde
+    #                     deneysel/opsiyonel olarak denenebilir - varsayilan
+    #                     DEGILDIR.
+    # Her iki modda da cevap AYNI SEKILDE `output_schema.model_validate_json`
+    # ile (orijinal, ic ice Pydantic modeliyle) dogrulanir - bu ayar YALNIZCA
+    # giden `format` temsilini degistirir, dogrulama sozlesmesini DEGISTIRMEZ.
+    ollama_structured_output_mode: Literal["json", "json_schema"] = "json"
+
+    @field_validator("openai_timeout_seconds", "ollama_timeout_seconds")
+    @classmethod
+    def _ensure_provider_timeout_below_job_timeout(cls, value: int, info: ValidationInfo) -> int:
+        """Provider request timeout'u daima `ARQ_JOB_TIMEOUT_SECONDS - MIN_
+        JOB_TIMEOUT_SAFETY_MARGIN_SECONDS`den KUCUK/ESIT olmalidir (Faz
+        3D.2.1 madde 1 - "provider request timeout < arq job timeout < stale
+        lease/reaper suresi"). Bu sabitler `app.worker_constants`de TEK bir
+        yerde tanimlidir - burada KOPYALANMAZ."""
+
+        from app.worker_constants import ARQ_JOB_TIMEOUT_SECONDS, MIN_JOB_TIMEOUT_SAFETY_MARGIN_SECONDS
+
+        max_allowed = ARQ_JOB_TIMEOUT_SECONDS - MIN_JOB_TIMEOUT_SAFETY_MARGIN_SECONDS
+        if value > max_allowed:
+            raise ValueError(
+                f"{info.field_name}={value}, arq job timeout'undan ({ARQ_JOB_TIMEOUT_SECONDS}s) "
+                f"guvenli bir marjla ({MIN_JOB_TIMEOUT_SAFETY_MARGIN_SECONDS}s) kucuk/esit "
+                f"olmalidir (en fazla {max_allowed}s)."
+            )
+        return value
+
+    @property
+    def ai_report_provider_ready(self) -> bool:
+        """`ai_report` icin GERCEK/mock bir provider olusturulabilir mi?
+
+        `ai_report_provider`e gore dallanir - hicbir dal digerine OTOMATIK
+        DUSMEZ (bkz. gorev talimati madde 4, Faz 3D.2-LOCAL madde 1):
+        - "disabled": daima False.
+        - "mock": `ai_report_enabled=True` gerekir; EK OLARAK, `environment==
+          "production"` ise `allow_mock_ai_provider=True` ACIKCA verilmedigi
+          surece False doner (bkz. Faz 3D.2.1 madde 3 - mock'un production'da
+          gercek bir AI raporu GIBI sessizce calismasi ENGELLENIR).
+        - "openai": mevcut (Faz 3D.1) davranis - API key + model + timeout.
+        - "ollama": API key GEREKMEZ; model adi bos degil, timeout/
+          concurrency pozitif VE base URL izinli bir host'a (varsayilan
+          yalnizca loopback) isaret etmelidir.
+        """
+
+        if not self.ai_report_enabled:
+            return False
+        if self.ai_report_provider == "disabled":
+            return False
+        if self.ai_report_provider == "mock":
+            if self.environment == "production" and not self.allow_mock_ai_provider:
+                return False
+            return True
+        if self.ai_report_provider == "openai":
+            key = self.openai_api_key
+            if key is None or not key.get_secret_value().strip():
+                return False
+            if not self.openai_model.strip():
+                return False
+            return self.openai_timeout_seconds > 0
+        if self.ai_report_provider == "ollama":
+            if not self.ollama_model.strip():
+                return False
+            if self.ollama_timeout_seconds <= 0 or self.ollama_max_concurrency <= 0:
+                return False
+            return _is_allowed_ollama_host(
+                self.ollama_base_url, allow_remote_host=self.ollama_allow_remote_host
+            )
+        return False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -163,7 +385,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("cookie_secure", "cookie_domain", mode="before")
+    @field_validator("cookie_secure", "cookie_domain", "log_format", mode="before")
     @classmethod
     def _blank_env_value_means_unset(cls, value: object) -> object:
         # `.env` dosyasinda `COOKIE_SECURE=` gibi bos birakilmis bir

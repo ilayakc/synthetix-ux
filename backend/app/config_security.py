@@ -106,3 +106,16 @@ def validate_production_secrets(settings: Settings | None = None) -> None:
             "ALLOWED_HOSTS icinde '*' (hepsine izin ver) production'da guvensizdir. "
             "Gercek, bilinen host adlarini acikca belirtin."
         )
+
+    # Faz 3D.2.1 madde 3: `ai_report_provider="mock"` (MockAIProvider - sahte/
+    # deterministik bir AI raporu uretir) production'da SESSIZCE gercek bir AI
+    # raporu GIBI calismamali/chip tuketmemelidir. `ALLOW_MOCK_AI_PROVIDER=true`
+    # ACIKCA verilmeden bu kombinasyon fail-closed REDDEDILIR (worker/backend
+    # hic baslamaz).
+    if cfg.ai_report_enabled and cfg.ai_report_provider == "mock" and not cfg.allow_mock_ai_provider:
+        raise ConfigSecurityError(
+            "AI_REPORT_PROVIDER=mock production'da (ENVIRONMENT=production) ALLOW_MOCK_AI_PROVIDER=true "
+            "acikca ayarlanmadan calisamaz. Mock, sahte/deterministik bir AI raporu uretir ve gercek bir "
+            "AI raporu GIBI SUNULMAMALIDIR - kasitli bir dry-run/QA senaryosu degilse AI_REPORT_PROVIDER'i "
+            "'disabled', 'openai' veya 'ollama' olarak ayarlayin."
+        )

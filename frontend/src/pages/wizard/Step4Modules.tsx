@@ -1,4 +1,8 @@
 import type { AnalysisModuleDefinition, QuoteResponse } from "../../api/client";
+import {
+  AI_REPORT_PERSONA_REQUIRED_MESSAGE,
+  aiReportRequiresPersonaSelection,
+} from "./aiReportPersona";
 import ModuleCatalogCard from "./ModuleCatalogCard";
 import { NETWORK_DEVICE_TEST_DISABLED_REASON, isModuleCompatibleWithSources } from "./moduleCompatibility";
 import type { StepProps } from "./types";
@@ -40,11 +44,14 @@ export default function Step4Modules({
     onChange("modules", Array.from(next));
   };
 
+  // Bakiye kontrolu, gercekten rezerve edilecek TOPLAM tutara (`total_chips` =
+  // baseline `required_chips` + ayri `ai_report` ucreti) gore yapilir - yalnizca
+  // baseline'a (`required_chips`) bakmak, ai_report seciliyken (ör. ucretsiz
+  // baseline + 50 AI) yetersiz bakiyeyi kacirirdi. `free_entitlement_applicable`
+  // artik kapi olarak KULLANILMAZ: ucretsiz hak baseline satirini 0'a indirir,
+  // ama AI ucreti `total_chips` icinde kalir; total 0 ise zaten uyari cikmaz.
   const insufficientBalance =
-    quote !== null &&
-    !quote.free_entitlement_applicable &&
-    chipBalance !== null &&
-    chipBalance < quote.required_chips;
+    quote !== null && chipBalance !== null && chipBalance < quote.total_chips;
 
   const selectedModuleNames = selectableModules
     .filter((module) => selected.has(module.key))
@@ -72,6 +79,11 @@ export default function Step4Modules({
         <p className="wizard-field-hint">
           Temel ücretsiz haklar dışında kalan gelişmiş modüller Chip harcaması gerektirir.
         </p>
+        {aiReportRequiresPersonaSelection(payload) && (
+          <p className="auth-error" role="alert">
+            {AI_REPORT_PERSONA_REQUIRED_MESSAGE}
+          </p>
+        )}
       </div>
 
       {quoteLoading && <p className="page-placeholder">Fiyat teklifi hesaplanıyor…</p>}
@@ -93,7 +105,7 @@ export default function Step4Modules({
           </li>
           <li>
             <span>Toplam Chip</span>
-            <span>{quote.required_chips.toLocaleString("tr-TR")}</span>
+            <span>{quote.total_chips.toLocaleString("tr-TR")}</span>
           </li>
           <li>
             <span>Mevcut bakiye</span>
@@ -109,7 +121,7 @@ export default function Step4Modules({
       {quote && (
         <div className="wizard-quote-total">
           <span>Gerekli Chip</span>
-          <span>{quote.required_chips.toLocaleString("tr-TR")}</span>
+          <span>{quote.total_chips.toLocaleString("tr-TR")}</span>
         </div>
       )}
 

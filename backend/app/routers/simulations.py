@@ -7,13 +7,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.dependencies import Principal, get_organization_id, require_roles
+from app.dependencies import Principal, get_organization_id, require_roles, verify_csrf
 from app.engine.baseline import compare_baseline_results
+from app.models.personas import Persona
 from app.models.simulations import CalibrationObservation, SimulationRun, SimulationStatus
 from app.models.tests import TestDefinition, TestVariant
 from app.services import calibration as calibration_service
 from app.services import simulation_progress
 from app.services import simulation_worker as worker_service
+from app.services.ai_pipeline import mutations as ai_pipeline_mutations
+from app.services.ai_pipeline import queries as ai_pipeline_queries
 from app.services.exceptions import (
     CalibrationConsentRequiredError,
     CalibrationObservationRequiresMetricError,
@@ -27,6 +30,7 @@ from app.services.exceptions import (
     InvalidSimulationStateError,
     SimulationRunNotFoundError,
 )
+from app.services.personas import MAX_PERSONA_COUNT, MIN_PERSONA_COUNT
 
 router = APIRouter(prefix="/api/simulations", tags=["simulations"])
 
@@ -59,10 +63,39 @@ class SimulationRunResponse(BaseModel):
     not_real_user_data_label: str
     methodology_reference: str
     attempt_count: int
+    # Frontend'in "Kimler simüle edildi?" panelindeki (bkz. GET
+    # .../runs/{run_id}/personas) dağılım bütünlük göstergesi için: bu run'in
+    # kalıcı Persona satırlarının toplam `population_weight`iyle karşılaştırılacak
+    # beklenen değer. `input_snapshot`'ın TAMAMI asla API'ye açılmaz (bkz.
+    # `_extract_persona_count`) - yalnızca bu tek, savunmacı biçimde türetilmiş
+    # değer. Eski/legacy run'larda veya beklenmeyen bir tipte `None`'dır.
+    persona_count: int | None = Field(default=None, ge=MIN_PERSONA_COUNT, le=MAX_PERSONA_COUNT)
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+def _extract_persona_count(input_snapshot: dict) -> int | None:
+    """`input_snapshot["persona_count"]`i savunmacı bicimde okur.
+
+    `input_snapshot`'ın tamamı (persona_sample, seed, URL, modul girdileri
+    vb.) hicbir zaman API'ye acilmaz - yalnizca bu tek deger, gecerliyse,
+    turetilir. Eksik alan, beklenmeyen tip (bool/str/float) veya
+    `MIN_PERSONA_COUNT`/`MAX_PERSONA_COUNT` disindaki bir deger (ornegin
+    bozulmus/elle degistirilmis eski bir satir) sessizce `None`'a duser -
+    response validasyonunda asla 500 uretmez, yanlis bir deger de tahmin
+    etmez.
+    """
+
+    if not isinstance(input_snapshot, dict):
+        return None
+    value = input_snapshot.get("persona_count")
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    if not (MIN_PERSONA_COUNT <= value <= MAX_PERSONA_COUNT):
+        return None
+    return value
 
 
 async def _to_response(run: SimulationRun) -> SimulationRunResponse:
@@ -90,6 +123,7 @@ async def _to_response(run: SimulationRun) -> SimulationRunResponse:
         not_real_user_data_label=NOT_REAL_USER_DATA_LABEL,
         methodology_reference="docs/methodology.md",
         attempt_count=run.attempt_count,
+        persona_count=_extract_persona_count(run.input_snapshot),
         started_at=run.started_at,
         finished_at=run.finished_at,
         created_at=run.created_at,
@@ -137,6 +171,58 @@ async def get_run(
     run = await _get_owned_run(session, organization_id, run_id)
     await session.commit()
     return await _to_response(run)
+
+
+class PersonaResponse(BaseModel):
+    id: uuid.UUID
+    simulation_run_id: uuid.UUID
+    index: int = Field(ge=0)
+    label: str
+    attributes: dict[str, str]
+    population_weight: int = Field(gt=0)
+    created_at: datetime
+
+
+def _to_persona_response(persona: Persona) -> PersonaResponse:
+    return PersonaResponse(
+        id=persona.id,
+        simulation_run_id=persona.simulation_run_id,
+        index=persona.index,
+        label=persona.label,
+        attributes=persona.attributes,
+        population_weight=persona.population_weight,
+        created_at=persona.created_at,
+    )
+
+
+@router.get("/runs/{run_id}/personas", response_model=list[PersonaResponse])
+async def list_run_personas(
+    run_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_organization_id),
+    session: AsyncSession = Depends(get_session),
+) -> list[PersonaResponse]:
+    """Bu calistirmaya ait kalici temsili personalari (bkz. app.services.personas.
+    build_representative_personas / app.services.test_wizard.launch_draft)
+    salt-okunur olarak listeler.
+
+    Hesaplama/uretim YAPMAZ - yalnizca launch aninda zaten kaydedilmis
+    `Persona` satirlarini okur; persona secimi yapilmamis (veya - teorik
+    olarak - henuz islenmemis) eski bir run icin bos liste doner (404 DEGIL,
+    bkz. `_get_owned_run`in run varligini zaten dogruladigi durum). Run
+    durumu (queued/running/succeeded/failed/cancelled) burada bir kisit
+    OLUSTURMAZ - personalar launch aninda, motor sonucundan BAGIMSIZ olarak
+    zaten olusturulmustur.
+    """
+
+    run = await _get_owned_run(session, organization_id, run_id)
+
+    result = await session.execute(
+        select(Persona).where(Persona.simulation_run_id == run.id).order_by(Persona.index.asc())
+    )
+    personas = result.scalars().all()
+    await session.commit()
+
+    return [_to_persona_response(persona) for persona in personas]
 
 
 @router.post("/runs/{run_id}/cancel", response_model=SimulationRunResponse)
@@ -367,3 +453,134 @@ async def get_comparison(
         not_real_user_data_label=NOT_REAL_USER_DATA_LABEL,
         methodology_reference="docs/methodology.md",
     )
+
+
+# --- AI pipeline (salt-okunur; Faz 3C.1) ----------------------------------------
+#
+# Bu iki endpoint SALT-OKUNURDUR (mutation/commit YOK): tum is mantigi
+# `app.services.ai_pipeline.queries` (tenant sinirini sorgunun parcasi yapan
+# ortak `_load_scoped_run` helper'i) icindedir; router yalnizca domain
+# hatalarini repo'nun mevcut HTTP hata formatina cevirir (bkz.
+# app.services.ai_pipeline.orchestration tenant/hata deseni). Pipeline var/yok
+# bilgisi cross-tenant SIZMAZ: run yok ile baska org'a ait run AYNI 404'u uretir.
+
+
+@router.get(
+    "/runs/{run_id}/ai-pipeline",
+    response_model=ai_pipeline_queries.AIPipelineStatusResponse,
+)
+async def get_ai_pipeline_status(
+    run_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_organization_id),
+    session: AsyncSession = Depends(get_session),
+) -> ai_pipeline_queries.AIPipelineStatusResponse:
+    """Bu run'a bagli AI pipeline'inin durumunu, kanonik stage ozetlerini ve
+    ilerlemesini salt-okunur olarak dondurur (rapor/token/maliyet ic muhasebesi
+    ICERMEZ)."""
+
+    try:
+        return await ai_pipeline_queries.get_ai_pipeline_status(
+            session, organization_id=organization_id, simulation_run_id=run_id
+        )
+    except ai_pipeline_queries.SimulationRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Calistirma bulunamadi") from exc
+    except ai_pipeline_queries.PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.code) from exc
+    except ai_pipeline_queries.PipelineIntegrityError as exc:
+        raise HTTPException(status_code=500, detail=exc.code) from exc
+
+
+# --- AI pipeline mutasyonlari (retry/cancel; Faz 3C.3) --------------------------
+#
+# Bu iki endpoint YAZMA yapar: tum is mantigi `app.services.ai_pipeline.mutations`
+# icindedir (tenant sinirli, grup advisory-kilitli); router yalnizca domain
+# hatalarini HTTP'ye cevirir ve transaction'i commit eder. `verify_csrf` ve
+# `require_roles(*WRITE_ROLES)` (viewer reddedilir) uygulanir; organizasyon id
+# token'dan gelir. Yanlis tenant/mevcut olmayan run AYNI 404'u uretir; domain
+# conflict -> 409 (code detay); yetersiz Chip -> 402 (mevcut billing esleme).
+
+
+@router.post(
+    "/runs/{run_id}/ai-pipeline/retry",
+    response_model=ai_pipeline_mutations.AIRetryResult,
+)
+async def retry_ai_pipeline(
+    run_id: uuid.UUID,
+    principal: Principal = Depends(require_roles(*WRITE_ROLES)),
+    _csrf: None = Depends(verify_csrf),
+    session: AsyncSession = Depends(get_session),
+) -> ai_pipeline_mutations.AIRetryResult:
+    """Terminal basarisiz/iptal edilmis AI pipeline grubunu YENI bir 50 Chip
+    rezervasyonu alarak manuel yeniden ucretlendirir ve yeniden kuyruga alir."""
+
+    try:
+        result = await ai_pipeline_mutations.retry_ai_pipeline_group(
+            session, organization_id=principal.organization_id, simulation_run_id=run_id
+        )
+    except ai_pipeline_mutations.SimulationRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Calistirma bulunamadi") from exc
+    except InsufficientChipBalanceError as exc:
+        raise HTTPException(status_code=402, detail=f"Yetersiz Chip bakiyesi: {exc}") from exc
+    except ai_pipeline_mutations.AIPipelineGroupConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.code) from exc
+
+    await session.commit()
+    return result
+
+
+@router.post(
+    "/runs/{run_id}/ai-pipeline/cancel",
+    response_model=ai_pipeline_mutations.AICancelResult,
+)
+async def cancel_ai_pipeline(
+    run_id: uuid.UUID,
+    principal: Principal = Depends(require_roles(*WRITE_ROLES)),
+    _csrf: None = Depends(verify_csrf),
+    session: AsyncSession = Depends(get_session),
+) -> ai_pipeline_mutations.AICancelResult:
+    """Aktif (nonterminal) AI pipeline grubunu iptal eder ve (RESERVED ise)
+    paylasilan AI rezervasyonunu serbest birakir (idempotent)."""
+
+    try:
+        result = await ai_pipeline_mutations.cancel_ai_pipeline_group(
+            session, organization_id=principal.organization_id, simulation_run_id=run_id
+        )
+    except ai_pipeline_mutations.SimulationRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Calistirma bulunamadi") from exc
+    except ai_pipeline_mutations.AIPipelineGroupConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.code) from exc
+
+    await session.commit()
+    return result
+
+
+@router.get(
+    "/runs/{run_id}/ai-report",
+    response_model=ai_pipeline_queries.AIReportResponse,
+)
+async def get_ai_report(
+    run_id: uuid.UUID,
+    organization_id: uuid.UUID = Depends(get_organization_id),
+    session: AsyncSession = Depends(get_session),
+) -> ai_pipeline_queries.AIReportResponse:
+    """Bu run icin tamamlanmis, dogrulanmis UX raporunu dondurur.
+
+    Rapor yalnizca pipeline SUCCEEDED VE UX_REPORT stage'i SUCCEEDED VE nihai
+    cikti SIKI `UXReport` olarak decode edilebiliyorsa doner; aksi halde durum
+    endpoint'iyle AYNI tenant helper'i uzerinden kontrollu bir hata (404/409/500)
+    uretilir. Ara stage ciktilari ASLA sunulmaz."""
+
+    try:
+        return await ai_pipeline_queries.get_ai_pipeline_report(
+            session, organization_id=organization_id, simulation_run_id=run_id
+        )
+    except ai_pipeline_queries.SimulationRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Calistirma bulunamadi") from exc
+    except ai_pipeline_queries.PipelineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.code) from exc
+    except ai_pipeline_queries.ReportNotReadyError as exc:
+        raise HTTPException(status_code=409, detail=exc.code) from exc
+    except ai_pipeline_queries.ReportNotAvailableError as exc:
+        raise HTTPException(status_code=409, detail=exc.code) from exc
+    except ai_pipeline_queries.PipelineIntegrityError as exc:
+        raise HTTPException(status_code=500, detail=exc.code) from exc

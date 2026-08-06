@@ -42,27 +42,14 @@ describe("Sidebar", () => {
     expect(screen.getByRole("link", { name: /Genel Bakış/ })).toHaveFocus();
   });
 
-  it("altta 'Yeni Test Başlat' baglantisi bulunur", () => {
+  it("Ayarlar grubunun yaninda 'Yeni Test' CTA'si gostermez", () => {
     render(
       <MemoryRouter initialEntries={["/"]}>
         <Sidebar isOpen={false} onClose={() => {}} />
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: "Yeni Test Başlat" })).toHaveAttribute(
-      "href",
-      "/tests/new",
-    );
-  });
-
-  it("'Yeni Test' sade bir baglanti olarak tekrarlanmaz, yalnizca CTA'da bulunur", () => {
-    render(
-      <MemoryRouter initialEntries={["/"]}>
-        <Sidebar isOpen={false} onClose={() => {}} />
-      </MemoryRouter>,
-    );
-
-    expect(screen.getAllByRole("link", { name: /Yeni Test/ })).toHaveLength(1);
+    expect(screen.queryByRole("link", { name: /Yeni Test/ })).not.toBeInTheDocument();
   });
 
   it("ana islemler dogru sirada listelenir ve Cip Cuzdani'na yonlendirir", () => {

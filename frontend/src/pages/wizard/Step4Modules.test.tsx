@@ -221,4 +221,91 @@ describe("Step4Modules", () => {
 
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  // --- ai_report persona zorunlulugu (bkz. aiReportPersona) ----------------
+
+  it("ai_report secili ama persona secimi yoksa aciklayici uyari gosterir", () => {
+    renderStep4({ payload: { modules: ["ai_report"] } });
+
+    expect(
+      screen.getByText(/AI raporu modülü temsili personalar üzerinde çalışır/),
+    ).toBeInTheDocument();
+  });
+
+  it("ai_report + bos ozel dagilim ({}) da uyari gosterir", () => {
+    renderStep4({ payload: { modules: ["ai_report"], persona_distribution: {} } });
+
+    expect(
+      screen.getByText(/AI raporu modülü temsili personalar üzerinde çalışır/),
+    ).toBeInTheDocument();
+  });
+
+  it("ai_report + persona preset secili ise uyari GOSTERMEZ", () => {
+    renderStep4({
+      payload: { modules: ["ai_report"], persona_preset_id: "builtin:general_web_users" },
+    });
+
+    expect(
+      screen.queryByText(/AI raporu modülü temsili personalar üzerinde çalışır/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("ai_report secili degilse (temel akis) uyari GOSTERMEZ", () => {
+    renderStep4({ payload: { modules: ["network_device_test"] } });
+
+    expect(
+      screen.queryByText(/AI raporu modülü temsili personalar üzerinde çalışır/),
+    ).not.toBeInTheDocument();
+  });
+
+  // --- Fiyat toplami: total_chips (baseline + ai_report) gosterilir ---------
+
+  it("satirlar 500 + 50 ise Toplam/Gerekli Chip 550 gosterir (required_chips=500 DEGIL)", () => {
+    renderStep4({
+      quote: {
+        ...baseQuote,
+        free_entitlement_applicable: false,
+        persona_count: 500,
+        required_chips: 500, // baseline (ai_report HARIC)
+        total_chips: 550, // baseline + ai_report 50
+      },
+      chipBalance: 10_000,
+    });
+
+    // "Toplam Chip" satiri + "Gerekli Chip" toplami = iki kez 550.
+    expect(screen.getAllByText("550")).toHaveLength(2);
+  });
+
+  it("ucretsiz baseline + 50 AI ise Toplam/Gerekli Chip 50 gosterir", () => {
+    renderStep4({
+      quote: {
+        ...baseQuote,
+        free_entitlement_applicable: true,
+        persona_count: 1000,
+        required_chips: 0, // baseline ucretsiz
+        total_chips: 50, // yalnizca ai_report
+      },
+      chipBalance: 10_000,
+    });
+
+    expect(screen.getAllByText("50")).toHaveLength(2);
+    // Ucretsiz hak bilgisi ("Evet") yine dogru gosterilir.
+    expect(screen.getByText("Evet")).toBeInTheDocument();
+  });
+
+  it("bakiye kontrolu total_chips'e gore yapilir (ucretsiz baseline + 50 AI, bakiye 10 -> yetersiz)", () => {
+    renderStep4({
+      quote: {
+        ...baseQuote,
+        free_entitlement_applicable: true,
+        required_chips: 0,
+        total_chips: 50,
+      },
+      chipBalance: 10,
+    });
+
+    expect(
+      screen.getByText(/Chip bakiyeniz bu testi başlatmak için yeterli değil/),
+    ).toBeInTheDocument();
+  });
 });

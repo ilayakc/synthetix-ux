@@ -107,22 +107,27 @@ docker compose -f compose.prod.yaml --env-file .env.production logs -f backend w
 
 `backend` ve `worker` (bkz. `app.logging_config.configure_logging`),
 `ENVIRONMENT=production` oldugunda tek satirlik JSON log ciktisi uretir
-(`{"timestamp": "...", "level": "...", "logger": "...", "message": "..."}`);
-`analyzer` de ayni davranisi kendi `app.logging_config` kopyasiyla
-uygular. Bu, bir log toplama aracina (ornegin bir dosyaya yonlendirip
-`jq` ile filtrelemeye) beslenebilir:
+(`{"timestamp": "...", "level": "...", "logger": "...", "category": "...",
+"message": "...", "request_id": "..."}`); `analyzer` de ayni davranisi kendi
+`app.logging_config` kopyasiyla uygular. Bu, bir log toplama aracina
+(ornegin bir dosyaya yonlendirip `jq` ile filtrelemeye) beslenebilir:
 
 ```powershell
 docker compose -f compose.prod.yaml --env-file .env.production logs --no-color backend | Select-String -Pattern '"level": "ERROR"'
 ```
 
+Her HTTP istegi `app.logging_middleware.install_request_logging`
+middleware'i tarafindan tek bir `category="api"` satirinda loglanir
+(metod, yol, durum kodu, sure, `request_id`); `SLOW_REQUEST_THRESHOLD_MS`
+(varsayilan 1000ms) asilirsa seviye otomatik WARNING'e yukselir.
+Uvicorn'un kendi `uvicorn.access` logger'i, bu middleware'le AYNI istegi
+farkli formatta IKINCI kez loglamamasi icin `configure_logging` tarafindan
+susturulur (bkz. `app.logging_config._DUPLICATE_ACCESS_LOGGERS`).
+`LOG_EXCLUDE_PATHS` (varsayilan `/api/health`) ile gurultulu uc noktalar
+istek loglamasindan (health-check gibi) haric tutulabilir.
+
 `frontend` (nginx) kendi erisim/hata log formatini kullanir - bu
-degistirilmedi. Uvicorn'un kendi `uvicorn.access` log satirlari (istek
-basina, ornegin `INFO: 127.0.0.1:... - "GET /api/health HTTP/1.1" 200 OK`)
-JSON'a CEVRILMEZ - yalnizca uygulama kodunun (`app.services.*` vb.)
-`logging.getLogger(...)` uzerinden urettigi loglar JSON formatindadir; bu
-kasitli bir sinirlamadir (uvicorn'un kendi log yapilandirmasini degistirmek
-bu paketin kapsami disindadir).
+degistirilmedi.
 
 ## 6. Yedekleme ve geri yukleme
 

@@ -151,13 +151,31 @@ describe("Settings", () => {
     expect(await screen.findByText("Ayarlar yüklenemedi.")).toBeInTheDocument();
   });
 
-  it("dört sekmeyi gösterir ve varsayılan olarak Profilim sekmesi aktiftir", async () => {
+  it("üç ana sekmeyi gösterir ve varsayılan olarak Profilim sekmesi aktiftir", async () => {
     stubFetch();
     renderPage();
 
     await waitFor(() => expect(screen.getByRole("tablist")).toBeInTheDocument());
+    expect(screen.getAllByRole("tab")).toHaveLength(3);
     expect(screen.getByRole("tab", { name: "Profilim" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Şirket" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByRole("tab", { name: "Test Varsayılanları" })).not.toBeInTheDocument();
+  });
+
+  it("test varsayilanlarini Sirket altinda kapali Gelismis ayarlar bolumunde sunar", async () => {
+    stubFetch();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole("tablist")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: "Şirket" }));
+
+    const advancedSummary = screen.getByText("Gelişmiş ayarlar");
+    expect(screen.getByLabelText("Varsayılan persona sayısı")).not.toBeVisible();
+
+    fireEvent.click(advancedSummary);
+
+    expect(screen.getByRole("heading", { name: "Test varsayılanları" })).toBeVisible();
+    expect(screen.getByLabelText("Varsayılan persona sayısı")).toBeVisible();
   });
 
   it("ok tuşlarıyla sekmeler arasında klavye ile gezinilebilir", async () => {
@@ -242,7 +260,7 @@ describe("Settings", () => {
     fireEvent.change(screen.getByLabelText("Görünen ad"), { target: { value: "Yeni Ad" } });
     fireEvent.click(screen.getByRole("button", { name: "Kaydet" }));
 
-    expect(await screen.findByText("Gecersiz dil")).toBeInTheDocument();
+    expect(await screen.findByText("Geçersiz dil")).toBeInTheDocument();
   });
 
   it("owner olmayan bir kullanıcı için Şirket alanları salt okunur gösterilir ve neden açıklanır", async () => {

@@ -18,16 +18,25 @@ def _unique_email() -> str:
     return f"user-{uuid.uuid4().hex[:12]}@example.com"
 
 
-def _register(client: TestClient, *, email: str | None = None, password: str = "CorrectHorse123!"):
+def _register(
+    client: TestClient,
+    *,
+    email: str | None = None,
+    password: str = "CorrectHorse123!",
+    organization_website: str | None = None,
+):
     email = email or _unique_email()
+    payload = {
+        "email": email,
+        "password": password,
+        "organization_name": f"Org {uuid.uuid4().hex[:8]}",
+        "display_name": "Test User",
+    }
+    if organization_website:
+        payload["organization_website"] = organization_website
     response = client.post(
         "/api/auth/register",
-        json={
-            "email": email,
-            "password": password,
-            "organization_name": f"Org {uuid.uuid4().hex[:8]}",
-            "display_name": "Test User",
-        },
+        json=payload,
     )
     return response, email, password
 
@@ -107,6 +116,40 @@ def test_register_rejects_duplicate_email(client):
     _, email, password = _register(client)
     response, _, _ = _register(client, email=email, password=password)
     assert response.status_code == 409
+
+
+def test_register_accepts_optional_organization_website(client):
+    response, _, _ = _register(client, organization_website="https://example.com")
+    assert response.status_code == 201
+
+
+def test_register_rejects_invalid_organization_website(client):
+    response, _, _ = _register(client, organization_website="example.com")
+    assert response.status_code == 422
+
+
+def test_register_rejects_unknown_fields_like_is_platform_admin(client):
+    # `RegisterRequest.model_config = ConfigDict(extra="forbid")`: platform
+    # yoneticiligi (veya baska bilinmeyen bir alan) hicbir sekilde register
+    # govdesinden verilemez - sessizce yok sayilmak yerine ACIKCA 422 alinir.
+    email = _unique_email()
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "email": email,
+            "password": "CorrectHorse123!",
+            "organization_name": "Forged Org",
+            "display_name": "Test User",
+            "is_platform_admin": True,
+        },
+    )
+    assert response.status_code == 422
+
+    # Reddedilen istek hicbir yan etki birakmamali: ayni e-postayla normal
+    # (bilinmeyen alan olmadan) kayit hala basarili olabilmeli.
+    retry_response, _, _ = _register(client, email=email)
+    assert retry_response.status_code == 201
+    assert retry_response.json()["is_platform_admin"] is False
 
 
 # --- Giris ---------------------------------------------------------------

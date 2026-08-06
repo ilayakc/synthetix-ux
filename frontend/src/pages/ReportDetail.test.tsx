@@ -336,6 +336,108 @@ describe("ReportDetail — ust duzey sekme gezinmesi (klavye)", () => {
   });
 });
 
+describe("ReportDetail — AI Raporu sekmesi", () => {
+  const RUN_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+  function runningPipeline() {
+    return {
+      pipeline_id: "pp",
+      simulation_run_id: RUN_ID,
+      status: "running",
+      created_at: "2026-08-01T10:00:00Z",
+      started_at: "2026-08-01T10:00:01Z",
+      finished_at: null,
+      cancel_requested: false,
+      expected_stage_count: 8,
+      completed_stage_count: 2,
+      succeeded_stage_count: 2,
+      running_stage_count: 1,
+      queued_stage_count: 5,
+      failed_stage_count: 0,
+      progress_percent: 25,
+      report_available: false,
+      stages: [
+        {
+          stage_type: "evidence_preparation",
+          status: "succeeded",
+          batch_index: null,
+          attempt_count: 1,
+          error_code: null,
+          created_at: "2026-08-01T10:00:00Z",
+          started_at: "2026-08-01T10:00:01Z",
+          finished_at: "2026-08-01T10:00:02Z",
+        },
+      ],
+    };
+  }
+
+  function renderWithAi(aiPipeline: () => ReturnType<typeof jsonResponse>) {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes(`/api/simulations/runs/${RUN_ID}/ai-pipeline`)) return aiPipeline();
+      if (url.includes("/api/reports/")) return jsonResponse(200, baseReport({ simulation_run_id: RUN_ID }));
+      throw new Error(`Beklenmeyen istek: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <MemoryRouter initialEntries={["/raporlar/11111111-1111-1111-1111-111111111111"]}>
+        <Routes>
+          <Route path="/raporlar/:reportId" element={<ReportDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    return fetchMock;
+  }
+
+  it("rapor cevabindaki simulation_run_id ile AI pipeline durumu sondalanir", async () => {
+    const fetchMock = renderWithAi(() => jsonResponse(200, runningPipeline()));
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Raporu" })).toBeInTheDocument());
+    // Sonda tam olarak bu run'in ai-pipeline endpoint'ine yapildi.
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        String(url).includes(`/api/simulations/runs/${RUN_ID}/ai-pipeline`),
+      ),
+    ).toBe(true);
+  });
+
+  it("pipeline mevcutsa (RUNNING) AI Raporu sekmesi gorunur; secilince ilerleme ve asamalar gosterilir", async () => {
+    renderWithAi(() => jsonResponse(200, runningPipeline()));
+
+    const tab = await screen.findByRole("tab", { name: "AI Raporu" });
+    fireEvent.click(tab);
+
+    expect(screen.getByText(/AI raporu hazırlanıyor/)).toBeInTheDocument();
+    expect(screen.getByText(/%25/)).toBeInTheDocument();
+    expect(screen.getByText(/Kanıt hazırlığı/)).toBeInTheDocument();
+  });
+
+  it("pipeline yoksa (kontrollu 404) AI Raporu sekmesi GOSTERILMEZ, normal rapor bozulmaz", async () => {
+    renderWithAi(() => jsonResponse(404, { detail: "ai_pipeline_not_found" }));
+
+    // Standart sekmeler yuklendi.
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
+    // AI Raporu sekmesi yok.
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "AI Raporu" })).not.toBeInTheDocument(),
+    );
+    // Yalnizca 4 ust duzey sekme.
+    expect(screen.getAllByRole("tab")).toHaveLength(4);
+  });
+
+  it("klavye ok tuslariyla yeni AI Raporu sekmesine gecilebilir", async () => {
+    renderWithAi(() => jsonResponse(200, runningPipeline()));
+
+    await waitFor(() => expect(screen.getByRole("tab", { name: "AI Raporu" })).toBeInTheDocument());
+    const technicalTab = screen.getByRole("tab", { name: "Teknik Detaylar" });
+    technicalTab.focus();
+    fireEvent.keyDown(technicalTab, { key: "ArrowRight" });
+
+    const aiTab = screen.getByRole("tab", { name: "AI Raporu" });
+    expect(aiTab).toHaveAttribute("aria-selected", "true");
+    expect(document.activeElement).toBe(aiTab);
+  });
+});
+
 describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
   it("yalin tek-tasarim gorunumunde panel gosterir", async () => {
     const report = baseReport({

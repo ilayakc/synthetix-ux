@@ -1,4 +1,5 @@
 import { notifySessionExpired } from "../auth/sessionEvents";
+import { formatDuration, getSlowRequestThresholdMs, logger, logTiming } from "../lib/logger";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
@@ -27,6 +28,56 @@ function readCookie(name: string): string | null {
 
 const GENERIC_ERROR_MESSAGE = "İstek işlenirken bir hata oluştu.";
 
+// Backend'in eski hata sözleşmelerinde Türkçe karakter kullanılmayan metinler
+// bulunuyor. API kodlarına (ör. `ai_report_not_ready`) dokunmadan yalnızca
+// kullanıcıya gösterilecek bağımsız kelimeleri düzeltir.
+function normalizeTurkishErrorCopy(value: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/\bGecersiz\b/g, "Geçersiz"],
+    [/\bgecersiz\b/g, "geçersiz"],
+    [/\bgecerli\b/g, "geçerli"],
+    [/\bbulunamadi\b/g, "bulunamadı"],
+    [/\bsuresi\b/g, "süresi"],
+    [/\bdolmus\b/g, "dolmuş"],
+    [/\bislem\b/g, "işlem"],
+    [/\bicin\b/g, "için"],
+    [/\bdogrulamasi\b/g, "doğrulaması"],
+    [/\bbasarisiz\b/g, "başarısız"],
+    [/\bUretim\b/g, "Üretim"],
+    [/\bArsivlenmis\b/g, "Arşivlenmiş"],
+    [/\bguncellenemez\b/g, "güncellenemez"],
+    [/\bTasarim\b/g, "Tasarım"],
+    [/\bgorseli\b/g, "görseli"],
+    [/\bartik\b/g, "artık"],
+    [/\bkullanilabilir\b/g, "kullanılabilir"],
+    [/\bdegil\b/g, "değil"],
+    [/\bgoruntusu\b/g, "görüntüsü"],
+    [/\bCalistirma\b/g, "Çalıştırma"],
+    [/\bUcretsiz\b/g, "Ücretsiz"],
+    [/\bKarsilastirma\b/g, "Karşılaştırma"],
+    [/\byalnizca\b/g, "yalnızca"],
+    [/\bvaryantin\b/g, "varyantın"],
+    [/\bbasariyla\b/g, "başarıyla"],
+    [/\btamamlanmis\b/g, "tamamlanmış"],
+    [/\bBaslatilmis\b/g, "Başlatılmış"],
+    [/\bdegistirilemez\b/g, "değiştirilemez"],
+    [/\barasinda\b/g, "arasında"],
+    [/\bolmalidir\b/g, "olmalıdır"],
+    [/\bBos\b/g, "Boş"],
+    [/\byuklenemez\b/g, "yüklenemez"],
+    [/\bkayitli\b/g, "kayıtlı"],
+    [/\bguvenlik\b/g, "güvenlik"],
+    [/\bsonlandirildi\b/g, "sonlandırıldı"],
+    [/\blutfen\b/g, "lütfen"],
+    [/\bgiris\b/g, "giriş"],
+    [/\bolusturulamadi\b/g, "oluşturulamadı"],
+  ];
+  return replacements.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    value,
+  );
+}
+
 // FastAPI `detail` alani her zaman string degildir: 422 dogrulama
 // hatalarinda `{loc, msg, type}` nesnelerinden olusan bir dizi, bazi
 // durumlarda ise tek bir nesne donebilir. Ham nesneyi/diziyi dogrudan
@@ -35,13 +86,13 @@ const GENERIC_ERROR_MESSAGE = "İstek işlenirken bir hata oluştu.";
 // metne cevriliyor.
 function describeErrorDetail(detail: unknown): string | null {
   if (typeof detail === "string") {
-    return detail;
+    return normalizeTurkishErrorCopy(detail);
   }
   if (Array.isArray(detail)) {
     const messages = detail
       .map((item) =>
         item && typeof item === "object" && "msg" in item && typeof item.msg === "string"
-          ? item.msg
+          ? normalizeTurkishErrorCopy(item.msg)
           : null,
       )
       .filter((msg): msg is string => Boolean(msg));
@@ -71,12 +122,40 @@ async function rawFetch<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    method,
-    credentials: "include",
-    headers,
-  });
+  // Merkezi istek loglamasi: her `apiFetch`/`rawFetch` cagrisi bu tek
+  // noktadan gectigi icin her sayfada tekrar tekrar ayni loglama kodu
+  // yazilmaz (bkz. frontend/src/lib/logger.ts). `/api/auth/*` istekleri
+  // "auth" kategorisinde, digerleri "api" kategorisinde loglanir. Istek/yanit
+  // GOVDESI (sifre dahil olabilecek login/register body'si dahil) ASLA
+  // loglanmaz - yalnizca metod, yol, durum kodu ve sure.
+  const logCategory = path.startsWith(AUTH_PATH_PREFIX) ? "auth" : "api";
+  const slowThresholdMs = getSlowRequestThresholdMs();
+  const requestStart = performance.now();
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      method,
+      credentials: "include",
+      headers,
+    });
+  } catch (error) {
+    const elapsed = performance.now() - requestStart;
+    logger.error(logCategory, `${method} ${path} failed after ${formatDuration(elapsed)}`, error);
+    throw error;
+  }
+
+  const elapsedMs = performance.now() - requestStart;
+  const durationText = formatDuration(elapsedMs);
+  if (elapsedMs > slowThresholdMs) {
+    logger.warn(
+      logCategory,
+      `${method} ${path} -> ${response.status} took ${durationText} (slow, >${(slowThresholdMs / 1000).toFixed(2)} s)`,
+    );
+  } else {
+    logger.info(logCategory, `${method} ${path} -> ${response.status} took ${durationText}`);
+  }
 
   if (!response.ok) {
     let body: unknown = null;
@@ -89,7 +168,8 @@ async function rawFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const detail = (body as { detail?: unknown } | null)?.detail;
     const message =
       describeErrorDetail(detail) ??
-      `API istegi basarisiz: ${response.status} ${response.statusText}`;
+      `API isteği başarısız: ${response.status} ${response.statusText}`;
+    logger.error(logCategory, `${method} ${path} -> ${response.status} failed: ${message}`);
     throw new ApiError(response.status, message, body);
   }
 
@@ -714,6 +794,13 @@ export interface SimulationRunResponse {
   not_real_user_data_label: string;
   methodology_reference: string;
   attempt_count: number;
+  // "Kimler simüle edildi?" panelindeki (bkz. GET .../runs/{run_id}/personas)
+  // dağılım bütünlük göstergesi için beklenen kullanıcı sayısı - eski/legacy
+  // run'larda veya beklenmeyen bir tipte backend bunu `null` döner (bkz.
+  // app.routers.simulations._extract_persona_count). Alan HER ZAMAN JSON'da
+  // bulunur (Pydantic `default=None` olsa da response'ta anahtar dusulmez),
+  // bu yuzden opsiyonel (`?`) DEGIL, `number | null` olarak tanimlanir.
+  persona_count: number | null;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;
@@ -729,6 +816,28 @@ export function listSimulationRuns(testDefinitionId?: string): Promise<Simulatio
 
 export function getSimulationRun(runId: string): Promise<SimulationRunResponse> {
   return apiFetch<SimulationRunResponse>(`/api/simulations/runs/${runId}`);
+}
+
+// Bir calistirmaya ait, kalici olarak kaydedilmis (bkz. app.models.personas.
+// Persona / app.services.test_wizard.launch_draft) temsili persona satirlari -
+// gercek kisiler DEGILDIR, secilen hedef kitle dagilimini temsil eden sentetik
+// kullanici gruplaridir. En fazla 100 satir doner, `index` alanina gore artan
+// siralidir; persona secimi yapilmamis (veya eski) bir calistirma icin bos
+// dizi doner (404 degil).
+export interface SimulationRunPersonaResponse {
+  id: string;
+  simulation_run_id: string;
+  index: number;
+  label: string;
+  attributes: Record<string, string>;
+  population_weight: number;
+  created_at: string;
+}
+
+export function getSimulationRunPersonas(runId: string): Promise<SimulationRunPersonaResponse[]> {
+  return apiFetch<SimulationRunPersonaResponse[]>(
+    `/api/simulations/runs/${encodeURIComponent(runId)}/personas`,
+  );
 }
 
 export function cancelSimulationRun(runId: string): Promise<SimulationRunResponse> {
@@ -872,9 +981,7 @@ export interface ReportHeatmapSection {
 }
 
 export type CtaOverlayClassification =
-  | "dom_interactive_candidate"
-  | "visual_cta_candidate"
-  | "user_confirmed_cta";
+  "dom_interactive_candidate" | "visual_cta_candidate" | "user_confirmed_cta";
 
 export interface ReportCtaOverlayBox {
   classification: CtaOverlayClassification;
@@ -964,6 +1071,10 @@ export interface ReportAbComparison {
 
 export interface ReportDetailResponse {
   id: string;
+  // Bu raporun ait olduğu SimulationRun. Tamamlanmış `ai_report` pipeline'ına
+  // (getAiPipelineStatus/getAiReport) ulaşmak için gereklidir; standart rapor
+  // içeriğini değiştirmez (bkz. backend app.routers.reports.ReportDetailResponse).
+  simulation_run_id: string;
   title: string;
   created_at: string;
   project_id: string;
@@ -1002,6 +1113,92 @@ export function getReportExportUrl(path: string): string {
 // yolu mutlak URL'ye cevirir - harici bir kaynagi ASLA dogrudan doner.
 export function getReportHeatmapScreenshotUrl(path: string): string {
   return `${API_BASE_URL}${path}`;
+}
+
+// --- AI raporu pipeline (ai_report): salt-okunur durum + nihai UX raporu ------
+//
+// Backend sözleşmeleri (bkz. backend/app/services/ai_pipeline/queries.py):
+//   GET /api/simulations/runs/{run_id}/ai-pipeline -> AIPipelineStatusResponse
+//   GET /api/simulations/runs/{run_id}/ai-report    -> AIReportResponse
+// Bu, standart raporu sadeleştiren "AI destekli açıklama" özelliğinden TAMAMEN
+// AYRIDIR. Pipeline yoksa /ai-pipeline 404 (detail "ai_pipeline_not_found" veya
+// "Calistirma bulunamadi") döner; rapor henüz hazır değilse /ai-report 409
+// (detail "ai_report_not_ready") döner. Tenant izolasyonu backend'de
+// `_load_scoped_run` ile zorlanır; frontend buna dayanmaz. Alanlar backend
+// Pydantic modelleriyle BİREBİR eşleşir; tahminî alan eklenmez.
+
+// AIPipelineStatus (queued/running/succeeded/failed/partial/cancelled) ve stage
+// enum'ları lowercase string olarak döner; ileride yeni değer eklenebileceği
+// için `status`/`stage_type` alanları `string` bırakılır (kırılgan union yok).
+export interface AIPipelineStageSummary {
+  stage_type: string;
+  status: string;
+  batch_index: number | null;
+  attempt_count: number;
+  error_code: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface AIPipelineStatusResponse {
+  pipeline_id: string;
+  simulation_run_id: string;
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  cancel_requested: boolean;
+  expected_stage_count: number;
+  completed_stage_count: number;
+  succeeded_stage_count: number;
+  running_stage_count: number;
+  queued_stage_count: number;
+  failed_stage_count: number;
+  progress_percent: number;
+  report_available: boolean;
+  stages: AIPipelineStageSummary[];
+}
+
+export type AIReportPriority = "high" | "medium" | "low";
+
+export interface AIReportFinding {
+  finding_id: string;
+  priority: AIReportPriority;
+  finding: string;
+  source_stage: string;
+  evidence_references: string[];
+  affected_persona_groups: string[];
+  estimated_affected_users: number;
+  recommendation: string;
+  confidence: number;
+}
+
+export interface UXReport {
+  report_version: string;
+  summary: string;
+  findings: AIReportFinding[];
+  limitations: string;
+  disclaimer: string;
+}
+
+export interface AIReportResponse {
+  pipeline_id: string;
+  simulation_run_id: string;
+  generated_at: string | null;
+  content_format: string;
+  synthetic_disclaimer: string;
+  report: UXReport;
+}
+
+export function getAiPipelineStatus(runId: string): Promise<AIPipelineStatusResponse> {
+  return apiFetch<AIPipelineStatusResponse>(
+    `/api/simulations/runs/${encodeURIComponent(runId)}/ai-pipeline`,
+  );
+}
+
+export function getAiReport(runId: string): Promise<AIReportResponse> {
+  return apiFetch<AIReportResponse>(`/api/simulations/runs/${encodeURIComponent(runId)}/ai-report`);
 }
 
 // --- Yüklenen tasarım ekran görüntüleri (design assets) -----------------------
@@ -1113,29 +1310,34 @@ export async function uploadDesignAsset(
   file: File,
   options?: UploadDesignAssetOptions,
 ): Promise<DesignAssetResponse> {
-  const first = await _performUploadAttempt(file, options);
-  if (first.status >= 200 && first.status < 300) {
-    return first.body as DesignAssetResponse;
-  }
-  if (first.status !== 401) {
-    throw _uploadResultToError(first);
-  }
+  // `_performUploadAttempt` `rawFetch`'i (dolayisiyla merkezi istek
+  // loglamasini) kullanmaz - XHR tabanli oldugu icin ayri, ozel bir
+  // `logTiming` sarmalayicisi kullanilir (bkz. frontend/src/lib/logger.ts).
+  return logTiming("api", "POST /api/design-assets", async () => {
+    const first = await _performUploadAttempt(file, options);
+    if (first.status >= 200 && first.status < 300) {
+      return first.body as DesignAssetResponse;
+    }
+    if (first.status !== 401) {
+      throw _uploadResultToError(first);
+    }
 
-  try {
-    await refreshAccessToken();
-  } catch {
-    notifySessionExpired();
-    throw _uploadResultToError(first);
-  }
+    try {
+      await refreshAccessToken();
+    } catch {
+      notifySessionExpired();
+      throw _uploadResultToError(first);
+    }
 
-  const retry = await _performUploadAttempt(file, options);
-  if (retry.status >= 200 && retry.status < 300) {
-    return retry.body as DesignAssetResponse;
-  }
-  if (retry.status === 401) {
-    notifySessionExpired();
-  }
-  throw _uploadResultToError(retry);
+    const retry = await _performUploadAttempt(file, options);
+    if (retry.status >= 200 && retry.status < 300) {
+      return retry.body as DesignAssetResponse;
+    }
+    if (retry.status === 401) {
+      notifySessionExpired();
+    }
+    throw _uploadResultToError(retry);
+  });
 }
 
 export function getDesignAsset(assetId: string): Promise<DesignAssetResponse> {
@@ -1240,7 +1442,9 @@ export interface PageAnalysisResponse {
   updated_at: string;
 }
 
-export function createPageAnalysisForDesignAsset(designAssetId: string): Promise<PageAnalysisResponse> {
+export function createPageAnalysisForDesignAsset(
+  designAssetId: string,
+): Promise<PageAnalysisResponse> {
   return apiFetch<PageAnalysisResponse>("/api/page-analyses", {
     method: "POST",
     body: JSON.stringify({ design_asset_id: designAssetId }),
@@ -1295,6 +1499,10 @@ export interface SessionResponse {
   organization_id: string;
   organization_name: string;
   role: string;
+  // Organizasyon-ici `role`den TAMAMEN AYRI: platform genelinde yonetici mi.
+  // Yalnizca UI amaclidir (ornegin bir yonetici menusunu gostermek icin) -
+  // gercek yetkilendirme her zaman backend'de dogrudan veritabanindan yapilir.
+  is_platform_admin: boolean;
 }
 
 export interface RegisterRequest {

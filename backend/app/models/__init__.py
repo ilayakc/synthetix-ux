@@ -1,3 +1,10 @@
+from app.models.ai_pipeline import (
+    AIPipelineRun,
+    AIPipelineStage,
+    AIPipelineStageStatus,
+    AIPipelineStageType,
+    AIPipelineStatus,
+)
 from app.models.audit import AuditLog
 from app.models.auth import PasswordResetToken, RefreshToken
 from app.models.base import Base
@@ -14,6 +21,7 @@ from app.models.billing import (
 from app.models.design_assets import DesignAsset, DesignAssetContentType, DesignAssetStatus
 from app.models.design_generation import DesignGenerationJob, DesignGenerationStatus
 from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
+from app.models.personas import Persona
 from app.models.projects import Project, ProjectStatus
 from app.models.reports import Report
 from app.models.settings import OrganizationSettings, UserPreferences
@@ -38,6 +46,7 @@ __all__ = [
     "TestWizardDraft",
     "TestWizardDraftStatus",
     "SimulationRun",
+    "Persona",
     "Report",
     "PageAnalysis",
     "PageAnalysisStatus",
@@ -58,4 +67,9 @@ __all__ = [
     "AuditLog",
     "UserPreferences",
     "OrganizationSettings",
+    "AIPipelineRun",
+    "AIPipelineStage",
+    "AIPipelineStatus",
+    "AIPipelineStageStatus",
+    "AIPipelineStageType",
 ]

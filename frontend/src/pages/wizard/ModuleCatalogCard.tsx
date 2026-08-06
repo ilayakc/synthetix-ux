@@ -1,4 +1,5 @@
 import type { AnalysisModuleDefinition } from "../../api/client";
+import { normalizeTurkishSystemCopy } from "../../lib/turkishCopy";
 
 const MEASUREMENT_TYPE_LABELS: Record<AnalysisModuleDefinition["measurement_type"], string> = {
   technical_measurement: "Teknik ölçüm",
@@ -40,10 +41,10 @@ function ModuleCatalogCardBody({ module }: { module: AnalysisModuleDefinition })
 
   return (
     <>
-      <p className="page-placeholder">{module.description}</p>
+      <p className="page-placeholder">{normalizeTurkishSystemCopy(module.description)}</p>
       <ul className="module-card__outputs">
         {module.outputs.map((output) => (
-          <li key={output}>{output}</li>
+          <li key={output}>{normalizeTurkishSystemCopy(output)}</li>
         ))}
       </ul>
       <div className="module-card__meta">
@@ -80,7 +81,7 @@ export default function ModuleCatalogCard(props: ModuleCatalogCardProps) {
             disabled={disabled}
             onChange={() => onToggle(module.key)}
           />
-          <h3>{module.name}</h3>
+          <h3>{normalizeTurkishSystemCopy(module.name)}</h3>
         </div>
         <ModuleCatalogCardBody module={module} />
         {disabled && disabledReason && (
@@ -96,7 +97,7 @@ export default function ModuleCatalogCard(props: ModuleCatalogCardProps) {
   return (
     <div className={`module-card module-card--static${queued ? " module-card--selected" : ""}`}>
       <div className="module-card__header">
-        <h3>{module.name}</h3>
+        <h3>{normalizeTurkishSystemCopy(module.name)}</h3>
       </div>
       <ModuleCatalogCardBody module={module} />
       <div className="module-card__actions">

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import App from "../App";
 import { AuthProvider } from "./AuthContext";
+import { clearPublicThemeForTests } from "../theme/publicTheme";
 
 const sessionResponse = {
   user_id: "00000000-0000-0000-0000-000000000001",
@@ -11,6 +12,7 @@ const sessionResponse = {
   organization_id: "00000000-0000-0000-0000-000000000000",
   organization_name: "Test Org",
   role: "owner",
+  is_platform_admin: false,
 };
 
 function jsonResponse(status: number, body: unknown) {
@@ -33,6 +35,8 @@ function renderApp(initialPath: string) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  clearPublicThemeForTests();
+  document.documentElement.removeAttribute("data-theme");
 });
 
 describe("Kimlik dogrulama route guard ve akislari", () => {
@@ -75,6 +79,36 @@ describe("Kimlik dogrulama route guard ve akislari", () => {
     expect(screen.getByRole("heading", { name: "Giriş yap" })).toBeInTheDocument();
   });
 
+  it("oturum acmamis ziyaretciye tanitim ana sayfasini gosterir", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith("/api/auth/me")) return jsonResponse(401, { detail: "Oturum bulunamadi" });
+        throw new Error(`Beklenmeyen istek: ${url}`);
+      }),
+    );
+
+    renderApp("/");
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Tasarım risklerini geliştirmeye geçmeden önce görün.",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Ücretsiz hesap oluştur" })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Zaten hesabım var" })).toHaveAttribute(
+      "href",
+      "/giris",
+    );
+    expect(screen.queryByRole("link", { name: "Giriş yap" })).not.toBeInTheDocument();
+    expect(document.querySelector(".simulation-backdrop")).toHaveAttribute("aria-hidden", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Açık tema" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    fireEvent.click(screen.getByRole("button", { name: "Koyu tema" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+  });
+
   it("basarili giris sonrasi korumali sayfaya yonlendirir", async () => {
     vi.stubGlobal(
       "fetch",
@@ -100,7 +134,7 @@ describe("Kimlik dogrulama route guard ve akislari", () => {
     );
   });
 
-  it("google butonu devre disi ve 'Yakında' olarak gosterilir (sahte giris yapmaz)", async () => {
+  it("giris ekraninda sahte Google secenegini gostermez", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation((url: string) => {
@@ -115,8 +149,8 @@ describe("Kimlik dogrulama route guard ve akislari", () => {
       expect(screen.getByRole("heading", { name: "Giriş yap" })).toBeInTheDocument(),
     );
 
-    const googleButton = screen.getByRole("button", { name: /Google ile devam et \(Yakında\)/ });
-    expect(googleButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /Google ile devam et/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("veya")).not.toBeInTheDocument();
   });
 
   it("arka planda 401 alindiginda oturumu sonlandirir ve giris ekraninda uyari gosterir", async () => {
@@ -152,15 +186,18 @@ describe("Kimlik dogrulama route guard ve akislari", () => {
     renderApp("/kayit");
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Hesap oluştur" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Ücretsiz hesap oluştur" })).toBeInTheDocument(),
     );
 
     fireEvent.change(screen.getByLabelText("Şirket / organizasyon adı"), {
       target: { value: "Test Org" },
     });
-    fireEvent.change(screen.getByLabelText("E-posta"), { target: { value: "user@example.com" } });
+    fireEvent.change(screen.getByLabelText("Ad soyad"), { target: { value: "Test User" } });
+    fireEvent.change(screen.getByLabelText("İş e-postası"), {
+      target: { value: "user@example.com" },
+    });
     fireEvent.change(screen.getByLabelText("Parola"), { target: { value: "CorrectHorse123!" } });
-    fireEvent.click(screen.getByRole("button", { name: "Hesap oluştur" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ücretsiz hesap oluştur" }));
 
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Genel Bakış" })).toBeInTheDocument(),
@@ -182,19 +219,22 @@ describe("Kimlik dogrulama route guard ve akislari", () => {
     renderApp("/kayit");
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Hesap oluştur" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Ücretsiz hesap oluştur" })).toBeInTheDocument(),
     );
 
     fireEvent.change(screen.getByLabelText("Şirket / organizasyon adı"), {
       target: { value: "Test Org" },
     });
-    fireEvent.change(screen.getByLabelText("E-posta"), { target: { value: "user@example.com" } });
+    fireEvent.change(screen.getByLabelText("Ad soyad"), { target: { value: "Test User" } });
+    fireEvent.change(screen.getByLabelText("İş e-postası"), {
+      target: { value: "user@example.com" },
+    });
     fireEvent.change(screen.getByLabelText("Parola"), { target: { value: "CorrectHorse123!" } });
-    fireEvent.click(screen.getByRole("button", { name: "Hesap oluştur" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ücretsiz hesap oluştur" }));
 
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("Bu e-posta adresi zaten kayıtlı."),
     );
-    expect(screen.getByRole("heading", { name: "Hesap oluştur" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Ücretsiz hesap oluştur" })).toBeInTheDocument();
   });
 });

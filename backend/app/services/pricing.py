@@ -17,6 +17,18 @@ FEATURE_ACCESSIBILITY_PRECHECK = "accessibility_precheck"
 
 FREE_ENTITLEMENT_FEATURE_KEYS = (FEATURE_BASIC_UX_TEST, FEATURE_ACCESSIBILITY_PRECHECK)
 
+# --- AI raporu modulu (`ai_report`) fiyat kaynagi (Faz 3C.2B1) -------------
+# `ai_report`, sihirbazda secilebilen digger gelismis modullerin aksine
+# `advanced_module_chip_costs`e KONULMAZ: bedeli baseline/modul ucretinden
+# AYRI, launch grubu basina TEK bir Chip rezervasyonu olarak tutulur (bkz.
+# app.services.test_wizard.launch_draft, app.services.quotes.build_quote).
+# Fiyat burada TEK bir yerde (single source of truth) tanimlanir; hem
+# `PricingConfig.ai_report_chip_cost` hem de katalog metadata'si
+# (app.services.module_catalog) bu sabiti kullanir - 50 iki yere hardcode
+# EDILMEZ.
+AI_REPORT_MODULE_KEY = "ai_report"
+AI_REPORT_CHIP_COST = 50
+
 # docs/product-rules.md: "En fazla 1.000 persona icin 1 adet ucretsiz temel
 # UX testi hakki". Bu limitin ustundeki persona sayisi ucretsiz hakki
 # gecersiz kilar (test paralı hale gelir).
@@ -35,6 +47,11 @@ class PricingConfig:
     accessibility_precheck_chip_cost: int
     # Gelismis modul anahtari -> Chip maliyeti (limit ustu/ileri kullanim).
     advanced_module_chip_costs: dict = field(default_factory=dict)
+    # `ai_report` (AI raporu) modulunun launch grubu basina flat Chip bedeli.
+    # `advanced_module_chip_costs`ten KASITLI olarak ayridir (ayri rezervasyon
+    # yasam dongusu, per-grup tek ucret - bkz. AI_REPORT_CHIP_COST). Eski
+    # surumlerde 0'dir (ai_report o surumlerde tanimli degildi).
+    ai_report_chip_cost: int = 0
 
     def module_cost(self, module_key: str) -> int:
         try:
@@ -70,9 +87,27 @@ PRICING_VERSIONS: dict[str, PricingConfig] = {
             "synthetic_attention_estimate": 25,
         },
     ),
+    # "2026.2"nin tum satirlari degismeden korunur (eski quote/run/rapor
+    # kayitlari onceki surumleriyle pinlenmis kalir). "2026.3" yalnizca yeni
+    # `ai_report` (AI raporu) modulunun launch grubu basina flat Chip bedelini
+    # (`ai_report_chip_cost`, bkz. AI_REPORT_CHIP_COST) ekler; mevcut modul
+    # fiyatlari AYNEN korunur.
+    "2026.3": PricingConfig(
+        version="2026.3",
+        basic_ux_test_chip_per_persona=1,
+        accessibility_precheck_chip_cost=30,
+        advanced_module_chip_costs={
+            "advanced_simulation": 50,
+            "extended_reporting": 20,
+            "network_device_test": 40,
+            "campaign_cta_test": 35,
+            "synthetic_attention_estimate": 25,
+        },
+        ai_report_chip_cost=AI_REPORT_CHIP_COST,
+    ),
 }
 
-CURRENT_PRICING_VERSION = "2026.2"
+CURRENT_PRICING_VERSION = "2026.3"
 
 
 def get_pricing_config(version: str | None = None) -> PricingConfig:

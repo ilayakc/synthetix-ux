@@ -28,6 +28,8 @@ Chip gerektiren "gelismis modullerdir" (bkz. `pricing.advanced_module_chip_costs
 from dataclasses import dataclass
 
 from app.services.pricing import (
+    AI_REPORT_CHIP_COST,
+    AI_REPORT_MODULE_KEY,
     FEATURE_ACCESSIBILITY_PRECHECK,
     FEATURE_BASIC_UX_TEST,
 )
@@ -292,7 +294,47 @@ MODULE_CATALOG_VERSIONS: dict[str, tuple[AnalysisModuleDefinition, ...]] = {
     ),
 }
 
-CURRENT_MODULE_CATALOG_VERSION = "2026.2"
+# "2026.2"nin TUM satirlari degismeden korunur (yukaridaki dict literal'i
+# bozulmaz); "2026.3" onlari AYNEN devralir ve yalnizca yeni `ai_report` (AI
+# raporu) modulunu EKLER. Bu, hem eski surum referanslarini byte-for-byte
+# korur hem de 7 mevcut girdinin tekrar yazilmasini (kopyalama hatasi riskini)
+# onler.
+#
+# `ai_report`, `ai_explanation` ile KARISTIRILMAMALIDIR: `ai_explanation`
+# rapor sayfasindan tetiklenen, her zaman ucretsiz (chip_cost=0),
+# `selectable_in_wizard=False` bir aciklama servisidir; `ai_report` ise
+# sihirbazda secilebilen, launch grubu basina AYRI 50 Chip rezerve edilen
+# (bkz. app.services.pricing.AI_REPORT_CHIP_COST) yeni bir pipeline modulu-
+# dur. Fiyat TEK kaynaktan (`AI_REPORT_CHIP_COST`) gelir; `50` burada tekrar
+# hardcode EDILMEZ. `selectable_in_wizard=True` katalog-seviyesi bir niyettir;
+# GERCEK sihirbaz gorunurlugu ayrica calisma-zamani hazirlik bayragiyla
+# (`settings.ai_report_enabled`) kapilanir (bkz. `get_wizard_visible_modules`
+# ve app.routers.analysis_modules) - hazirlik `false` iken modul katalog
+# yanitinda GORUNMEZ ve launch reddedilir (bkz. app.services.test_wizard).
+# Stage 1 evidence herhangi bir simulasyon sonucundan turetilebildigi icin
+# tum kaynak turlerini (url/screenshot/ai_generated) destekler.
+MODULE_CATALOG_VERSIONS["2026.3"] = (
+    *MODULE_CATALOG_VERSIONS["2026.2"],
+    AnalysisModuleDefinition(
+        key=AI_REPORT_MODULE_KEY,
+        name="AI raporu",
+        description=(
+            "Simulasyon sonuclarindan cok asamali bir AI pipeline ile uretilen, "
+            "senaryo yorumu ve persona davranisi analizini iceren gelismis rapor. "
+            "Launch grubu basina tek ucretlendirilir (A/B'de iki varyant icin de "
+            "tek AI ucreti)."
+        ),
+        outputs=("Senaryo yorumu", "Persona davranis ozeti", "AI destekli UX raporu"),
+        measurement_type=SYNTHETIC_ESTIMATE,
+        chip_cost=AI_REPORT_CHIP_COST,
+        free_entitlement_feature_key=None,
+        estimated_duration_minutes=6,
+        selectable_in_wizard=True,
+        supported_source_types=ALL_SOURCE_TYPES,
+    ),
+)
+
+CURRENT_MODULE_CATALOG_VERSION = "2026.3"
 
 
 def get_module_catalog(version: str | None = None) -> tuple[AnalysisModuleDefinition, ...]:
@@ -323,6 +365,27 @@ def get_selectable_wizard_module_keys(version: str | None = None) -> tuple[str, 
     )
 
 
+def get_wizard_visible_modules(
+    *, ai_report_enabled: bool, version: str | None = None
+) -> tuple[AnalysisModuleDefinition, ...]:
+    """Sihirbaz/katalog yanitinda GORUNMESI gereken aktif modulleri, calisma-
+    zamani hazirlik bayragini uygulayarak dondurur.
+
+    `ai_report` katalogda `selectable_in_wizard=True` olsa da GERCEK provider
+    henuz olmadigi icin (`settings.ai_report_enabled` varsayilan `False`) ai
+    raporu hazir degilken bu listeden CIKARILIR - frontend'in modulu hic
+    gormemesi saglanir (yalnizca frontend gizlemesine guvenilmez; launch
+    dogrulamasi da app.services.test_wizard'da ayrica zorunludur). Diger tum
+    aktif moduller hazirlik bayragindan BAGIMSIZ dondurulur.
+    """
+
+    return tuple(
+        module
+        for module in get_active_module_catalog(version)
+        if not (module.key == AI_REPORT_MODULE_KEY and not ai_report_enabled)
+    )
+
+
 def get_module_definition(key: str, version: str | None = None) -> AnalysisModuleDefinition:
     """Verilen anahtara (`key`) sahip modul tanimini (guncel/verilen surumde) dondurur.
 
@@ -338,6 +401,8 @@ def get_module_definition(key: str, version: str | None = None) -> AnalysisModul
 
 
 __all__ = [
+    "AI_REPORT_CHIP_COST",
+    "AI_REPORT_MODULE_KEY",
     "ALL_SOURCE_TYPES",
     "SOURCE_TYPE_AI_GENERATED",
     "SOURCE_TYPE_SCREENSHOT",
@@ -351,4 +416,5 @@ __all__ = [
     "get_module_catalog",
     "get_module_definition",
     "get_selectable_wizard_module_keys",
+    "get_wizard_visible_modules",
 ]

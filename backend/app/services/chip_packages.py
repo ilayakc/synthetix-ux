@@ -24,9 +24,9 @@ class ChipPackage:
 
 CHIP_PACKAGE_VERSIONS: dict[str, tuple[ChipPackage, ...]] = {
     "2026.1": (
-        ChipPackage(key="starter", name="Baslangic paketi", chip_amount=100),
-        ChipPackage(key="growth", name="Buyume paketi", chip_amount=500),
-        ChipPackage(key="scale", name="Olcek paketi", chip_amount=2000),
+        ChipPackage(key="starter", name="Başlangıç paketi", chip_amount=100),
+        ChipPackage(key="growth", name="Büyüme paketi", chip_amount=500),
+        ChipPackage(key="scale", name="Ölçek paketi", chip_amount=2000),
     ),
 }
 

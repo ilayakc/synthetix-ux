@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -33,9 +33,17 @@ PASSWORD_RESET_REQUESTED_MESSAGE = (
 
 
 class RegisterRequest(BaseModel):
+    # `extra="forbid"`: bilinmeyen hicbir alan (ozellikle `is_platform_admin`
+    # gibi yetki tasiyan bir alan) sessizce yok sayilmaz - istekte boyle bir
+    # alan varsa 422 ile ACIKCA reddedilir. Platform yoneticiligi hicbir
+    # public request govdesinden verilemez (bkz. app.models.tenancy.User.
+    # is_platform_admin, app.admin_cli).
+    model_config = ConfigDict(extra="forbid")
+
     email: EmailStr
     password: str = Field(min_length=8, max_length=256)
     organization_name: str = Field(min_length=1, max_length=255)
+    organization_website: AnyHttpUrl | None = None
     display_name: str | None = Field(default=None, max_length=255)
 
 
@@ -51,6 +59,13 @@ class SessionResponse(BaseModel):
     organization_id: uuid.UUID
     organization_name: str
     role: str
+    # Organizasyon-ici `role`den TAMAMEN AYRI: platform genelinde yonetici
+    # olup olmadigi. Bu alan yalnizca UI amaclidir (ornegin bir yonetici
+    # menusunu gostermek/gizlemek icin) - gercek yetkilendirme her zaman
+    # `app.dependencies.require_platform_admin` uzerinden, DOGRUDAN
+    # veritabanindan yapilir; bu alan hicbir backend yetki kararinin yerine
+    # GECMEZ.
+    is_platform_admin: bool
 
 
 class PasswordResetRequestBody(BaseModel):
@@ -129,6 +144,7 @@ async def register(
             password=body.password,
             display_name=body.display_name,
             organization_name=body.organization_name,
+            organization_website=(str(body.organization_website) if body.organization_website else None),
         )
     except auth_service.EmailAlreadyRegisteredError as exc:
         raise HTTPException(status_code=409, detail="Bu e-posta adresi zaten kayitli") from exc
@@ -151,6 +167,7 @@ async def register(
         organization_id=result.organization.id,
         organization_name=result.organization.name,
         role=result.membership.role,
+        is_platform_admin=result.user.is_platform_admin,
     )
 
 
@@ -197,6 +214,7 @@ async def login(
         organization_id=organization.id,
         organization_name=organization.name,
         role=membership.role,
+        is_platform_admin=user.is_platform_admin,
     )
 
 
@@ -250,6 +268,7 @@ async def refresh(
         organization_id=organization.id,
         organization_name=organization.name,
         role=membership.role,
+        is_platform_admin=user.is_platform_admin,
     )
 
 
@@ -287,6 +306,7 @@ async def me(
         organization_id=organization.id,
         organization_name=organization.name,
         role=principal.role,
+        is_platform_admin=user.is_platform_admin,
     )
 
 

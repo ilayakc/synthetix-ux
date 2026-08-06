@@ -36,6 +36,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import async_session_maker
+from app.logging_config import get_logger
+from app.logging_utils import log_duration
 from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.reports import Report
 from app.models.simulations import SimulationRun
@@ -52,6 +54,7 @@ from app.services.exceptions import (
 )
 
 logger = logging.getLogger("synthetix.page_analysis")
+_analyzer_logger = get_logger("external")
 
 CLAIM_BATCH_SIZE = 5
 
@@ -207,19 +210,25 @@ def _extract_features(snapshot: dict) -> dict:
 
 
 async def _call_analyzer(client: httpx.AsyncClient, url: str) -> dict:
-    response = await client.post(
-        f"{settings.analyzer_base_url}/internal/analyze",
-        json={"url": url, "authorization_confirmed": True},
-        headers={"X-Analyzer-Token": settings.analyzer_shared_token},
-        timeout=settings.analyzer_request_timeout_seconds,
-    )
-    if response.status_code != 200:
-        try:
-            detail = response.json().get("detail", response.text)
-        except ValueError:
-            detail = response.text
-        raise RuntimeError(f"analyzer hatasi ({response.status_code}): {detail}")
-    return response.json()
+    with log_duration(
+        _analyzer_logger,
+        "external",
+        "analyzer.analyze",
+        slow_threshold_ms=settings.slow_request_threshold_ms,
+    ):
+        response = await client.post(
+            f"{settings.analyzer_base_url}/internal/analyze",
+            json={"url": url, "authorization_confirmed": True},
+            headers={"X-Analyzer-Token": settings.analyzer_shared_token},
+            timeout=settings.analyzer_request_timeout_seconds,
+        )
+        if response.status_code != 200:
+            try:
+                detail = response.json().get("detail", response.text)
+            except ValueError:
+                detail = response.text
+            raise RuntimeError(f"analyzer hatasi ({response.status_code}): {detail}")
+        return response.json()
 
 
 def _verify_design_asset_snapshot(image_bytes: bytes, content_type_mime: str) -> tuple[int, int]:

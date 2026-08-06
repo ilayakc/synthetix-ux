@@ -11,7 +11,8 @@ import logging
 
 import pytest
 
-from app.logging_config import JsonLogFormatter, configure_logging
+from app.logging_config import JsonLogFormatter, PrettyLogFormatter, configure_logging, get_logger
+from app.logging_context import request_context
 
 pytestmark = pytest.mark.unit
 
@@ -80,3 +81,75 @@ def test_configure_logging_is_idempotent():
     # ilk cagrinin formatlayicisi (JSON) degismemeli.
     assert len(logger.handlers) == 1
     assert isinstance(logger.handlers[0].formatter, JsonLogFormatter)
+
+
+def test_configure_logging_log_format_overrides_environment_default():
+    logger = logging.Logger(f"test-{id(object())}")
+    # `environment="production"` normalde JSON secerdi; acik `log_format`
+    # bunu gecersiz kilar.
+    configure_logging("production", logger=logger, log_format="pretty")
+
+    assert isinstance(logger.handlers[0].formatter, PrettyLogFormatter)
+
+
+def test_json_formatter_includes_derived_category_and_request_id():
+    formatter = JsonLogFormatter()
+    record = _make_record("islem basarili")
+    record.name = "app.services.ai_explanation"
+
+    with request_context("req-json-1"):
+        # `RequestIdLogFilter` normalde bunu bir handler zincirinde yapar;
+        # burada dogrudan formatlayiciyi test etmek icin manuel simule edilir.
+        from app.logging_context import RequestIdLogFilter
+
+        RequestIdLogFilter().filter(record)
+        payload = json.loads(formatter.format(record))
+
+    assert payload["category"] == "ai_explanation"
+    assert payload["request_id"] == "req-json-1"
+
+
+def test_json_formatter_masks_sensitive_extra_fields():
+    formatter = JsonLogFormatter()
+    record = _make_record("giris denemesi")
+    record.password = "hunter2"  # type: ignore[attr-defined]
+    record.duration_ms = 12.3  # type: ignore[attr-defined]
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["password"] == "***"
+    assert payload["duration_ms"] == 12.3
+
+
+def test_pretty_formatter_matches_expected_layout():
+    formatter = PrettyLogFormatter(use_color=False)
+    record = _make_record("verify token took 2.3 ms")
+    record.category = "auth"  # type: ignore[attr-defined]
+
+    line = formatter.format(record)
+
+    # `SEVIYE` 8, `kategori` 10 karaktere hizalanir (bkz. PrettyLogFormatter).
+    expected_tail = f"{'INFO':<8} | {'auth':<10} | verify token took 2.3 ms"
+    assert line.endswith(expected_tail)
+    # Basinda `HH:MM:SS` bicimli bir zaman damgasi olmali.
+    assert line[:8].count(":") == 2
+
+
+def test_pretty_formatter_applies_color_when_enabled():
+    formatter = PrettyLogFormatter(use_color=True)
+    record = _make_record("hata olustu")
+    record.levelno = logging.ERROR
+    record.levelname = "ERROR"
+
+    line = formatter.format(record)
+
+    assert line.startswith("\x1b[31m")
+    assert line.endswith("\x1b[0m")
+
+
+def test_get_logger_injects_category_into_every_call(caplog):
+    logger = get_logger("auth", logger_name="test.get_logger.auth")
+    with caplog.at_level(logging.INFO, logger="test.get_logger.auth"):
+        logger.info("verify token took 2.3 ms")
+
+    assert caplog.records[-1].category == "auth"  # type: ignore[attr-defined]

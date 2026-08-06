@@ -90,6 +90,7 @@ async def register_organization_and_owner(
     password: str,
     display_name: str | None,
     organization_name: str,
+    organization_website: str | None = None,
 ) -> RegistrationResult:
     """Yeni bir kullanici, organizasyon ve owner uyeligi olusturur.
 
@@ -106,6 +107,7 @@ async def register_organization_and_owner(
     organization = Organization(
         name=organization_name,
         slug=await _unique_organization_slug(session, organization_name),
+        website_url=organization_website,
     )
     session.add(organization)
     await session.flush()

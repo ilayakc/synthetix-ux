@@ -24,7 +24,6 @@ import { type MeDraft, type OrgDraft, meDraftFrom, orgDraftFrom } from "./types"
 const TABS = [
   { id: "profile", label: "Profilim" },
   { id: "company", label: "Şirket" },
-  { id: "test-defaults", label: "Test Varsayılanları" },
   { id: "appearance", label: "Görünüm ve Bildirimler" },
 ] as const;
 
@@ -51,7 +50,6 @@ export default function Settings() {
   const tabRefs = useRef<Record<TabId, HTMLButtonElement | null>>({
     profile: null,
     company: null,
-    "test-defaults": null,
     appearance: null,
   });
 
@@ -72,7 +70,12 @@ export default function Settings() {
   useEffect(() => {
     let cancelled = false;
 
-    Promise.all([getMySettings(), getOrganizationSettings(), listPersonaPresets(), getAnalysisModuleCatalog()])
+    Promise.all([
+      getMySettings(),
+      getOrganizationSettings(),
+      listPersonaPresets(),
+      getAnalysisModuleCatalog(),
+    ])
       .then(([me, org, presets, catalog]) => {
         if (cancelled) return;
         setMeSnapshot(me);
@@ -100,9 +103,14 @@ export default function Settings() {
     };
   }, []);
 
-  const isMeDirty = meSnapshot && meDraft ? Object.keys(shallowDiff(meDraftFrom(meSnapshot), meDraft)).length > 0 : false;
+  const isMeDirty =
+    meSnapshot && meDraft
+      ? Object.keys(shallowDiff(meDraftFrom(meSnapshot), meDraft)).length > 0
+      : false;
   const isOrgDirty =
-    orgSnapshot && orgDraft ? Object.keys(shallowDiff(orgDraftFrom(orgSnapshot), orgDraft)).length > 0 : false;
+    orgSnapshot && orgDraft
+      ? Object.keys(shallowDiff(orgDraftFrom(orgSnapshot), orgDraft)).length > 0
+      : false;
   const isDirty = isMeDirty || isOrgDirty;
 
   const handleMeChange = <K extends keyof MeDraft>(field: K, value: MeDraft[K]) => {
@@ -288,7 +296,12 @@ export default function Settings() {
         hidden={activeTab !== "profile"}
         className="settings-tabpanel"
       >
-        <ProfileTab snapshot={meSnapshot} draft={meDraft} onChange={handleMeChange} disabled={isSaving} />
+        <ProfileTab
+          snapshot={meSnapshot}
+          draft={meDraft}
+          onChange={handleMeChange}
+          disabled={isSaving}
+        />
       </div>
 
       <div
@@ -298,24 +311,29 @@ export default function Settings() {
         hidden={activeTab !== "company"}
         className="settings-tabpanel"
       >
-        <CompanyTab snapshot={orgSnapshot} draft={orgDraft} onChange={handleOrgChange} savingDisabled={isSaving} />
-      </div>
-
-      <div
-        id="settings-panel-test-defaults"
-        role="tabpanel"
-        aria-labelledby="settings-tab-test-defaults"
-        hidden={activeTab !== "test-defaults"}
-        className="settings-tabpanel"
-      >
-        <TestDefaultsTab
+        <CompanyTab
           snapshot={orgSnapshot}
           draft={orgDraft}
           onChange={handleOrgChange}
           savingDisabled={isSaving}
-          personaPresets={personaPresets}
-          moduleCatalog={moduleCatalog}
         />
+        <details className="settings-advanced">
+          <summary>Gelişmiş ayarlar</summary>
+          <div className="settings-advanced__content">
+            <h2>Test varsayılanları</h2>
+            <p className="page-placeholder">
+              Yeni test sihirbazında kullanılacak başlangıç değerlerini belirleyin.
+            </p>
+            <TestDefaultsTab
+              snapshot={orgSnapshot}
+              draft={orgDraft}
+              onChange={handleOrgChange}
+              savingDisabled={isSaving}
+              personaPresets={personaPresets}
+              moduleCatalog={moduleCatalog}
+            />
+          </div>
+        </details>
       </div>
 
       <div

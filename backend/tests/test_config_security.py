@@ -135,3 +135,35 @@ def test_default_settings_argument_uses_real_app_settings(monkeypatch):
     from app.config_security import validate_production_secrets as validate
 
     validate()  # development'ta hicbir kontrol yapilmadan gecmeli
+
+
+# =================================================================================
+# FAZ 3D.2.1: MOCK AI PROVIDER PRODUCTION GUVENLIGI
+# =================================================================================
+
+
+def test_production_mock_provider_is_rejected_by_default():
+    cfg = _make_settings(ai_report_enabled=True, ai_report_provider="mock")
+    with pytest.raises(ConfigSecurityError) as exc_info:
+        validate_production_secrets(cfg)
+    assert "mock" in str(exc_info.value).lower()
+
+
+def test_production_mock_provider_accepted_with_explicit_override():
+    cfg = _make_settings(ai_report_enabled=True, ai_report_provider="mock", allow_mock_ai_provider=True)
+    validate_production_secrets(cfg)  # raise etmemeli
+
+
+def test_production_mock_provider_disabled_ai_report_is_not_rejected():
+    # ai_report_enabled=False iken provider="mock" secili olsa bile hicbir
+    # sey CALISMAYACAGI icin bu ozel kontrol tetiklenmez (genel production
+    # secret kontrolleri yine gecerlidir).
+    cfg = _make_settings(ai_report_enabled=False, ai_report_provider="mock")
+    validate_production_secrets(cfg)  # raise etmemeli
+
+
+def test_production_openai_and_ollama_provider_choices_unaffected():
+    cfg = _make_settings(ai_report_enabled=True, ai_report_provider="openai")
+    validate_production_secrets(cfg)  # raise etmemeli
+    cfg = _make_settings(ai_report_enabled=True, ai_report_provider="ollama")
+    validate_production_secrets(cfg)  # raise etmemeli

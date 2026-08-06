@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import AuthLayout from "./AuthLayout";
-import GoogleButton from "./GoogleButton";
 
 interface LocationState {
   from?: { pathname: string };
@@ -39,6 +38,7 @@ export default function Login() {
   return (
     <AuthLayout
       title="Giriş yap"
+      subtitle="Hesabınıza ve şirket çalışma alanınıza erişin."
       footer={
         <>
           <p>
@@ -86,11 +86,6 @@ export default function Login() {
           {isSubmitting ? "Giriş yapılıyor…" : "Giriş yap"}
         </button>
       </form>
-
-      <div className="auth-divider" role="separator">
-        veya
-      </div>
-      <GoogleButton />
     </AuthLayout>
   );
 }

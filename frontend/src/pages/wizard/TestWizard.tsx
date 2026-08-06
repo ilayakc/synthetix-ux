@@ -15,6 +15,10 @@ import {
   listPersonaPresets,
   patchWizardDraft,
 } from "../../api/client";
+import {
+  AI_REPORT_PERSONA_REQUIRED_MESSAGE,
+  aiReportRequiresPersonaSelection,
+} from "./aiReportPersona";
 import { incompatibleSelectedModuleKeys } from "./moduleCompatibility";
 import Step1Details from "./Step1Details";
 import Step2Urls from "./Step2Urls";
@@ -28,6 +32,13 @@ const QUOTE_TEST_TYPE_BY_WIZARD_TYPE: Record<string, string> = {
   ab_comparison: "basic_ux_test",
   accessibility_precheck: "accessibility_precheck",
 };
+
+// Persona secimi 3. adimda, analiz modulleri (ai_report dahil) 4. adimda
+// yapilir; bu yuzden `ai_report` + persona uyumsuzlugu ancak 4. adimdan
+// ayrilirken (her ikisi de bilinirken) yakalanabilir - eksikse kullanici 3.
+// adima geri yonlendirilir (bkz. handleNext / handleLaunch).
+const PERSONA_STEP = 3;
+const PERSONA_DEPENDENT_STEP = 4;
 
 function isValidHttpUrl(value: string): boolean {
   try {
@@ -372,6 +383,19 @@ export default function TestWizard() {
     const errors = validateStep(currentStep, payload);
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
+
+    // `ai_report` (4. adimda secilir) en az bir persona secimi (3. adim)
+    // gerektirir; eksikse backend launch'i reddeder. Kullaniciyi burada,
+    // ilerlemesine izin vermeden ONCE persona adimina yonlendir ve nedeni
+    // acikca goster (bkz. aiReportRequiresPersonaSelection - ayni kural
+    // backend'de de bagimsiz zorlanir).
+    if (currentStep === PERSONA_DEPENDENT_STEP && aiReportRequiresPersonaSelection(payload)) {
+      setBanner(AI_REPORT_PERSONA_REQUIRED_MESSAGE);
+      void goToStep(PERSONA_STEP);
+      return;
+    }
+
+    setBanner(null);
     void goToStep(Math.min(currentStep + 1, 5));
   };
 
@@ -384,6 +408,15 @@ export default function TestWizard() {
     const errors = validateStep(5, payload);
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
+
+    // Savunma: 4. adim gecisi normalde bu kombinasyonu engeller, ama stepper
+    // ile dogrudan atlama / eski taslak hydration gibi durumlarda 5. adima
+    // ulasilmis olabilir - launch'i tetiklemeden persona adimina yonlendir.
+    if (aiReportRequiresPersonaSelection(payload)) {
+      setBanner(AI_REPORT_PERSONA_REQUIRED_MESSAGE);
+      void goToStep(PERSONA_STEP);
+      return;
+    }
 
     setIsLaunching(true);
     setBanner(null);
@@ -502,6 +535,11 @@ export default function TestWizard() {
   // ZAMAN bagimsiz olarak yeniden calisir.
   const incompatibleModulesForLaunch = incompatibleSelectedModuleKeys(payload, moduleCatalog);
 
+  // Savunma katmani: `ai_report` secili ama persona secimi yoksa launch backend
+  // tarafindan reddedilir (bkz. validate_ai_report_persona_requirement); butonu
+  // onceden kapat ve kullaniciyi persona adimina yonlendiren aciklamayi goster.
+  const aiReportMissingPersonaForLaunch = aiReportRequiresPersonaSelection(payload);
+
   return (
     <section aria-labelledby="wizard-heading" className="wizard">
       <h1 id="wizard-heading" className="page-heading">
@@ -583,11 +621,17 @@ export default function TestWizard() {
                   isLaunching ||
                   payload.authorization_confirmed !== true ||
                   missingSourceForLaunch ||
-                  incompatibleModulesForLaunch.length > 0
+                  incompatibleModulesForLaunch.length > 0 ||
+                  aiReportMissingPersonaForLaunch
                 }
               >
                 {isLaunching ? "Başlatılıyor…" : launchButtonLabel}
               </button>
+              {aiReportMissingPersonaForLaunch && (
+                <p className="auth-error" role="status">
+                  {AI_REPORT_PERSONA_REQUIRED_MESSAGE}
+                </p>
+              )}
               {missingSourceForLaunch && (
                 <p className="wizard-field-hint" role="status">
                   Devam etmeden önce eksik tasarım kaynağını (ekran görüntüsü) tamamlamalısınız.

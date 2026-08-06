@@ -3,7 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { ApiError } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import AuthLayout from "./AuthLayout";
-import GoogleButton from "./GoogleButton";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -33,7 +32,7 @@ export default function Register() {
         email,
         password,
         organization_name: organizationName,
-        display_name: displayName || undefined,
+        display_name: displayName,
       });
       navigate("/", { replace: true });
     } catch (err) {
@@ -47,8 +46,8 @@ export default function Register() {
 
   return (
     <AuthLayout
-      title="Hesap oluştur"
-      subtitle="0 Chip bakiyesiyle başlayın; 2 ücretsiz kullanım hakkınız otomatik tanımlanır."
+      title="Ücretsiz hesap oluştur"
+      subtitle="Şirketiniz için çalışma alanınızı oluşturun; kredi kartı gerekmez."
       footer={
         <p>
           Zaten hesabınız var mı? <Link to="/giris">Giriş yapın</Link>
@@ -62,32 +61,38 @@ export default function Register() {
       )}
 
       <form className="auth-form" onSubmit={handleSubmit}>
-        <label htmlFor="register-org">Şirket / organizasyon adı</label>
-        <input
-          id="register-org"
-          type="text"
-          required
-          value={organizationName}
-          onChange={(event) => setOrganizationName(event.target.value)}
-        />
-
-        <label htmlFor="register-name">Adınız (opsiyonel)</label>
+        <label htmlFor="register-name">Ad soyad</label>
         <input
           id="register-name"
           type="text"
           autoComplete="name"
+          required
           value={displayName}
           onChange={(event) => setDisplayName(event.target.value)}
         />
 
-        <label htmlFor="register-email">E-posta</label>
+        <label htmlFor="register-email">İş e-postası</label>
         <input
           id="register-email"
           type="email"
           autoComplete="email"
           required
+          aria-describedby="register-email-hint"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
+        />
+        <p id="register-email-hint" className="auth-field-hint">
+          İş e-postanız yoksa kişisel e-posta adresinizle de kayıt olabilirsiniz.
+        </p>
+
+        <label htmlFor="register-org">Şirket / organizasyon adı</label>
+        <input
+          id="register-org"
+          type="text"
+          autoComplete="organization"
+          required
+          value={organizationName}
+          onChange={(event) => setOrganizationName(event.target.value)}
         />
 
         <label htmlFor="register-password">Parola</label>
@@ -106,14 +111,9 @@ export default function Register() {
         </p>
 
         <button type="submit" className="auth-submit" disabled={isSubmitting}>
-          {isSubmitting ? "Hesap oluşturuluyor…" : "Hesap oluştur"}
+          {isSubmitting ? "Hesap oluşturuluyor…" : "Ücretsiz hesap oluştur"}
         </button>
       </form>
-
-      <div className="auth-divider" role="separator">
-        veya
-      </div>
-      <GoogleButton />
     </AuthLayout>
   );
 }

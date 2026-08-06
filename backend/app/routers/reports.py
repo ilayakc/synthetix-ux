@@ -221,6 +221,11 @@ class AccessibleChartSummary(BaseModel):
 
 class ReportDetailResponse(BaseModel):
     id: uuid.UUID
+    # Bu raporun ait oldugu SimulationRun (tenant sinirlari `_get_owned_report_
+    # context` tarafindan zaten dogrulanir). Frontend, tamamlanmis `ai_report`
+    # pipeline'ina (GET /api/simulations/runs/{run_id}/ai-pipeline|ai-report)
+    # ulasabilmek icin bu alani kullanir; standart rapor icerigini DEGISTIRMEZ.
+    simulation_run_id: uuid.UUID
     title: str
     created_at: datetime
     project_id: uuid.UUID
@@ -903,6 +908,7 @@ async def _build_detail_response(
 
     return ReportDetailResponse(
         id=ctx.report.id,
+        simulation_run_id=ctx.run.id,
         title=ctx.report.title,
         created_at=ctx.report.created_at,
         project_id=ctx.project.id,

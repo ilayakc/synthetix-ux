@@ -10,6 +10,7 @@ pytestmark = pytest.mark.unit
 def test_get_chip_packages_returns_current_version_by_default():
     packages = get_chip_packages()
     assert {p.key for p in packages} == {"starter", "growth", "scale"}
+    assert {p.name for p in packages} == {"Başlangıç paketi", "Büyüme paketi", "Ölçek paketi"}
 
 
 def test_get_chip_packages_rejects_unknown_version():

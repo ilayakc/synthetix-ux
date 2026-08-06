@@ -38,8 +38,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import settings
 from app.engine.baseline import BANNED_CLAIM_PHRASES
+from app.logging_config import get_logger
+from app.logging_utils import log_duration
 
 logger = logging.getLogger(__name__)
+_llm_logger = get_logger("llm")
 
 # UI'da bu bölüm asla "AI kararı" olarak adlandırılmaz; otomatik üretildiği
 # ve uzman değerlendirmesi gerektirdiği her zaman belirtilir.
@@ -452,6 +455,20 @@ class RemoteHttpProvider(BaseExplainabilityProvider):
         self.max_output_tokens = max_output_tokens
 
     async def generate(self, ai_input: AIExplanationInput) -> AIExplanationOutput:
+        # Toplam sure (tum yeniden denemeler dahil) tek bir "llm" kategorili
+        # satirda olculur; basarisizlikta (`AIProviderUnavailableError`)
+        # `log_duration` bunu ERROR+stack-trace olarak kaydedip yeniden
+        # yukseltir - tekil deneme yeniden-deneme uyarilari (asagida) AYRI
+        # ve daha ayrintili bir sinyal olarak kalir.
+        with log_duration(
+            _llm_logger,
+            "llm",
+            f"generate_explanation (model={self.model_name})",
+            slow_threshold_ms=settings.slow_request_threshold_ms,
+        ):
+            return await self._generate(ai_input)
+
+    async def _generate(self, ai_input: AIExplanationInput) -> AIExplanationOutput:
         payload = {
             "system_prompt": SYSTEM_PROMPT,
             "prompt_version": PROMPT_VERSION,
