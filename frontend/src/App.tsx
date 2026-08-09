@@ -3,7 +3,6 @@ import { useRouteChangeLogging } from "./lib/useRouteChangeLogging";
 import ProtectedLayout from "./components/ProtectedLayout";
 import GuestOnly from "./auth/GuestOnly";
 import RouteFallback from "./auth/RouteFallback";
-import ChipTopUp from "./pages/ChipTopUp";
 import KullanimVeChip from "./pages/KullanimVeChip";
 import ModuleCatalog from "./pages/ModuleCatalog";
 import Placeholder from "./pages/Placeholder";
@@ -64,7 +63,7 @@ export default function App() {
         <Route path="/projeler/:projectId" element={<ProjectDetail />} />
         <Route path="/tests/new" element={<TestWizard />} />
         <Route path="/analiz-modulleri" element={<ModuleCatalog />} />
-        <Route path="/chip-yukle" element={<ChipTopUp />} />
+        <Route path="/chip-yukle" element={<Navigate to="/kullanim-ve-chip" replace />} />
         <Route path="/personalar" element={<PersonaPresets />} />
         <Route path="/simulasyonlar" element={<Simulations />} />
         <Route path="/raporlar" element={<Reports />} />

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import ChipTopUp from "./ChipTopUp";
 
 function jsonResponse(status: number, body: unknown) {
@@ -86,7 +86,7 @@ describe("ChipTopUp", () => {
     expect(screen.queryByLabelText(/son kullanma tarihi/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/güvenlik kodu/i)).not.toBeInTheDocument();
     expect(
-      screen.getByText(/yönetici onayından sonra Chip hesabınıza eklenir/i),
+      screen.getByText(/yönetici onayından sonra bakiyenize eklenir/i),
     ).toBeInTheDocument();
 
     const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
@@ -119,7 +119,7 @@ describe("ChipTopUp", () => {
     );
   });
 
-  it("gecmis talepleri listeler", async () => {
+  it("gecmis talepleri durumlarina gore ayri gruplarda listeler", async () => {
     stubFetch({
       topupRequests: [
         {
@@ -129,6 +129,21 @@ describe("ChipTopUp", () => {
           status: "pending",
           created_at: "2026-07-16T00:00:00Z",
         },
+        {
+          id: "req-1",
+          package_key: "growth",
+          chip_amount: 500,
+          status: "approved",
+          created_at: "2026-07-17T00:00:00Z",
+        },
+        {
+          id: "req-2",
+          package_key: "scale",
+          chip_amount: 2000,
+          status: "rejected",
+          review_note: "Ödeme doğrulanamadı.",
+          created_at: "2026-07-18T00:00:00Z",
+        },
       ],
     });
 
@@ -137,7 +152,13 @@ describe("ChipTopUp", () => {
     await waitFor(() =>
       expect(screen.getByText(/100 Chip · Başlangıç paketi/)).toBeInTheDocument(),
     );
-    expect(screen.queryByText(/\(starter\)/)).not.toBeInTheDocument();
-    expect(screen.getByText("Beklemede")).toBeInTheDocument();
+    const pendingGroup = screen.getByRole("region", { name: "Beklemede" });
+    const approvedGroup = screen.getByRole("region", { name: "Onaylandı" });
+    const rejectedGroup = screen.getByRole("region", { name: "Reddedildi" });
+
+    expect(within(pendingGroup).getByText(/100 Chip · Başlangıç paketi/)).toBeInTheDocument();
+    expect(within(approvedGroup).getByText(/500 Chip · Büyüme paketi/)).toBeInTheDocument();
+    expect(within(rejectedGroup).getByText(/2.000 Chip · Ölçek paketi/)).toBeInTheDocument();
+    expect(within(rejectedGroup).getByText(/Ödeme doğrulanamadı/)).toBeInTheDocument();
   });
 });

@@ -1,28 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
 import KullanimVeChip from "./KullanimVeChip";
 
 function renderPage() {
-  return render(
-    <MemoryRouter>
-      <KullanimVeChip />
-    </MemoryRouter>,
-  );
+  return render(<KullanimVeChip />);
 }
 
 const usageSummaryResponse = {
   organization_id: "00000000-0000-0000-0000-000000000000",
   chip_balance: 0,
-  entitlements: [
-    { feature_key: "basic_ux_test", status: "available", quantity: 1, reserved_until: null },
-    {
-      feature_key: "accessibility_precheck",
-      status: "available",
-      quantity: 1,
-      reserved_until: null,
-    },
-  ],
+  entitlements: [],
   pricing_version: "2026.1",
 };
 
@@ -31,12 +18,26 @@ afterEach(() => {
 });
 
 describe("KullanimVeChip", () => {
-  it("bakiyeyi ve iki ücretsiz hakkı ayrı kartlarda gösterir", async () => {
+  it("bakiyeyi ve Chip paketlerini doğrudan aynı ekranda gösterir", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => usageSummaryResponse,
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/billing/usage-summary")) {
+          return Promise.resolve({ ok: true, json: async () => usageSummaryResponse });
+        }
+        if (url.includes("/api/billing/chip-packages")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              package_version: "2026.1",
+              packages: [{ key: "starter", name: "Başlangıç paketi", chip_amount: 100 }],
+            }),
+          });
+        }
+        if (url.includes("/api/billing/topup-requests")) {
+          return Promise.resolve({ ok: true, json: async () => [] });
+        }
+        throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
 
@@ -44,33 +45,13 @@ describe("KullanimVeChip", () => {
 
     await waitFor(() => expect(screen.getByText("0")).toBeInTheDocument());
 
-    expect(screen.getByText("Chip Bakiyesi")).toBeInTheDocument();
-    expect(screen.getByText("Ücretsiz Temel UX Testi")).toBeInTheDocument();
-    expect(screen.getByText("Ücretsiz Erişilebilirlik Ön Kontrolü")).toBeInTheDocument();
-    expect(screen.getAllByText("0/1")).toHaveLength(2);
-    expect(screen.getAllByText("Kullanılabilir")).toHaveLength(2);
-    expect(screen.getByRole("link", { name: "Chip Yükle" })).toHaveAttribute("href", "/chip-yukle");
-    expect(screen.queryByText(/aşağıda listelenir/i)).not.toBeInTheDocument();
-  });
-
-  it("kullanilmis (consumed) bir hakki 'Kullanıldı' olarak gosterir", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          ...usageSummaryResponse,
-          entitlements: [
-            { feature_key: "basic_ux_test", status: "consumed", quantity: 1, reserved_until: null },
-          ],
-        }),
-      }),
-    );
-
-    renderPage();
-
-    await waitFor(() => expect(screen.getByText("Kullanıldı")).toBeInTheDocument());
-    expect(screen.getByText("1/1")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Chip Cüzdanı" })).toBeInTheDocument();
+    expect(screen.getByText("Mevcut Chip Bakiyesi")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Chip Paketleri" })).toBeInTheDocument();
+    expect(screen.getByText(/Başlangıç paketi/)).toBeInTheDocument();
+    expect(screen.queryByText("Ücretsiz Temel UX Testi")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ücretsiz Erişilebilirlik Ön Kontrolü")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Chip Yükle" })).not.toBeInTheDocument();
   });
 
   it("kullanim ozeti alinamadiginda hata mesaji gosterir", async () => {
@@ -79,7 +60,7 @@ describe("KullanimVeChip", () => {
     renderPage();
 
     await waitFor(() =>
-      expect(screen.getByText("Kullanım özeti yüklenemedi.")).toBeInTheDocument(),
+      expect(screen.getByText("Chip yükleme bilgileri yüklenemedi.")).toBeInTheDocument(),
     );
   });
 

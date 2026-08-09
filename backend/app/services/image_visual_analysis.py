@@ -31,7 +31,7 @@ import math
 import cv2
 import numpy as np
 
-ALGORITHM_VERSION = "visual-analysis-1"
+ALGORITHM_VERSION = "visual-analysis-2"
 
 # Guvenlik: gorsel zaten image_safety tarafindan dogrulanmis olsa da, OpenCV
 # islemesi CPU/bellek acisindan pahali olabilir - calisma cozunurlugu burada
@@ -45,8 +45,8 @@ _MIN_ASPECT_RATIO = 0.12
 _MAX_ASPECT_RATIO = 8.0
 _CONTRAST_MARGIN_PX = 6
 
-_ATTENTION_GRID_COLS = 8
-_ATTENTION_GRID_ROWS = 6
+_ATTENTION_GRID_COLS = 12
+_ATTENTION_GRID_ROWS = 8
 
 _LIMITATIONS = [
     "Bu sonuclar gercek kullanici tiklamasi veya goz takibi verisi degildir.",
@@ -217,10 +217,65 @@ def _find_candidates(bgr: np.ndarray, gray: np.ndarray, edges: np.ndarray) -> li
     return raw_candidates[:_MAX_CANDIDATES]
 
 
-def _synthetic_attention_estimate(gray: np.ndarray, edges: np.ndarray) -> dict:
+def _robust_unit_map(values: np.ndarray) -> np.ndarray:
+    """Aykiri tek bir pikselin tum haritayi bastirmadigi 0..1 olcekleme."""
+
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return np.zeros_like(values, dtype=np.float32)
+    low = float(np.percentile(finite, 20))
+    high = float(np.percentile(finite, 95))
+    if not math.isfinite(low) or not math.isfinite(high) or high <= low + 1e-9:
+        return np.zeros_like(values, dtype=np.float32)
+    return np.clip((values - low) / (high - low), 0.0, 1.0).astype(np.float32)
+
+
+def _synthetic_attention_estimate(
+    bgr: np.ndarray,
+    gray: np.ndarray,
+    edges: np.ndarray,
+) -> dict:
     work_h, work_w = gray.shape[:2]
     cell_h = max(1, work_h // _ATTENTION_GRID_ROWS)
     cell_w = max(1, work_w // _ATTENTION_GRID_COLS)
+
+    # Tek bir "ustte olma" katsayisi eski algoritmada navigasyonu yapay olarak
+    # sicak gosteriyordu. Yeni surum, yerel ve genis olcekli renk/kontrast farkini,
+    # yumusatilan kenar yogunlugunu ve doygunlugu birlestirir. Merkez onceligi
+    # yalnizca zayif bir okunabilirlik onceligidir; sonucu tek basina belirlemez.
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+    short_edge = max(1, min(work_h, work_w))
+    local_sigma = max(3.0, short_edge / 55.0)
+    broad_sigma = max(9.0, short_edge / 14.0)
+    local_mean = cv2.GaussianBlur(lab, (0, 0), sigmaX=local_sigma, sigmaY=local_sigma)
+    broad_mean = cv2.GaussianBlur(lab, (0, 0), sigmaX=broad_sigma, sigmaY=broad_sigma)
+    local_contrast = np.linalg.norm(lab - local_mean, axis=2)
+    broad_contrast = np.linalg.norm(lab - broad_mean, axis=2)
+    edge_map = cv2.GaussianBlur(
+        (edges > 0).astype(np.float32),
+        (0, 0),
+        sigmaX=max(2.0, short_edge / 180.0),
+        sigmaY=max(2.0, short_edge / 180.0),
+    )
+    saturation = hsv[:, :, 1] / 255.0
+
+    saliency = (
+        0.34 * _robust_unit_map(local_contrast)
+        + 0.30 * _robust_unit_map(broad_contrast)
+        + 0.24 * _robust_unit_map(edge_map)
+        + 0.12 * np.clip(saturation, 0.0, 1.0)
+    )
+    yy, xx = np.mgrid[0:work_h, 0:work_w]
+    x_norm = (xx + 0.5) / work_w
+    y_norm = (yy + 0.5) / work_h
+    center_prior = np.exp(
+        -0.5 * (((x_norm - 0.5) / 0.48) ** 2 + ((y_norm - 0.48) / 0.52) ** 2)
+    )
+    saliency *= (0.86 + 0.14 * center_prior).astype(np.float32)
+    # Ince kampanya/duyuru seridi, metin ve kenar yogunlugu nedeniyle tum sayfayi
+    # bastirmasin. Arama ve ana navigasyon bandi korunur; yalnizca ilk %7 zayiflatilir.
+    saliency[y_norm < 0.07] *= 0.55
 
     raw_cells: list[dict] = []
     for row in range(_ATTENTION_GRID_ROWS):
@@ -230,20 +285,14 @@ def _synthetic_attention_estimate(gray: np.ndarray, edges: np.ndarray) -> dict:
             if y1 <= y0 or x1 <= x0:
                 continue
 
-            gray_cell = gray[y0:y1, x0:x1]
-            edge_cell = edges[y0:y1, x0:x1]
-            if gray_cell.size == 0:
+            saliency_cell = saliency[y0:y1, x0:x1]
+            if saliency_cell.size == 0:
                 continue
-
-            luminance_std = float(gray_cell.std())
-            edge_density = float((edge_cell > 0).mean())
-            position_bias = max(0.0, 1.0 - (((y0 + y1) / 2.0) / work_h))
-
-            if not all(math.isfinite(v) for v in (luminance_std, edge_density, position_bias)):
+            mean_score = float(saliency_cell.mean())
+            peak_score = float(np.percentile(saliency_cell, 82))
+            raw_score = 0.62 * mean_score + 0.38 * peak_score
+            if not math.isfinite(raw_score):
                 continue
-
-            contrast_component = min(luminance_std / 64.0, 1.0)
-            raw_score = 0.4 * edge_density + 0.35 * contrast_component + 0.25 * position_bias
 
             raw_cells.append(
                 {
@@ -255,10 +304,11 @@ def _synthetic_attention_estimate(gray: np.ndarray, edges: np.ndarray) -> dict:
                 }
             )
 
-    max_score = max((cell["_raw_score"] for cell in raw_cells), default=0.0)
+    raw_scores = np.asarray([cell["_raw_score"] for cell in raw_cells], dtype=np.float32)
+    normalized_scores = _robust_unit_map(raw_scores)
     cells = []
-    for cell in raw_cells:
-        intensity = round(cell["_raw_score"] / max_score, 4) if max_score > 0 else 0.0
+    for cell, normalized in zip(raw_cells, normalized_scores, strict=True):
+        intensity = round(float(normalized), 4)
         if not math.isfinite(intensity):
             intensity = 0.0
         cells.append(
@@ -293,7 +343,7 @@ def analyze_screenshot(image_bytes: bytes) -> dict:
         edges = cv2.Canny(gray, 50, 150)
 
         candidates = _find_candidates(bgr, gray, edges)
-        attention = _synthetic_attention_estimate(gray, edges)
+        attention = _synthetic_attention_estimate(bgr, gray, edges)
     except VisualAnalysisError:
         raise
     except Exception as exc:  # OpenCV/numpy beklenmeyen hatasi - guvenli FAILED'a cevrilir

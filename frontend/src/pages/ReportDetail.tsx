@@ -948,7 +948,11 @@ function HeatmapEvidenceSummary({
       ? "Sayfanın DOM yapısındaki buton ve bağlantılar"
       : "Ekran görüntüsündeki görsel etkileşim adayları"
     : "Ekran görüntüsündeki renk, kontrast ve yerleşim özellikleri";
-  const confidence = isClick && featureSource === "dom" ? "Orta" : "Düşük";
+  const method = isClick
+    ? featureSource === "dom"
+      ? "DOM tabanlı"
+      : "Görsel sezgi"
+    : "Görsel belirginlik";
   const reason = isClick
     ? featureSource === "dom"
       ? hasConfirmedCta
@@ -958,16 +962,14 @@ function HeatmapEvidenceSummary({
     : "Bu bir görsel belirginlik sezgisidir; gerçek göz takibi verisiyle kalibre edilmedi.";
 
   return (
-    <div className="heatmap-evidence" role="note" aria-label="Analiz kaynağı ve güven düzeyi">
+    <div className="heatmap-evidence" role="note" aria-label="Analiz kaynağı ve yöntem">
       <span>
         <small>Kaynak</small>
         <strong>{source}</strong>
       </span>
       <span>
-        <small>Güven</small>
-        <strong className={`heatmap-confidence heatmap-confidence--${confidence === "Orta" ? "medium" : "low"}`}>
-          {confidence}
-        </strong>
+        <small>Yöntem</small>
+        <strong>{method}</strong>
       </span>
       <p>{reason}</p>
     </div>

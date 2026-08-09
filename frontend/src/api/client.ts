@@ -490,6 +490,10 @@ export function archiveProject(projectId: string): Promise<ProjectResponse> {
   });
 }
 
+export function deleteProject(projectId: string): Promise<void> {
+  return apiFetch<void>(`/api/projects/${projectId}`, { method: "DELETE" });
+}
+
 // --- Persona tanimi, dagilimi ve ornekleme ------------------------------------
 
 export interface PersonaDimensionInfo {
@@ -726,6 +730,10 @@ export function listWizardDrafts(): Promise<WizardDraftResponse[]> {
 
 export function getWizardDraft(draftId: string): Promise<WizardDraftResponse> {
   return apiFetch<WizardDraftResponse>(`/api/tests/drafts/${draftId}`);
+}
+
+export function deleteWizardDraft(draftId: string): Promise<void> {
+  return apiFetch<void>(`/api/tests/drafts/${draftId}`, { method: "DELETE" });
 }
 
 export function patchWizardDraft(

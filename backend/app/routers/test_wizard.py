@@ -115,6 +115,26 @@ async def get_draft(
     return _to_response(draft)
 
 
+@router.delete("/{draft_id}", status_code=204)
+async def delete_draft(
+    draft_id: uuid.UUID,
+    principal: Principal = Depends(require_roles(*WRITE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Yalnizca henuz baslatilmamis sihirbaz taslagini kalici olarak siler.
+
+    Baslatilmis testler Chip/entitlement ve sonuc denetim izinin parcasi
+    oldugu icin bu uc noktadan silinemez.
+    """
+
+    draft = await _get_owned_draft(session, principal.organization_id, draft_id, for_update=True)
+    if draft.status != TestWizardDraftStatus.DRAFT:
+        raise HTTPException(status_code=409, detail="Baslatilmis bir test silinemez")
+
+    await session.delete(draft)
+    await session.commit()
+
+
 class PatchDraftRequest(BaseModel):
     current_step: int | None = None
     payload: dict = {}

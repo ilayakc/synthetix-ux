@@ -643,7 +643,7 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     expect(screen.getByText(/buton, bağlantı ve etkileşimli alanlarda/i)).toBeInTheDocument();
     expect(screen.getByText("Sayfanın DOM yapısındaki buton ve bağlantılar")).toBeInTheDocument();
     expect(screen.getByText(/olay verisi yok/i)).toBeInTheDocument();
-    expect(screen.getByText("Orta")).toBeInTheDocument();
+    expect(screen.getByText("DOM tabanlı")).toBeInTheDocument();
     const muteToggle = screen.getByLabelText(
       "Vurgular için arka planı soluklaştır",
     ) as HTMLInputElement;

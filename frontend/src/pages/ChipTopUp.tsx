@@ -15,6 +15,12 @@ const STATUS_LABELS: Record<TopUpRequestResponse["status"], string> = {
   rejected: "Reddedildi",
 };
 
+const REQUEST_STATUS_ORDER: TopUpRequestResponse["status"][] = [
+  "pending",
+  "approved",
+  "rejected",
+];
+
 export default function ChipTopUp() {
   const [chipBalance, setChipBalance] = useState<number | null>(null);
   const [packages, setPackages] = useState<ChipPackage[]>([]);
@@ -76,13 +82,13 @@ export default function ChipTopUp() {
   };
 
   return (
-    <section aria-labelledby="chip-topup-heading">
-      <h1 id="chip-topup-heading" className="page-heading">
-        Chip Yükle
+    <section aria-labelledby="chip-wallet-heading">
+      <h1 id="chip-wallet-heading" className="page-heading">
+        Chip Cüzdanı
       </h1>
       <p className="page-placeholder">
-        Bir Chip paketi seçip yönetime yükleme talebi gönderin. Talep oluşturmak bakiyenizi hemen
-        değiştirmez; yönetici onayından sonra Chip hesabınıza eklenir.
+        Bakiyenizi görüntüleyin ve ihtiyacınıza uygun Chip paketini doğrudan seçin. Talep,
+        yönetici onayından sonra bakiyenize eklenir.
       </p>
 
       {isLoading && <p className="page-placeholder">Yükleniyor…</p>}
@@ -98,8 +104,11 @@ export default function ChipTopUp() {
             </div>
           </div>
 
-          <div className="wizard-field" style={{ marginTop: 16 }}>
-            <label>Chip paketi seçin</label>
+          <div className="wizard-field chip-package-section" style={{ marginTop: 24 }}>
+            <h2 className="page-heading" style={{ fontSize: "1.125rem", marginBottom: 4 }}>
+              Chip Paketleri
+            </h2>
+            <p className="page-placeholder">Yüklemek istediğiniz paketi seçin.</p>
             <div className="wizard-radio-group">
               {packages.map((pkg) => (
                 <label key={pkg.key} className="wizard-radio-option">
@@ -134,18 +143,43 @@ export default function ChipTopUp() {
           {requests.length === 0 ? (
             <p className="page-placeholder">Henüz bir yükleme talebiniz yok.</p>
           ) : (
-            <ul className="wizard-summary-list">
-              {requests.map((request) => (
-                <li key={request.id}>
-                  <span>
-                    {request.chip_amount.toLocaleString("tr-TR")} Chip ·{" "}
-                    {packageNames.get(request.package_key) ?? "Paket bilgisi bulunamadı"}
-                  </span>
-                  <span>{STATUS_LABELS[request.status]}</span>
-                  {request.review_note && <span>Yönetici notu: {request.review_note}</span>}
-                </li>
-              ))}
-            </ul>
+            <div className="topup-request-groups">
+              {REQUEST_STATUS_ORDER.map((status) => {
+                const statusRequests = requests.filter((request) => request.status === status);
+                const headingId = `topup-status-${status}`;
+                return (
+                  <section
+                    key={status}
+                    className={`topup-request-group topup-request-group--${status}`}
+                    aria-labelledby={headingId}
+                  >
+                    <div className="topup-request-group__heading">
+                      <h3 id={headingId}>{STATUS_LABELS[status]}</h3>
+                      <span className="chip-pill">{statusRequests.length}</span>
+                    </div>
+                    {statusRequests.length === 0 ? (
+                      <p className="page-placeholder">Bu durumda talep yok.</p>
+                    ) : (
+                      <ul className="wizard-summary-list">
+                        {statusRequests.map((request) => (
+                          <li key={request.id}>
+                            <span>
+                              {request.chip_amount.toLocaleString("tr-TR")} Chip ·{" "}
+                              {packageNames.get(request.package_key) ??
+                                "Paket bilgisi bulunamadı"}
+                            </span>
+                            <span>{new Date(request.created_at).toLocaleString("tr-TR")}</span>
+                            {request.review_note && (
+                              <span>Yönetici notu: {request.review_note}</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                );
+              })}
+            </div>
           )}
         </>
       )}

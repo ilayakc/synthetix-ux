@@ -91,6 +91,26 @@ def test_flat_image_produces_no_fabricated_candidates():
     assert result["synthetic_attention_estimate"]["cells"] != []
 
 
+def test_attention_hotspots_follow_central_content_instead_of_top_bias():
+    """Eski algoritmadaki mutlak ust-sayfa onceligi, navigasyonu yapay olarak
+    sicak gosteriyordu. Belirgin merkezi nesne en guclu hucreleri kendine cekmeli."""
+
+    raw = _button_image(button_box=(300, 260, 500, 320))
+    cells = analyze_screenshot(raw)["synthetic_attention_estimate"]["cells"]
+    strongest = sorted(cells, key=lambda cell: cell["intensity"], reverse=True)[:6]
+
+    assert strongest
+    assert all(cell["y"] >= 0.25 for cell in strongest)
+    assert any(0.3 <= cell["x"] <= 0.6 for cell in strongest)
+
+
+def test_attention_grid_is_finer_and_algorithm_is_versioned():
+    result = analyze_screenshot(_button_image())
+
+    assert result["algorithm_version"] == "visual-analysis-2"
+    assert len(result["synthetic_attention_estimate"]["cells"]) == 12 * 8
+
+
 def test_higher_contrast_button_scores_higher():
     """Ayni boyut/konumda, cevresine gore daha yuksek kontrastli buton daha yuksek skor almali."""
 

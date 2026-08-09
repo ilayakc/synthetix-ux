@@ -115,6 +115,27 @@ async def _credit_chips(organization_id: str, amount: int) -> None:
         await engine.dispose()
 
 
+async def _create_report_for_run(organization_id: str, run_id: str) -> None:
+    """Proje silme korumasini izole bicimde test etmek icin tamamlanmis rapor izi ekler."""
+
+    from app.models.reports import Report
+
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            session.add(
+                Report(
+                    organization_id=uuid.UUID(organization_id),
+                    simulation_run_id=uuid.UUID(run_id),
+                    title="Test raporu",
+                    content={},
+                )
+            )
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
 def _basic_ux_payload(project_id: str, *, persona_count: int = 500) -> dict:
     return {
         "project_id": project_id,
@@ -235,6 +256,57 @@ def test_archived_project_cannot_be_updated(client):
         headers=_csrf_headers(client),
     )
     assert response.status_code == 409
+
+
+def test_delete_project_without_completed_report_hides_project_and_removes_its_drafts(client):
+    _register(client)
+    project = _create_project(client)
+    draft = _create_draft(client)
+    _patch_draft(client, draft["id"], {"project_id": project["id"], "name": "Yarim test"})
+
+    response = client.delete(f"/api/projects/{project['id']}", headers=_csrf_headers(client))
+    assert response.status_code == 204, response.text
+
+    listing = client.get("/api/projects")
+    assert project["id"] not in [item["id"] for item in listing.json()]
+    drafts = client.get("/api/tests/drafts").json()
+    assert draft["id"] not in [item["id"] for item in drafts]
+
+    # Finansal/operasyonel denetim izi icin proje fiziksel olarak silinmez.
+    detail = client.get(f"/api/projects/{project['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "archived"
+
+
+def test_delete_project_with_completed_report_is_rejected(client):
+    import anyio
+
+    session = _register(client)
+    project = _create_project(client)
+    draft = _create_draft(client)
+    payload = _basic_ux_payload(project["id"], persona_count=100)
+    payload["authorization_confirmed"] = True
+    _patch_draft(client, draft["id"], payload)
+    launch = client.post(f"/api/tests/drafts/{draft['id']}/launch", headers=_csrf_headers(client))
+    assert launch.status_code == 200, launch.text
+    anyio.run(
+        _create_report_for_run,
+        session["organization_id"],
+        launch.json()["simulation_run_ids"][0],
+    )
+
+    response = client.delete(f"/api/projects/{project['id']}", headers=_csrf_headers(client))
+    assert response.status_code == 409
+    assert "Tamamlanmis raporu" in response.json()["detail"]
+
+
+def test_delete_unlaunched_wizard_draft(client):
+    _register(client)
+    draft = _create_draft(client)
+
+    response = client.delete(f"/api/tests/drafts/{draft['id']}", headers=_csrf_headers(client))
+    assert response.status_code == 204
+    assert client.get(f"/api/tests/drafts/{draft['id']}").status_code == 404
 
 
 @pytest.mark.security

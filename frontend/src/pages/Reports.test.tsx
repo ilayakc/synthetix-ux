@@ -22,6 +22,7 @@ describe("Reports", () => {
       vi.fn().mockImplementation((url: string) => {
         if (url.includes("/api/reports")) return jsonResponse(200, []);
         if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
+        if (url.includes("/api/projects")) return jsonResponse(200, []);
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
@@ -62,6 +63,21 @@ describe("Reports", () => {
           ]);
         }
         if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
+        if (url.includes("/api/projects")) {
+          return jsonResponse(200, [
+            {
+              id: "33333333-3333-3333-3333-333333333333",
+              organization_id: "org",
+              name: "Anasayfa Yenileme",
+              description: null,
+              status: "active",
+              test_count: 1,
+              created_at: "2026-07-01T00:00:00Z",
+              updated_at: "2026-07-01T00:00:00Z",
+              archived_at: null,
+            },
+          ]);
+        }
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
@@ -73,7 +89,8 @@ describe("Reports", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Anasayfa testi")).toBeInTheDocument());
-    expect(screen.getByText(/Ana Senaryo · Anasayfa Yenileme/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Anasayfa Yenileme" })).toBeInTheDocument();
+    expect(screen.getByText(/Ana Senaryo/)).toBeInTheDocument();
     expect(screen.getByText("Kalibre edilmemiş")).toBeInTheDocument();
   });
 
@@ -97,6 +114,7 @@ describe("Reports", () => {
             },
           ]);
         }
+        if (url.includes("/api/projects")) return jsonResponse(200, []);
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
@@ -107,7 +125,9 @@ describe("Reports", () => {
       </MemoryRouter>,
     );
 
-    const draftHeading = await screen.findByText("Yarım Kalan Testler");
+    const draftTab = await screen.findByRole("tab", { name: /Yarım kalan testler/ });
+    fireEvent.click(draftTab);
+    const draftHeading = await screen.findByText("Devam edilecek testler");
     expect(draftHeading).toBeInTheDocument();
     expect(draftHeading.closest("section")).toHaveAttribute("id", "yarim-kalan-testler");
     expect(screen.getByText("Mobil ödeme denemesi")).toBeInTheDocument();
@@ -124,6 +144,7 @@ describe("Reports", () => {
       vi.fn().mockImplementation((url: string) => {
         if (url.includes("/api/reports")) return jsonResponse(500, { detail: "Sunucu hatası" });
         if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
+        if (url.includes("/api/projects")) return jsonResponse(200, []);
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
@@ -147,6 +168,7 @@ describe("Reports", () => {
           return reportAttempts === 1 ? jsonResponse(500, {}) : jsonResponse(200, []);
         }
         if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
+        if (url.includes("/api/projects")) return jsonResponse(200, []);
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );

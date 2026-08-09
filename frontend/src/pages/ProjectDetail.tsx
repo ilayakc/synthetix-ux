@@ -6,6 +6,8 @@ import {
   type ReportListItemResponse,
   type WizardDraftResponse,
   archiveProject,
+  deleteProject,
+  deleteWizardDraft,
   getProject,
   listReports,
   listWizardDrafts,
@@ -33,6 +35,10 @@ export default function ProjectDetail() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isArchiving, setIsArchiving] = useState(false);
   const [isConfirmingArchive, setIsConfirmingArchive] = useState(false);
+  const [draftToDelete, setDraftToDelete] = useState<string | null>(null);
+  const [isDeletingDraft, setIsDeletingDraft] = useState(false);
+  const [isConfirmingDeleteProject, setIsConfirmingDeleteProject] = useState(false);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
 
   const load = useCallback(() => {
     if (!projectId) return;
@@ -128,6 +134,33 @@ export default function ProjectDetail() {
     }
   };
 
+  const handleDeleteDraft = async (draftId: string) => {
+    setSaveError(null);
+    setIsDeletingDraft(true);
+    try {
+      await deleteWizardDraft(draftId);
+      setDrafts((current) => current.filter((draft) => draft.id !== draftId));
+      setDraftToDelete(null);
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : "Yarım kalan test silinemedi.");
+    } finally {
+      setIsDeletingDraft(false);
+    }
+  };
+
+  const handleDeleteProject = async () => {
+    setSaveError(null);
+    setIsDeletingProject(true);
+    try {
+      await deleteProject(project.id);
+      navigate("/projeler", { replace: true });
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : "Proje silinemedi.");
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
   return (
     <section aria-labelledby="project-detail-heading">
       <Link to="/projeler" className="project-detail__back">
@@ -190,14 +223,49 @@ export default function ProjectDetail() {
                 <h3>Yarım kalan testler</h3>
                 <ul>
                   {drafts.map((draft) => (
-                    <li key={draft.id}>
-                      <Link to={`/tests/new?draft=${draft.id}`}>
-                        <span>
-                          <strong>{draft.payload.name?.trim() || "Adsız test taslağı"}</strong>
-                          <small>{draft.current_step}. adımda bırakıldı</small>
-                        </span>
-                        <span>Devam et →</span>
-                      </Link>
+                    <li key={draft.id} className="project-draft-row">
+                      <div className="project-draft-row__main">
+                        <Link to={`/tests/new?draft=${draft.id}`}>
+                          <span>
+                            <strong>{draft.payload.name?.trim() || "Adsız test taslağı"}</strong>
+                            <small>{draft.current_step}. adımda bırakıldı</small>
+                          </span>
+                          <span>Devam et →</span>
+                        </Link>
+                        {draftToDelete !== draft.id && (
+                          <button
+                            type="button"
+                            className="project-draft-row__delete"
+                            onClick={() => setDraftToDelete(draft.id)}
+                            aria-label={`${draft.payload.name?.trim() || "Adsız test taslağı"} taslağını sil`}
+                          >
+                            Sil
+                          </button>
+                        )}
+                      </div>
+                      {draftToDelete === draft.id && (
+                        <div className="inline-delete-confirm" role="alert">
+                          <p>Bu yarım kalan test kalıcı olarak silinecek.</p>
+                          <div>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => setDraftToDelete(null)}
+                              disabled={isDeletingDraft}
+                            >
+                              Vazgeç
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-danger"
+                              onClick={() => void handleDeleteDraft(draft.id)}
+                              disabled={isDeletingDraft}
+                            >
+                              {isDeletingDraft ? "Siliniyor…" : "Silme işlemini onayla"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -300,6 +368,54 @@ export default function ProjectDetail() {
             </div>
           )}
         </div>
+      )}
+
+      {!isArchived && (
+        <section className="project-detail__danger-zone" aria-labelledby="delete-project-heading">
+          <h2 id="delete-project-heading">Projeyi sil</h2>
+          {completedTests.length > 0 ? (
+            <p>
+              Bu projede {completedTests.length} tamamlanmış ve Chip harcanmış test bulunuyor. Proje
+              ve tamamlanan raporları silinemez; isterseniz projeyi arşivleyebilirsiniz.
+            </p>
+          ) : !isConfirmingDeleteProject ? (
+            <>
+              <p>
+                Proje aktif listeden kaldırılır ve yarım kalan taslakları silinir. Tamamlanmış rapor
+                bulunmadığı için bu işlem kullanılabilir.
+              </p>
+              <button
+                type="button"
+                className="btn-danger-outline"
+                onClick={() => setIsConfirmingDeleteProject(true)}
+              >
+                Projeyi sil
+              </button>
+            </>
+          ) : (
+            <div className="inline-delete-confirm" role="alert">
+              <p>“{project.name}” projesini silmek istediğinizden emin misiniz?</p>
+              <div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setIsConfirmingDeleteProject(false)}
+                  disabled={isDeletingProject}
+                >
+                  Vazgeç
+                </button>
+                <button
+                  type="button"
+                  className="btn-danger"
+                  onClick={() => void handleDeleteProject()}
+                  disabled={isDeletingProject}
+                >
+                  {isDeletingProject ? "Siliniyor…" : "Projeyi silmeyi onayla"}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
       )}
     </section>
   );

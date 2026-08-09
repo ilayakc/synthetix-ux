@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.dependencies import Principal, get_organization_id, require_roles
 from app.models.projects import Project, ProjectStatus
-from app.models.tests import TestDefinition
+from app.models.reports import Report
+from app.models.simulations import SimulationRun
+from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
+from app.models.tests import TestDefinition, TestVariant
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -199,3 +202,51 @@ async def archive_project(
 
     counts = await _get_test_counts(session, principal.organization_id, [project.id])
     return _to_response(project, counts.get(project.id, 0))
+
+
+@router.delete("/{project_id}", status_code=204)
+async def delete_project(
+    project_id: uuid.UUID,
+    principal: Principal = Depends(require_roles(*WRITE_ROLES)),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Tamamlanmis raporu olmayan projeyi aktif listeden kaldirir.
+
+    Proje fiziksel olarak silinmez; olasi baslatilmis calistirmalar ve Chip
+    denetim izi korunarak arsivlenir. Yalnizca henuz baslatilmamis sihirbaz
+    taslaklari kalici olarak temizlenir. Tamamlanmis raporu olan projeler
+    hicbir kosulda bu islemle kaldirilamaz.
+    """
+
+    project = await _get_owned_project(session, principal.organization_id, project_id)
+
+    completed_report = await session.execute(
+        select(Report.id)
+        .join(SimulationRun, SimulationRun.id == Report.simulation_run_id)
+        .join(TestVariant, TestVariant.id == SimulationRun.test_variant_id)
+        .join(TestDefinition, TestDefinition.id == TestVariant.test_definition_id)
+        .where(
+            Report.organization_id == principal.organization_id,
+            TestDefinition.project_id == project.id,
+        )
+        .limit(1)
+    )
+    if completed_report.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Tamamlanmis raporu bulunan proje silinemez",
+        )
+
+    draft_result = await session.execute(
+        select(TestWizardDraft).where(
+            TestWizardDraft.organization_id == principal.organization_id,
+            TestWizardDraft.status == TestWizardDraftStatus.DRAFT,
+        )
+    )
+    for draft in draft_result.scalars().all():
+        if str((draft.payload or {}).get("project_id", "")) == str(project.id):
+            await session.delete(draft)
+
+    project.status = ProjectStatus.ARCHIVED
+    project.archived_at = project.archived_at or datetime.now(UTC)
+    await session.commit()

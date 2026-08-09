@@ -512,7 +512,11 @@ export default function Simulations() {
       </p>
 
       {runs && runs.length > 0 && (
-        <div className="simulation-toolbar" aria-label="Simülasyon filtreleri">
+        <div
+          className="reports-view-switch simulation-status-switch"
+          role="tablist"
+          aria-label="Simülasyon filtreleri"
+        >
           {(
             [
               ["all", "Tümü"],
@@ -524,11 +528,13 @@ export default function Simulations() {
             <button
               key={value}
               type="button"
-              className={`report-tab${statusFilter === value ? " report-tab--active" : ""}`}
-              aria-pressed={statusFilter === value}
+              role="tab"
+              className={statusFilter === value ? "is-active" : ""}
+              aria-selected={statusFilter === value}
               onClick={() => setStatusFilter(value)}
             >
-              {label} ({counts[value]})
+              <span>{label}</span>
+              <strong>{counts[value]}</strong>
             </button>
           ))}
         </div>
