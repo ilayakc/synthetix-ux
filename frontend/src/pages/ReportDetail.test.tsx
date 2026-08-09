@@ -162,7 +162,12 @@ function baseAbComparison(overrides: Record<string, unknown> = {}) {
     sibling_report_id: "22222222-2222-2222-2222-222222222222",
     this_source_type: "url",
     sibling_source_type: "url",
-    sibling_heatmap: { available: false, label: "Sentetik dikkat tahmini", grid: null, disclaimer: null },
+    sibling_heatmap: {
+      available: false,
+      label: "Sentetik dikkat tahmini",
+      grid: null,
+      disclaimer: null,
+    },
     sibling_cta_overlay: {
       available: false,
       feature_source: null,
@@ -183,7 +188,7 @@ describe("ReportDetail — genel yapi ve Ozet sekmesi", () => {
 
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
     expect(screen.getByRole("tab", { name: "Özet" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Görsel Karşılaştırma" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Isı Haritası" })).toHaveAttribute(
       "aria-selected",
       "false",
     );
@@ -204,7 +209,7 @@ describe("ReportDetail — genel yapi ve Ozet sekmesi", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("heading", { name: "Sentetik simulasyon sonucu" }),
+        screen.getByRole("heading", { name: "Sentetik simülasyon sonucu" }),
       ).toBeInTheDocument(),
     );
   });
@@ -224,7 +229,7 @@ describe("ReportDetail — genel yapi ve Ozet sekmesi", () => {
     goToTab("Teknik Detaylar");
 
     expect(screen.getByText("heuristic-baseline-2026.1")).toBeInTheDocument();
-    expect(screen.getByText("uncalibrated")).toBeInTheDocument();
+    expect(screen.getByText("Kalibre edilmemiş")).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
   });
 
@@ -275,13 +280,17 @@ describe("ReportDetail — genel yapi ve Ozet sekmesi", () => {
     });
     renderReportDetail(report);
 
-    await waitFor(() => expect(screen.getByText("Öncelikli bulgular")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Kritik bulgular ve öneriler")).toBeInTheDocument(),
+    );
     expect(screen.getByText("Kontrastı güçlendirin")).toBeInTheDocument();
 
     const panel = screen.getByRole("tabpanel");
-    const headings = within(panel).getAllByRole("heading").map((h) => h.textContent);
+    const headings = within(panel)
+      .getAllByRole("heading")
+      .map((h) => h.textContent);
     const resultIndex = headings.findIndex((t) => t?.includes("simülasyon özeti"));
-    const findingsIndex = headings.findIndex((t) => t === "Öncelikli bulgular");
+    const findingsIndex = headings.findIndex((t) => t === "Kritik bulgular ve öneriler");
     const metricsIndex = headings.findIndex((t) => t === "Metrik özeti");
     expect(resultIndex).toBeLessThan(findingsIndex);
     expect(findingsIndex).toBeLessThan(metricsIndex);
@@ -298,7 +307,9 @@ describe("ReportDetail — genel yapi ve Ozet sekmesi", () => {
     });
     renderReportDetail(report);
 
-    await waitFor(() => expect(screen.getByText("Öncelikli bulgular")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Kritik bulgular ve öneriler")).toBeInTheDocument(),
+    );
     const panel = screen.getByRole("tabpanel");
     expect(panel.querySelectorAll(".priority-finding-card")).toHaveLength(3);
   });
@@ -312,7 +323,9 @@ describe("ReportDetail — genel yapi ve Ozet sekmesi", () => {
 
   it("JSON/CSV disa aktarma tek bir kucuk menu icinde sunulur", async () => {
     renderReportDetail(baseReport());
-    await waitFor(() => expect(screen.getByRole("button", { name: /Dışa aktar/ })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Dışa aktar/ })).toBeInTheDocument(),
+    );
 
     expect(screen.queryByText("JSON olarak dışa aktar")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Dışa aktar/ }));
@@ -330,7 +343,7 @@ describe("ReportDetail — ust duzey sekme gezinmesi (klavye)", () => {
     summaryTab.focus();
     fireEvent.keyDown(summaryTab, { key: "ArrowRight" });
 
-    const visualTab = screen.getByRole("tab", { name: "Görsel Karşılaştırma" });
+    const visualTab = screen.getByRole("tab", { name: "Isı Haritası" });
     expect(visualTab).toHaveAttribute("aria-selected", "true");
     expect(document.activeElement).toBe(visualTab);
   });
@@ -374,7 +387,8 @@ describe("ReportDetail — AI Raporu sekmesi", () => {
   function renderWithAi(aiPipeline: () => ReturnType<typeof jsonResponse>) {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url.includes(`/api/simulations/runs/${RUN_ID}/ai-pipeline`)) return aiPipeline();
-      if (url.includes("/api/reports/")) return jsonResponse(200, baseReport({ simulation_run_id: RUN_ID }));
+      if (url.includes("/api/reports/"))
+        return jsonResponse(200, baseReport({ simulation_run_id: RUN_ID }));
       throw new Error(`Beklenmeyen istek: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -456,15 +470,13 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     });
     renderReportDetail(report);
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Görsel Karşılaştırma");
+    goToTab("Isı Haritası");
 
     expect(screen.getByText("Hero / birincil başlık")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Renkli katmanlar algoritmanın tahmini görsel belirginlik dağılımını gösterir/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/yeşil düşük, sarı artan, kırmızı/i)).toBeInTheDocument();
   });
 
-  it("A/B gorselleri yan yana (iki panel) gosterilir, bagimsiz katman toggle'lariyla", async () => {
+  it("A/B gorselleri yan yana gosterilir ve isi katmani gereksiz bir anahtarla kapatilmaz", async () => {
     const visualHeatmap = {
       available: true,
       label: "Sentetik dikkat tahmini",
@@ -490,26 +502,34 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     });
     renderReportDetail(report);
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Görsel Karşılaştırma");
+    goToTab("Isı Haritası");
 
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: /Tasarım A/ })).toBeInTheDocument(),
     );
     expect(screen.getByRole("heading", { name: /Tasarım B/ })).toBeInTheDocument();
 
-    const toggles = screen.getAllByLabelText(
-      "Sentetik dikkat katmanını göster",
-    ) as HTMLInputElement[];
-    expect(toggles).toHaveLength(2);
-    expect(toggles[0].checked).toBe(true);
-    expect(toggles[1].checked).toBe(true);
-    fireEvent.click(toggles[0]);
-    expect(toggles[0].checked).toBe(false);
-    expect(toggles[1].checked).toBe(true);
+    expect(screen.getAllByTitle("Sayfanın düşük yoğunluklu temel alanı")).toHaveLength(2);
+    expect(screen.queryByLabelText("Sentetik göz odağını göster")).not.toBeInTheDocument();
   });
 
   it("bagimsiz CTA katman toggle'i calisir", async () => {
     const report = baseReport({
+      heatmap: {
+        available: true,
+        label: "Sentetik dikkat tahmini",
+        overlay_kind: "synthetic_visual_attention",
+        feature_source: "visual_heuristic",
+        grid: null,
+        visual_cells: [
+          { x: 0.1, y: 0.15, w: 0.25, h: 0.12, intensity: 0.78 },
+          { x: 0.4, y: 0.2, w: 0.2, h: 0.06, intensity: 0.58 },
+        ],
+        disclaimer: "test",
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        coordinates_available: true,
+        coordinates_unavailable_reason: null,
+      },
       cta_overlay: {
         available: true,
         feature_source: "visual_heuristic",
@@ -532,22 +552,280 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     });
     renderReportDetail(report);
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Görsel Karşılaştırma");
+    goToTab("Isı Haritası");
 
-    const ctaToggle = screen.getByLabelText("CTA adaylarını göster") as HTMLInputElement;
-    expect(ctaToggle.checked).toBe(true);
-    fireEvent.click(ctaToggle);
+    const ctaToggle = screen.getByLabelText(
+      "CTA bölgelerini göster (buton ve bağlantı adayları)",
+    ) as HTMLInputElement;
+    expect(screen.getByRole("button", { name: "Tıklama ısı haritası" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Görsel odak haritası" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Birincil etkileşim alanı: beklenen tıklama payı/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Ekran görüntüsündeki görsel etkileşim adayları"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/DOM ve gerçek olay verisi yok/i)).toBeInTheDocument();
     expect(ctaToggle.checked).toBe(false);
+    fireEvent.click(ctaToggle);
+    expect(ctaToggle.checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /odak haritas/i }));
+    expect(document.querySelector(".heatmap-visual-cell")).toBeInTheDocument();
+  });
+
+  it("sentetik tiklama yogunlugu ve goz odagi gorunumlerini ayri sunar", async () => {
+    const report = baseReport({
+      heatmap: {
+        available: true,
+        label: "Sentetik dikkat tahmini",
+        overlay_kind: "semantic_region",
+        feature_source: "dom",
+        grid: [{ key: "hero_baslik", label: "Hero", score: 0.3 }],
+        regions: [
+          {
+            key: "hero_baslik",
+            label: "Hero",
+            score: 0.3,
+            level: "high",
+            box: { x_pct: 10, y_pct: 10, width_pct: 50, height_pct: 20 },
+          },
+        ],
+        click_grid: [{ key: "birincil_cta", label: "Birincil CTA", score: 0.5 }],
+        click_regions: [
+          {
+            key: "birincil_cta",
+            label: "Birincil CTA",
+            score: 0.5,
+            level: "high",
+            box: { x_pct: 20, y_pct: 35, width_pct: 25, height_pct: 10 },
+          },
+        ],
+        disclaimer: "test",
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        coordinates_available: true,
+        coordinates_unavailable_reason: null,
+      },
+      cta_overlay: {
+        available: true,
+        feature_source: "dom",
+        boxes: [
+          {
+            classification: "dom_interactive_candidate",
+            label: "DOM etkileşimli aday",
+            x: 0.58,
+            y: 0.08,
+            w: 0.09,
+            h: 0.014,
+            heuristic_score: null,
+          },
+          {
+            classification: "dom_interactive_candidate",
+            label: "DOM etkileşimli aday",
+            x: 0.2,
+            y: 0.01,
+            w: 0.03,
+            h: 0.006,
+            heuristic_score: null,
+          },
+        ],
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        coordinates_available: true,
+        coordinates_unavailable_reason: null,
+        disclaimer: "test",
+      },
+    });
+    renderReportDetail(report);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
+    goToTab("Isı Haritası");
+
+    expect(screen.getByRole("button", { name: "Tıklama ısı haritası" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Görsel odak haritası" })).toBeInTheDocument();
+    expect(screen.getByText(/buton, bağlantı ve etkileşimli alanlarda/i)).toBeInTheDocument();
+    expect(screen.getByText("Sayfanın DOM yapısındaki buton ve bağlantılar")).toBeInTheDocument();
+    expect(screen.getByText(/olay verisi yok/i)).toBeInTheDocument();
+    expect(screen.getByText("Orta")).toBeInTheDocument();
+    const muteToggle = screen.getByLabelText(
+      "Vurgular için arka planı soluklaştır",
+    ) as HTMLInputElement;
+    expect(muteToggle.checked).toBe(true);
+    const screenshot = screen.getByRole("img", { name: /analiz anında alınmış/i });
+    expect(screenshot).toHaveClass("heatmap-screenshot--muted");
+    fireEvent.click(muteToggle);
+    expect(screenshot).not.toHaveClass("heatmap-screenshot--muted");
+    expect(
+      screen.getByRole("button", { name: /Birincil etkileşim alanı: beklenen tıklama payı/i }),
+    ).toHaveClass("heatmap-region--click");
+    expect(
+      screen.queryByRole("button", { name: /Hero: beklenen tıklama payı/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/olay verisi yok/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Görsel odak haritası" }));
+    expect(screen.getByText(/renk, kontrast, boyut ve yerleşimin/i)).toBeInTheDocument();
+    expect(screen.getByText(/gerçek göz takibi verisiyle kalibre edilmedi/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hero: görsel odak payı/i })).toHaveClass(
+      "heatmap-region--gaze",
+    );
+    expect(screen.queryByText("Sentetik tıklama yoğunluğunu göster")).not.toBeInTheDocument();
+    expect(screen.getByText(/gerçek göz takibi verisiyle kalibre edilmedi/i)).toBeInTheDocument();
+  });
+
+  it("DOM etkileşim koordinatı yoksa semantik bolgeleri tiklama noktasi gibi gostermez", async () => {
+    const report = baseReport({
+      heatmap: {
+        available: true,
+        label: "Sentetik dikkat tahmini",
+        overlay_kind: "semantic_region",
+        feature_source: "dom",
+        grid: [{ key: "hero_baslik", label: "Hero", score: 0.4 }],
+        regions: [
+          {
+            key: "hero_baslik",
+            label: "Hero",
+            score: 0.4,
+            level: "high",
+            box: { x_pct: 10, y_pct: 10, width_pct: 50, height_pct: 20 },
+          },
+        ],
+        click_grid: [{ key: "birincil_cta", label: "Birincil CTA", score: 0.6 }],
+        click_regions: [
+          {
+            key: "birincil_cta",
+            label: "Birincil CTA",
+            score: 0.6,
+            level: "high",
+            box: { x_pct: 20, y_pct: 35, width_pct: 25, height_pct: 10 },
+          },
+        ],
+        disclaimer: "test",
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        coordinates_available: true,
+        coordinates_unavailable_reason: null,
+      },
+      cta_overlay: {
+        available: false,
+        feature_source: "dom",
+        boxes: [],
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        coordinates_available: true,
+        coordinates_unavailable_reason: null,
+        disclaimer: "test",
+      },
+    });
+    renderReportDetail(report);
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
+    goToTab("Isı Haritası");
+
+    expect(screen.queryByRole("button", { name: "Tıklama ısı haritası" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hero: görsel odak payı/i })).toBeInTheDocument();
+  });
+
+  it("genis kapsayici linki tiklama noktasi saymaz ve form eylemini one cikarir", async () => {
+    const report = baseReport({
+      cta_overlay: {
+        available: true,
+        feature_source: "dom",
+        boxes: [
+          {
+            classification: "dom_interactive_candidate",
+            label: "DOM etkileÅŸimli aday",
+            interaction_kind: "container_link",
+            x: 0.12,
+            y: 0.02,
+            w: 0.72,
+            h: 0.014,
+          },
+          {
+            classification: "dom_interactive_candidate",
+            label: "DOM etkileÅŸimli aday",
+            interaction_kind: "form_action",
+            x: 0.7,
+            y: 0.2,
+            w: 0.12,
+            h: 0.06,
+          },
+          {
+            classification: "dom_interactive_candidate",
+            label: "DOM etkileÅŸimli aday",
+            interaction_kind: "pagination_control",
+            x: 0.2,
+            y: 0.3,
+            w: 0.02,
+            h: 0.05,
+          },
+        ],
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        coordinates_available: true,
+        coordinates_unavailable_reason: null,
+        disclaimer: "test",
+      },
+    });
+    renderReportDetail(report);
+    await waitFor(() => expect(screen.getByRole("tab", { name: /zet$/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /Haritas/i }));
+
+    const clickMarkers = document.querySelectorAll(".heatmap-region--click");
+    expect(clickMarkers).toHaveLength(2);
+    expect(clickMarkers[0]).toHaveStyle({ left: "66%" });
+    expect((clickMarkers[0] as HTMLElement).style.background).toContain("220, 38, 38");
+    expect((clickMarkers[1] as HTMLElement).style.background).toContain("34, 197, 94");
   });
 
   it("ilk 3 CTA adayi + kullanicinin onayladigi CTA varsayilan gorunur, digerleri 'Tum adaylari goster' ile acilir", async () => {
     const boxes = [
-      { classification: "user_confirmed_cta", label: "Kayıt ol butonu", x: 0.05, y: 0.05, w: 0.1, h: 0.04, heuristic_score: null },
-      { classification: "visual_cta_candidate", label: "Aday 1", x: 0.3, y: 0.3, w: 0.1, h: 0.04, heuristic_score: 0.9 },
-      { classification: "visual_cta_candidate", label: "Aday 2", x: 0.5, y: 0.3, w: 0.1, h: 0.04, heuristic_score: 0.8 },
-      { classification: "visual_cta_candidate", label: "Aday 3", x: 0.7, y: 0.3, w: 0.1, h: 0.04, heuristic_score: 0.7 },
-      { classification: "visual_cta_candidate", label: "Aday 4", x: 0.3, y: 0.6, w: 0.1, h: 0.04, heuristic_score: 0.6 },
-      { classification: "visual_cta_candidate", label: "Aday 5", x: 0.5, y: 0.6, w: 0.1, h: 0.04, heuristic_score: 0.5 },
+      {
+        classification: "user_confirmed_cta",
+        label: "Kayıt ol butonu",
+        x: 0.05,
+        y: 0.05,
+        w: 0.1,
+        h: 0.04,
+        heuristic_score: null,
+      },
+      {
+        classification: "visual_cta_candidate",
+        label: "Aday 1",
+        x: 0.3,
+        y: 0.3,
+        w: 0.1,
+        h: 0.04,
+        heuristic_score: 0.9,
+      },
+      {
+        classification: "visual_cta_candidate",
+        label: "Aday 2",
+        x: 0.5,
+        y: 0.3,
+        w: 0.1,
+        h: 0.04,
+        heuristic_score: 0.8,
+      },
+      {
+        classification: "visual_cta_candidate",
+        label: "Aday 3",
+        x: 0.7,
+        y: 0.3,
+        w: 0.1,
+        h: 0.04,
+        heuristic_score: 0.7,
+      },
+      {
+        classification: "visual_cta_candidate",
+        label: "Aday 4",
+        x: 0.3,
+        y: 0.6,
+        w: 0.1,
+        h: 0.04,
+        heuristic_score: 0.6,
+      },
+      {
+        classification: "visual_cta_candidate",
+        label: "Aday 5",
+        x: 0.5,
+        y: 0.6,
+        w: 0.1,
+        h: 0.04,
+        heuristic_score: 0.5,
+      },
     ];
     const report = baseReport({
       cta_overlay: {
@@ -562,7 +840,9 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     });
     renderReportDetail(report);
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Görsel Karşılaştırma");
+    goToTab("Isı Haritası");
+
+    fireEvent.click(screen.getByLabelText("CTA bölgelerini göster (buton ve bağlantı adayları)"));
 
     expect(screen.getByRole("button", { name: /Sizin CTA'nız/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /CTA adayı 1/ })).toBeInTheDocument();
@@ -598,9 +878,9 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     });
     renderReportDetail(report);
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Görsel Karşılaştırma");
+    goToTab("Isı Haritası");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Erişilebilir tablo" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Yoğunluk tablosu" }));
     const rows = screen.getAllByRole("row");
     // 1 baslik satiri + en fazla 10 (5 yuksek + 5 dusuk) veri satiri.
     expect(rows.length).toBeLessThanOrEqual(11);
@@ -612,10 +892,14 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
 });
 
 describe("ReportDetail — Bulgular ve Oneriler sekmesi", () => {
-  it("bulgulari oncelik sirasina gore (Yuksek/Dusuk) gruplar ve 4 alani gosterir", async () => {
+  it("bulguyu ve onerilen adimi tek, anlasilir kartta gosterir", async () => {
     const report = baseReport({
       critical_findings: [
-        { key: "contrast_below_threshold", severity: "warning", text: "Kontrast düşük tespit edildi." },
+        {
+          key: "contrast_below_threshold",
+          severity: "warning",
+          text: "Kontrast düşük tespit edildi.",
+        },
         { key: "no_threshold_triggered", severity: "info", text: "Bilgi." },
       ],
     });
@@ -623,19 +907,10 @@ describe("ReportDetail — Bulgular ve Oneriler sekmesi", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
     goToTab("Bulgular ve Öneriler");
 
-    expect(screen.getByText("Yüksek öncelik")).toBeInTheDocument();
-    expect(screen.getByText(/Ne bulundu\?/)).toBeInTheDocument();
-    expect(screen.getByText(/Neden önemli\?/)).toBeInTheDocument();
-    expect(screen.getByText(/Ne yapılmalı\?/)).toBeInTheDocument();
-    expect(screen.getByText(/İlgili tasarım:/)).toBeInTheDocument();
-  });
-
-  it("AI destekli aciklama butonu 'Bulgulari sade dille acikla' metniyle burada yer alir", async () => {
-    renderReportDetail(baseReport());
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Bulgular ve Öneriler");
-
-    expect(screen.getByRole("button", { name: "Bulguları sade dille açıkla" })).toBeInTheDocument();
+    expect(screen.getByText("Ne bulduk, ne yapmalısınız?")).toBeInTheDocument();
+    expect(screen.getByText("Öncelikli")).toBeInTheDocument();
+    expect(screen.getByText(/Önerilen adım:/)).toBeInTheDocument();
+    expect(screen.queryByText(/Neden önemli\?/)).not.toBeInTheDocument();
   });
 });
 
@@ -694,7 +969,7 @@ describe("ReportDetail — yasakli iddialar", () => {
     });
     renderReportDetail(report);
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Görsel Karşılaştırma");
+    goToTab("Isı Haritası");
 
     const bodyText = (document.body.textContent ?? "").toLowerCase();
     // Not: "gerçek göz takibi ... değildir" gibi NEGATE EDILMIS ifadeler
@@ -725,7 +1000,13 @@ describe("ReportDetail — diger modul bolumleri (Teknik Detaylar altinda)", () 
             label: "CTA 1",
             rank: 1,
             above_fold: true,
-            click_probability: { distribution: "triangular", point_estimate: 0.3, low: 0.24, mode: 0.3, high: 0.36 },
+            click_probability: {
+              distribution: "triangular",
+              point_estimate: 0.3,
+              low: 0.24,
+              mode: 0.3,
+              high: 0.36,
+            },
           },
         ],
         message_clarity_findings: [
@@ -789,32 +1070,17 @@ describe("ReportDetail — hata durumlari", () => {
     await waitFor(() => expect(screen.getByText("Rapor yüklenemedi.")).toBeInTheDocument());
   });
 
-  it("AI destekli aciklama uretildiginde kisa ozet ve sinirlamalari gosterir", async () => {
-    const report = baseReport();
+  it("rapor yukleme hatasindan sonra tekrar deneyebilir", async () => {
+    let attempts = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-        if (url.includes("/ai-explanation") && init?.method === "POST") {
-          return jsonResponse(200, {
-            schema_version: "1.0",
-            calibration_status: "uncalibrated",
-            short_summary: "Görev tamamlama olasılığı orta seviyede; belirsizlik aralığı geniştir.",
-            metric_basis: [
-              { text: "Görev tamamlama olasılığı %62 nokta tahminine dayanır.", metric_ids: ["task_completion_probability"] },
-            ],
-            possible_explanations: [
-              { text: "Sayfa düzeni görevi tamamlamayı zorlaştırıyor olabilir.", metric_ids: ["task_completion_probability"] },
-            ],
-            suggested_verification_experiment: "Gerçek kullanıcılarla A/B testi yapılabilir.",
-            limitations: "Bu açıklama sentetik verilere dayanır; gerçek kullanıcı davranışını yansıtmaz.",
-            prompt_version: "v1",
-            provider: "template",
-            model_name: null,
-            generated_at: "2026-07-16T00:00:00Z",
-          });
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/reports/")) {
+          attempts += 1;
+          return attempts === 1 ? jsonResponse(500, {}) : jsonResponse(200, baseReport());
         }
-        if (url.includes("/api/reports/")) return jsonResponse(200, report);
-        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+        if (url.includes("/ai-pipeline")) return jsonResponse(404, {});
+        throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
 
@@ -826,19 +1092,8 @@ describe("ReportDetail — hata durumlari", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
-    goToTab("Bulgular ve Öneriler");
-
-    const generateButton = await screen.findByRole("button", { name: "Bulguları sade dille açıkla" });
-    fireEvent.click(generateButton);
-
-    await waitFor(() =>
-      expect(
-        screen.getByText("Görev tamamlama olasılığı orta seviyede; belirsizlik aralığı geniştir."),
-      ).toBeInTheDocument(),
-    );
-    expect(
-      screen.getByText("Bu açıklama sentetik verilere dayanır; gerçek kullanıcı davranışını yansıtmaz."),
-    ).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Tekrar dene" }));
+    expect(await screen.findByRole("tab", { name: "Özet" })).toBeInTheDocument();
+    expect(screen.queryByText("Rapor yüklenemedi.")).not.toBeInTheDocument();
   });
 });

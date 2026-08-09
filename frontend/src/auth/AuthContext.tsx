@@ -27,7 +27,7 @@ interface AuthContextValue {
   // Oturum bir arka plan istegi (401) tarafindan sonlandirildiginda true
   // olur; giris ekrani "oturumunuzun suresi doldu" mesajini gosterebilir.
   sessionExpired: boolean;
-  login: (body: LoginRequest) => Promise<void>;
+  login: (body: LoginRequest) => Promise<SessionResponse>;
   register: (body: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
   clearSessionExpired: () => void;
@@ -77,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(data);
     setStatus("authenticated");
     setSessionExpired(false);
+    return data;
   }, []);
 
   const register = useCallback(async (body: RegisterRequest) => {

@@ -9,6 +9,7 @@ otomatik olarak hicbir yerden cagrilmaz.
 import asyncio
 import logging
 import sys
+from typing import TypedDict
 
 from sqlalchemy import select
 
@@ -26,6 +27,83 @@ DEV_USER_EMAIL = "dev@synthetix.local"
 # Yalnizca yerel gelistirme icin sabit bir parola; uretimde bu komut zaten
 # calismayi reddeder (bkz. `main()`).
 DEV_USER_PASSWORD = "DevPassword123!"
+
+DEMO_PASSWORD = "DemoSynthetix123!"
+
+
+class DemoAccount(TypedDict):
+    email: str
+    display_name: str
+    organization_name: str
+    organization_slug: str
+    is_platform_admin: bool
+
+
+DEMO_ACCOUNTS: tuple[DemoAccount, ...] = (
+    {
+        "email": "synthetix.demo.admin@example.com",
+        "display_name": "Demo Yönetici",
+        "organization_name": "Synthetix UX Yönetim Demo",
+        "organization_slug": "synthetix-ux-yonetim-demo",
+        "is_platform_admin": True,
+    },
+    {
+        "email": "synthetix.demo.user@example.com",
+        "display_name": "Demo Kullanıcı",
+        "organization_name": "Synthetix UX Demo Şirketi",
+        "organization_slug": "synthetix-ux-demo-sirketi",
+        "is_platform_admin": False,
+    },
+)
+
+
+async def _seed_demo_account(session, account: DemoAccount) -> None:
+    organization = (
+        await session.execute(select(Organization).where(Organization.slug == account["organization_slug"]))
+    ).scalar_one_or_none()
+    if organization is None:
+        organization = Organization(
+            name=account["organization_name"],
+            slug=account["organization_slug"],
+        )
+        session.add(organization)
+        await session.flush()
+
+    user = (
+        await session.execute(select(User).where(User.email_normalized == account["email"]))
+    ).scalar_one_or_none()
+    if user is None:
+        user = User(
+            email=account["email"],
+            email_normalized=account["email"],
+            display_name=account["display_name"],
+            password_hash=hash_password(DEMO_PASSWORD),
+            is_platform_admin=account["is_platform_admin"],
+        )
+        session.add(user)
+        await session.flush()
+    else:
+        user.display_name = account["display_name"]
+        user.password_hash = hash_password(DEMO_PASSWORD)
+        user.is_platform_admin = account["is_platform_admin"]
+
+    membership = (
+        await session.execute(
+            select(Membership).where(
+                Membership.organization_id == organization.id,
+                Membership.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if membership is None:
+        session.add(Membership(organization_id=organization.id, user_id=user.id, role="owner"))
+
+    await list_free_entitlements(session, organization.id)
+    logger.info(
+        "demo account: '%s' hazirlandi (platform_admin=%s)",
+        account["email"],
+        account["is_platform_admin"],
+    )
 
 
 async def seed() -> None:
@@ -87,6 +165,9 @@ async def seed() -> None:
                 entitlement.status.value,
                 entitlement.quantity,
             )
+
+        for demo_account in DEMO_ACCOUNTS:
+            await _seed_demo_account(session, demo_account)
 
         await session.commit()
 

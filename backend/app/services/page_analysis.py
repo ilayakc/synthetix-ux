@@ -415,7 +415,19 @@ async def process_analysis(
     analysis.snapshot_version = snapshot["snapshot_version"]
     analysis.analyzer_version = snapshot["analyzer_version"]
     analysis.source = snapshot["source"]
-    analysis.features = _extract_features(snapshot)
+    features = _extract_features(snapshot)
+    # URL kaynaginda tiklama adaylari DOM semantiginden gelir; gorsel odak ise
+    # ayni guvenli screenshot'in piksel kontrasti/kenar yogunlugundan AYRI
+    # uretilir. Boylece bir fiyat baslik etiketi tasiyor diye otomatik olarak
+    # "gorsel odak" sonucu olmaz ve tiklama puaniyla karismaz.
+    try:
+        visual_features = image_visual_analysis.analyze_screenshot(screenshot_bytes)
+    except image_visual_analysis.VisualAnalysisError as exc:
+        logger.warning("URL screenshot gorsel dikkat analizi atlandi (id=%s): %s", analysis.id, exc)
+    else:
+        features["visual_attention_algorithm_version"] = visual_features.get("algorithm_version")
+        features["synthetic_attention_estimate"] = visual_features.get("synthetic_attention_estimate")
+    analysis.features = features
     analysis.status = PageAnalysisStatus.SUCCEEDED
     analysis.finished_at = _now()
     await session.flush()

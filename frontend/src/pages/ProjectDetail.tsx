@@ -1,10 +1,14 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
   type ProjectResponse,
+  type ReportListItemResponse,
+  type WizardDraftResponse,
   archiveProject,
   getProject,
+  listReports,
+  listWizardDrafts,
   updateProject,
 } from "../api/client";
 
@@ -18,6 +22,8 @@ export default function ProjectDetail() {
   const navigate = useNavigate();
 
   const [project, setProject] = useState<ProjectResponse | null>(null);
+  const [reports, setReports] = useState<ReportListItemResponse[]>([]);
+  const [drafts, setDrafts] = useState<WizardDraftResponse[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
 
@@ -28,13 +34,16 @@ export default function ProjectDetail() {
   const [isArchiving, setIsArchiving] = useState(false);
   const [isConfirmingArchive, setIsConfirmingArchive] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!projectId) return;
-    getProject(projectId)
-      .then((data) => {
-        setProject(data);
-        setName(data.name);
-        setDescription(data.description ?? "");
+    setError(null);
+    Promise.all([getProject(projectId), listReports({ projectId }), listWizardDrafts()])
+      .then(([projectData, reportData, draftData]) => {
+        setProject(projectData);
+        setReports(reportData);
+        setDrafts(draftData.filter((draft) => draft.payload.project_id === projectId));
+        setName(projectData.name);
+        setDescription(projectData.description ?? "");
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 404) {
@@ -44,6 +53,20 @@ export default function ProjectDetail() {
         }
       });
   }, [projectId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const completedTests = useMemo(() => {
+    const byDefinition = new Map<string, ReportListItemResponse>();
+    for (const report of reports) {
+      if (!byDefinition.has(report.test_definition_id)) {
+        byDefinition.set(report.test_definition_id, report);
+      }
+    }
+    return [...byDefinition.values()];
+  }, [reports]);
 
   if (notFound) {
     return (
@@ -57,7 +80,14 @@ export default function ProjectDetail() {
   }
 
   if (error) {
-    return <p className="page-placeholder">{error}</p>;
+    return (
+      <div className="dashboard-error" role="alert">
+        <p>{error}</p>
+        <button type="button" className="btn-secondary" onClick={load}>
+          Yeniden dene
+        </button>
+      </div>
+    );
   }
 
   if (!project) {
@@ -65,6 +95,8 @@ export default function ProjectDetail() {
   }
 
   const isArchived = project.status === "archived";
+  const processingCount = Math.max(project.test_count - completedTests.length, 0);
+  const totalWorkCount = project.test_count + drafts.length;
 
   const handleSave = async (event: FormEvent) => {
     event.preventDefault();
@@ -110,12 +142,95 @@ export default function ProjectDetail() {
         </span>
       </div>
 
-      <div className="dashboard-grid">
+      <div className="dashboard-grid project-detail__summary">
         <div className="dashboard-card">
-          <h3>Test Sayısı</h3>
-          <p>{project.test_count}</p>
+          <h3>Toplam Çalışma</h3>
+          <p>{totalWorkCount}</p>
+          <small>{project.test_count} başlatılmış test · {drafts.length} taslak</small>
+        </div>
+        <div className="dashboard-card">
+          <h3>Tamamlanan Test</h3>
+          <p>{completedTests.length}</p>
+          <small>Raporu hazır olan benzersiz testler</small>
+        </div>
+        <div className="dashboard-card">
+          <h3>Devam Eden</h3>
+          <p>{processingCount + drafts.length}</p>
+          <small>{processingCount} sonuç bekliyor · {drafts.length} yarım kaldı</small>
         </div>
       </div>
+
+      <section className="project-detail__tests" aria-labelledby="project-tests-heading">
+        <div className="dashboard-section__heading-row">
+          <div>
+            <h2 id="project-tests-heading">Proje Testleri</h2>
+            <p>Tamamlanan testlere, yarım kalan taslaklara ve süren çalışmalara buradan ulaşın.</p>
+          </div>
+          {!isArchived && (
+            <button
+              type="button"
+              onClick={() => navigate(`/tests/new?project=${project.id}`)}
+              className="btn-primary"
+            >
+              Yeni test başlat
+            </button>
+          )}
+        </div>
+
+        {totalWorkCount === 0 && (
+          <div className="empty-state">
+            <p>Bu projede henüz test veya taslak bulunmuyor.</p>
+          </div>
+        )}
+
+        {totalWorkCount > 0 && (
+          <div className="project-test-group__content project-detail__test-list">
+            {drafts.length > 0 && (
+              <div className="project-test-subsection">
+                <h3>Yarım kalan testler</h3>
+                <ul>
+                  {drafts.map((draft) => (
+                    <li key={draft.id}>
+                      <Link to={`/tests/new?draft=${draft.id}`}>
+                        <span>
+                          <strong>{draft.payload.name?.trim() || "Adsız test taslağı"}</strong>
+                          <small>{draft.current_step}. adımda bırakıldı</small>
+                        </span>
+                        <span>Devam et →</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {completedTests.length > 0 && (
+              <div className="project-test-subsection">
+                <h3>Tamamlanan testler</h3>
+                <ul>
+                  {completedTests.map((report) => (
+                    <li key={report.test_definition_id}>
+                      <Link to={`/raporlar/${report.id}`}>
+                        <span>
+                          <strong>{report.test_definition_name}</strong>
+                          <small>Rapor hazır · {new Date(report.created_at).toLocaleString("tr-TR")}</small>
+                        </span>
+                        <span>Raporu aç →</span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {processingCount > 0 && (
+              <Link to="/simulasyonlar" className="project-test-processing">
+                {processingCount} test çalışıyor, başarısız oldu veya sonuç bekliyor →
+              </Link>
+            )}
+          </div>
+        )}
+      </section>
 
       <form className="auth-form project-detail__form" onSubmit={handleSave}>
         <label htmlFor="project-detail-name">Proje adı</label>
@@ -146,14 +261,6 @@ export default function ProjectDetail() {
               {isSaving ? "Kaydediliyor…" : "Kaydet"}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => navigate(`/tests/new?project=${project.id}`)}
-            className="btn-secondary"
-            disabled={isArchived}
-          >
-            Bu proje için yeni test başlat
-          </button>
         </div>
       </form>
 

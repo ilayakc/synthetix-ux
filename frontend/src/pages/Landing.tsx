@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { applyPublicTheme, getPublicTheme, type PublicTheme } from "../theme/publicTheme";
+import BrandLogo from "../components/BrandLogo";
 import SimulationBackdrop from "./landing/SimulationBackdrop";
 
 const FEATURES = [
@@ -32,10 +33,7 @@ export default function Landing() {
     <div className="landing-page">
       <header className="landing-header">
         <Link to="/" className="landing-brand" aria-label="Synthetix UX ana sayfa">
-          <span className="landing-brand__mark" aria-hidden="true">
-            SX
-          </span>
-          <span>Synthetix UX</span>
+          <BrandLogo />
         </Link>
         <div className="landing-theme-switch" role="group" aria-label="Görünüm tercihi">
           <button

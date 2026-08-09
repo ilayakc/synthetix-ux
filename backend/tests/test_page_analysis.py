@@ -325,7 +325,10 @@ async def test_process_analysis_success_stores_versioned_snapshot_and_redacts(
         "contrast_candidates",
         "accessibility_precheck",
         "warnings",
+        "visual_attention_algorithm_version",
+        "synthetic_attention_estimate",
     }
+    assert analysis.features["synthetic_attention_estimate"]["cells"]
     forbidden_substrings = ("html", "cookie", "token", "form_value", "password")
     features_repr = str(analysis.features).lower()
     for forbidden in forbidden_substrings:

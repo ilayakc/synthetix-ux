@@ -13,6 +13,6 @@ export interface StepProps {
 
 export const TEST_TYPE_LABELS: Record<string, string> = {
   existing_site_basic_ux: "Mevcut site: temel UX testi",
-  ab_comparison: "A/B karşılaştırma: mevcut ve yeni tasarım",
+  ab_comparison: "A/B testi: aynı sitenin orijinal ve değiştirilmiş tasarımı",
   accessibility_precheck: "Erişilebilirlik ön kontrolü",
 };

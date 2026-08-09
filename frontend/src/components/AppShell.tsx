@@ -19,10 +19,11 @@ export default function AppShell({ children }: AppShellProps) {
       <Topbar isMenuOpen={isMenuOpen} onToggleMenu={() => setIsMenuOpen((open) => !open)} />
       <div className="app-body">
         <Sidebar isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
-        <div
+        <button
+          type="button"
           className={`sidebar-backdrop${isMenuOpen ? " is-open" : ""}`}
+          aria-label="Menü dışına tıkla ve kapat"
           onClick={() => setIsMenuOpen(false)}
-          aria-hidden="true"
         />
         <main id="main-content" className="main-content" tabIndex={-1}>
           {children}

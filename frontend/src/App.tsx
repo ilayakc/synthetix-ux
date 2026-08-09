@@ -20,6 +20,9 @@ import Login from "./pages/auth/Login";
 import Register from "./pages/auth/Register";
 import ResetPassword from "./pages/auth/ResetPassword";
 import Home from "./pages/Home";
+import AdminDashboard from "./pages/AdminDashboard";
+import AdminSettings from "./pages/AdminSettings";
+import AdminProtectedLayout from "./components/AdminProtectedLayout";
 
 export default function App() {
   useRouteChangeLogging();
@@ -46,6 +49,15 @@ export default function App() {
       <Route path="/register" element={<Navigate to="/kayit" replace />} />
       <Route path="/sifremi-unuttum" element={<ForgotPassword />} />
       <Route path="/sifre-sifirla" element={<ResetPassword />} />
+      <Route path="/yonetici-girisi" element={<Navigate to="/giris?tip=yonetici" replace />} />
+
+      <Route element={<AdminProtectedLayout />}>
+        <Route path="/yonetim" element={<AdminDashboard section="overview" />} />
+        <Route path="/yonetim/chip-talepleri" element={<AdminDashboard section="topups" />} />
+        <Route path="/yonetim/ai-islemleri" element={<AdminDashboard section="ai" />} />
+        <Route path="/yonetim/islem-kayitlari" element={<AdminDashboard section="audit" />} />
+        <Route path="/yonetim/ayarlar" element={<AdminSettings />} />
+      </Route>
 
       <Route element={<ProtectedLayout />}>
         <Route path="/projeler" element={<Projects />} />

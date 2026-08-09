@@ -14,6 +14,7 @@ import {
 } from "../api/client";
 import { logger } from "../lib/logger";
 import { personaIntegrityStatus } from "../lib/personaIntegrity";
+import { normalizeTurkishSystemCopy } from "../lib/turkishCopy";
 
 const NON_RETRYABLE_ERROR_MESSAGE =
   "Bu çalışma, seçili tasarım kaynağıyla uyumsuz bir analiz modülü nedeniyle tamamlanamadı ve yeniden denenemez.";
@@ -73,7 +74,7 @@ function SimulationResultCard({ run }: { run: SimulationRunResponse }) {
           metric={result.metrics.misclick_probability}
         />
         <UncertaintyMetricCard
-          label="Terk (abandonment) olasılığı"
+          label="Terk etme olasılığı"
           metric={result.metrics.abandonment_probability}
         />
         <div className="result-metric">
@@ -110,15 +111,19 @@ function SimulationResultCard({ run }: { run: SimulationRunResponse }) {
                 Bölgesel tahmini ilgi: {region.region_label}
               </span>
               <span className="result-metric__value">{region.estimate}</span>
-              <span className="result-metric__range">{region.disclaimer}</span>
+              <span className="result-metric__range">
+                {normalizeTurkishSystemCopy(region.disclaimer)}
+              </span>
             </div>
           ))}
         </div>
       )}
 
-      <span className="not-real-data-tag">{run.not_real_user_data_label}</span>
+      <span className="not-real-data-tag">
+        {normalizeTurkishSystemCopy(run.not_real_user_data_label)}
+      </span>
       <p className="methodology-note">
-        {result.disclaimer} Metodoloji: {run.methodology_reference}
+        {normalizeTurkishSystemCopy(result.disclaimer)}
       </p>
     </div>
   );
@@ -360,11 +365,25 @@ function SimulationCard({
   // ile her zaman ayni sekilde basarisiz olacagini bildigi durumlarda
   // (ör. ekran goruntusu kaynagiyla `network_device_test`) false doner.
   const isNonRetryableFailure = isFailed && !run.retryable;
+  const normalizedProgressMessage = run.progress_message
+    ? normalizeTurkishSystemCopy(run.progress_message)
+    : null;
+  const normalizedError = run.error ? normalizeTurkishSystemCopy(run.error) : null;
+  const shouldShowProgressMessage = Boolean(
+    normalizedProgressMessage &&
+      normalizedProgressMessage !== STATUS_LABELS[run.status] &&
+      normalizedProgressMessage !== normalizedError,
+  );
 
   return (
     <div className="simulation-card">
       <div className="simulation-card__header">
-        <h3 className="simulation-card__title">Çalıştırma {run.id.slice(0, 8)}</h3>
+        <div>
+          <h3 className="simulation-card__title">Simülasyon çalışması</h3>
+          <p className="simulation-card__meta">
+            Çalıştırma {run.id.slice(0, 8)} · {new Date(run.created_at).toLocaleString("tr-TR")}
+          </p>
+        </div>
         <div className="simulation-card__actions">
           <StatusBadge status={run.status} />
           {isActive && (
@@ -396,15 +415,27 @@ function SimulationCard({
           <div className="progress-bar__fill" style={{ width: `${run.progress_percent}%` }} />
         </div>
       )}
-      {run.progress_message && <p className="simulation-card__message">{run.progress_message}</p>}
+      {shouldShowProgressMessage && (
+        <p className="simulation-card__message">{normalizedProgressMessage}</p>
+      )}
       {run.error &&
         (isNonRetryableFailure ? (
           <p className="simulation-card__error">{NON_RETRYABLE_ERROR_MESSAGE}</p>
         ) : (
-          <p className="simulation-card__error">Hata: {run.error}</p>
+          <p className="simulation-card__error">
+            Hata: {normalizedError}
+          </p>
         ))}
 
-      {run.status === "succeeded" && <SimulationResultCard run={run} />}
+      {run.status === "succeeded" && (
+        <details className="simulation-result-details">
+          <summary>Sonuç özetini görüntüle</summary>
+          <SimulationResultCard run={run} />
+          <Link to="/raporlar" className="btn-secondary simulation-report-link">
+            İlgili raporu bul →
+          </Link>
+        </details>
+      )}
 
       {/* Run durumundan bagimsiz: personalar launch aninda, motor sonucundan
           bagimsiz olarak zaten olusturulmustur (bkz. GET .../personas). */}
@@ -415,6 +446,9 @@ function SimulationCard({
 
 export default function Simulations() {
   const [runs, setRuns] = useState<SimulationRunResponse[] | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "succeeded" | "failed">(
+    "all",
+  );
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -453,6 +487,20 @@ export default function Simulations() {
     }
   };
 
+  const visibleRuns =
+    runs?.filter((run) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "active") return run.status === "queued" || run.status === "running";
+      return run.status === statusFilter;
+    }) ?? [];
+  const counts = {
+    all: runs?.length ?? 0,
+    active:
+      runs?.filter((run) => run.status === "queued" || run.status === "running").length ?? 0,
+    succeeded: runs?.filter((run) => run.status === "succeeded").length ?? 0,
+    failed: runs?.filter((run) => run.status === "failed").length ?? 0,
+  };
+
   return (
     <section aria-labelledby="simulations-heading">
       <h1 id="simulations-heading" className="page-heading">
@@ -463,6 +511,29 @@ export default function Simulations() {
         edebilirsiniz.
       </p>
 
+      {runs && runs.length > 0 && (
+        <div className="simulation-toolbar" aria-label="Simülasyon filtreleri">
+          {(
+            [
+              ["all", "Tümü"],
+              ["active", "Devam eden"],
+              ["succeeded", "Tamamlanan"],
+              ["failed", "Başarısız"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`report-tab${statusFilter === value ? " report-tab--active" : ""}`}
+              aria-pressed={statusFilter === value}
+              onClick={() => setStatusFilter(value)}
+            >
+              {label} ({counts[value]})
+            </button>
+          ))}
+        </div>
+      )}
+
       {error && <p className="page-placeholder">{error}</p>}
 
       {runs && runs.length === 0 && (
@@ -471,9 +542,15 @@ export default function Simulations() {
         </div>
       )}
 
-      {runs && runs.length > 0 && (
+      {runs && runs.length > 0 && visibleRuns.length === 0 && (
+        <div className="empty-state">
+          <p>Bu durumda bir simülasyon bulunmuyor.</p>
+        </div>
+      )}
+
+      {visibleRuns.length > 0 && (
         <div className="simulation-list">
-          {runs.map((run) => (
+          {visibleRuns.map((run) => (
             <SimulationCard key={run.id} run={run} onCancel={handleCancel} onRetry={handleRetry} />
           ))}
         </div>

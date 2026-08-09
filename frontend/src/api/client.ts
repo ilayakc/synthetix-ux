@@ -301,7 +301,7 @@ export function getChipPackages(): Promise<ChipPackageListResponse> {
   return apiFetch<ChipPackageListResponse>("/api/billing/chip-packages");
 }
 
-export type TopUpRequestStatus = "pending";
+export type TopUpRequestStatus = "pending" | "approved" | "rejected";
 
 export interface TopUpRequestResponse {
   id: string;
@@ -309,6 +309,8 @@ export interface TopUpRequestResponse {
   chip_amount: number;
   status: TopUpRequestStatus;
   created_at: string;
+  reviewed_at: string | null;
+  review_note: string | null;
 }
 
 export function createTopUpRequest(packageKey: string): Promise<TopUpRequestResponse> {
@@ -320,6 +322,86 @@ export function createTopUpRequest(packageKey: string): Promise<TopUpRequestResp
 
 export function listTopUpRequests(): Promise<TopUpRequestResponse[]> {
   return apiFetch<TopUpRequestResponse[]>("/api/billing/topup-requests");
+}
+
+// --- Platform yönetimi -------------------------------------------------------
+
+export interface AdminSummaryResponse {
+  organization_count: number;
+  user_count: number;
+  pending_topup_count: number;
+  failed_ai_pipeline_count: number;
+}
+
+export interface AdminTopUpRequestResponse {
+  id: string;
+  organization_id: string;
+  organization_name: string;
+  requested_by_email: string;
+  requested_by_display_name: string | null;
+  package_key: string;
+  chip_amount: number;
+  status: TopUpRequestStatus;
+  created_at: string;
+  reviewed_at: string | null;
+  reviewed_by_email: string | null;
+  review_note: string | null;
+}
+
+export interface AdminPlatformSettingsResponse {
+  environment: string;
+  ai_report: {
+    enabled: boolean;
+    provider: "disabled" | "mock" | "openai" | "ollama";
+    provider_ready: boolean;
+    model: string | null;
+  };
+  chip_topups: {
+    review_mode: "manual_admin_review";
+    approval_credits_once: boolean;
+    rejection_note_required: boolean;
+  };
+  security: {
+    secure_cookies: boolean;
+    access_token_ttl_minutes: number;
+    refresh_token_ttl_days: number;
+    login_rate_limit_max_attempts: number;
+    login_rate_limit_window_minutes: number;
+  };
+  operations: {
+    log_level: string;
+    analyzer_timeout_seconds: number;
+    report_screenshot_retention_days: number;
+  };
+}
+
+export function getAdminSummary(): Promise<AdminSummaryResponse> {
+  return apiFetch<AdminSummaryResponse>("/api/admin/summary");
+}
+
+export function getAdminPlatformSettings(): Promise<AdminPlatformSettingsResponse> {
+  return apiFetch<AdminPlatformSettingsResponse>("/api/admin/settings");
+}
+
+export function listAdminTopUpRequests(
+  status?: TopUpRequestStatus,
+): Promise<AdminTopUpRequestResponse[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  return apiFetch<AdminTopUpRequestResponse[]>(`/api/admin/topup-requests${query}`);
+}
+
+export function reviewAdminTopUpRequest(
+  requestId: string,
+  action: "approve" | "reject",
+  note?: string,
+): Promise<AdminTopUpRequestResponse> {
+  return apiFetch<AdminTopUpRequestResponse>(
+    `/api/admin/topup-requests/${encodeURIComponent(requestId)}/review`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action, note: note?.trim() || null }),
+    },
+  );
 }
 
 // --- Analiz modulu kataloğu (surumlu, salt okunur) -----------------------------
@@ -636,6 +718,10 @@ export interface WizardDraftResponse {
 
 export function createWizardDraft(): Promise<WizardDraftResponse> {
   return apiFetch<WizardDraftResponse>("/api/tests/drafts", { method: "POST" });
+}
+
+export function listWizardDrafts(): Promise<WizardDraftResponse[]> {
+  return apiFetch<WizardDraftResponse[]>("/api/tests/drafts");
 }
 
 export function getWizardDraft(draftId: string): Promise<WizardDraftResponse> {
@@ -970,6 +1056,8 @@ export interface ReportHeatmapSection {
   grid: Record<string, unknown>[] | null;
   disclaimer: string | null;
   regions?: ReportHeatmapRegion[] | null;
+  click_grid?: Record<string, unknown>[] | null;
+  click_regions?: ReportHeatmapRegion[] | null;
   visual_cells?: ReportVisualAttentionCell[] | null;
   algorithm_version?: string | null;
   image_width?: number | null;
@@ -986,6 +1074,16 @@ export type CtaOverlayClassification =
 export interface ReportCtaOverlayBox {
   classification: CtaOverlayClassification;
   label: string;
+  interaction_kind?:
+    | "form_action"
+    | "button"
+    | "content_link"
+    | "image_link"
+    | "navigation_action"
+    | "navigation_link"
+    | "pagination_control"
+    | "container_link"
+    | null;
   x: number;
   y: number;
   w: number;

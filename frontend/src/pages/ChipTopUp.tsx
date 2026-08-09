@@ -11,6 +11,8 @@ import {
 
 const STATUS_LABELS: Record<TopUpRequestResponse["status"], string> = {
   pending: "Beklemede",
+  approved: "Onaylandı",
+  rejected: "Reddedildi",
 };
 
 export default function ChipTopUp() {
@@ -63,8 +65,7 @@ export default function ChipTopUp() {
     try {
       await createTopUpRequest(selectedPackage);
       setSuccessMessage(
-        "Yükleme talebiniz kaydedildi. Chip bakiyeniz henüz değişmedi; gerçek ödeme sağlayıcısı " +
-          "entegrasyonu yakında aktif olacak ve talebiniz o zaman işleme alınacaktır.",
+        "Yükleme talebiniz yönetime iletildi. Talep onaylandığında Chip bakiyeniz otomatik güncellenecektir.",
       );
       loadRequests();
     } catch (err) {
@@ -80,8 +81,8 @@ export default function ChipTopUp() {
         Chip Yükle
       </h1>
       <p className="page-placeholder">
-        Bir Chip paketi seçip yükleme talebi gönderin. Ödeme sağlayıcısı henüz aktif değildir; talep
-        oluşturmak bakiyenizi değiştirmez.
+        Bir Chip paketi seçip yönetime yükleme talebi gönderin. Talep oluşturmak bakiyenizi hemen
+        değiştirmez; yönetici onayından sonra Chip hesabınıza eklenir.
       </p>
 
       {isLoading && <p className="page-placeholder">Yükleniyor…</p>}
@@ -141,6 +142,7 @@ export default function ChipTopUp() {
                     {packageNames.get(request.package_key) ?? "Paket bilgisi bulunamadı"}
                   </span>
                   <span>{STATUS_LABELS[request.status]}</span>
+                  {request.review_note && <span>Yönetici notu: {request.review_note}</span>}
                 </li>
               ))}
             </ul>

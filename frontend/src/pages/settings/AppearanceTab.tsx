@@ -8,10 +8,30 @@ interface AppearanceTabProps {
   disabled: boolean;
 }
 
-const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
-  { value: "system", label: "Sistem teması" },
-  { value: "light", label: "Açık tema" },
-  { value: "dark", label: "Koyu tema" },
+const THEME_OPTIONS: {
+  value: ThemePreference;
+  label: string;
+  title: string;
+  description: string;
+}[] = [
+  {
+    value: "system",
+    label: "Sistem teması",
+    title: "Sistem",
+    description: "Cihazınızın görünüm tercihini izler.",
+  },
+  {
+    value: "light",
+    label: "Açık tema",
+    title: "Açık",
+    description: "Aydınlık ve ferah bir görünüm kullanır.",
+  },
+  {
+    value: "dark",
+    label: "Koyu tema",
+    title: "Koyu",
+    description: "Düşük ışıkta daha rahat bir görünüm sunar.",
+  },
 ];
 
 export default function AppearanceTab({ draft, onChange, disabled }: AppearanceTabProps) {
@@ -25,26 +45,40 @@ export default function AppearanceTab({ draft, onChange, disabled }: AppearanceT
 
   return (
     <div>
-      <div className="wizard-field">
-        <label>Tema</label>
-        <div className="wizard-radio-group">
+      <div className="wizard-field settings-appearance-theme">
+        <div className="settings-appearance-theme__header">
+          <strong>Tema</strong>
+          <p>Size en rahat gelen panel görünümünü seçin.</p>
+        </div>
+        <div className="admin-theme-options" role="radiogroup" aria-label="Panel görünümü">
           {THEME_OPTIONS.map((option) => (
-            <label key={option.value} className="wizard-radio-option">
+            <label
+              key={option.value}
+              className={`admin-theme-option${draft.theme === option.value ? " is-selected" : ""}${disabled ? " is-disabled" : ""}`}
+            >
               <input
+                className="visually-hidden"
                 type="radio"
                 name="settings-theme"
                 value={option.value}
+                aria-label={option.label}
                 checked={draft.theme === option.value}
                 onChange={() => handleThemeChange(option.value)}
                 disabled={disabled}
-              />{" "}
-              {option.label}
+              />
+              <span className={`admin-theme-option__preview is-${option.value}`} aria-hidden="true">
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="admin-theme-option__copy">
+                <strong>{option.title}</strong>
+                <small>{option.description}</small>
+              </span>
+              <span className="admin-theme-option__check" aria-hidden="true" />
             </label>
           ))}
         </div>
-        <p className="wizard-field-hint">
-          "Sistem teması" işletim sisteminizin açık/koyu tercihini otomatik olarak izler.
-        </p>
       </div>
 
       <div className="wizard-field">
@@ -122,8 +156,8 @@ export default function AppearanceTab({ draft, onChange, disabled }: AppearanceT
         )}
 
         <p className="wizard-field-hint">
-          Bu tercihler yalnızca uygulama içi bildirim davranışını kontrol eder; e-posta sağlayıcısı henüz
-          bağlı olmadığı için e-posta gönderimi yapılmaz.
+          Bu tercihler yalnızca uygulama içi bildirim davranışını kontrol eder; e-posta sağlayıcısı
+          henüz bağlı olmadığı için e-posta gönderimi yapılmaz.
         </p>
       </div>
     </div>

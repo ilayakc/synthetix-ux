@@ -136,6 +136,9 @@ async def test_campaign_cta_and_attention_modules_are_persisted_in_result(
     # Mevcut "Sentetik dikkat tahmini" ısı haritasi bolumu bu alani okur
     # (bkz. app.routers.reports._build_heatmap).
     assert run.result["attention_grid"] == run.result["modules"]["synthetic_attention_estimate"]["grid"]
+    assert run.result["click_attention_grid"] == (
+        run.result["modules"]["synthetic_attention_estimate"]["click_grid"]
+    )
 
 
 async def test_no_modules_selected_produces_no_modules_key(session: AsyncSession, organization: Organization):

@@ -34,12 +34,17 @@ export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: S
   if (isAbComparison) {
     return (
       <div>
+        <p className="auth-notice">
+          A/B testi iki farklı şirketi karşılaştırmak için değil, aynı ürünün kontrollü bir tasarım
+          değişikliğini ölçmek içindir. Varyant A orijinal tasarım; Varyant B ise buton rengi, CTA
+          metni veya yerleşim gibi yalnızca ölçmek istediğiniz değişikliği içermelidir.
+        </p>
         <DesignSourcePicker
-          label="Tasarım A — Orijinal tasarım"
+          label="Varyant A — Orijinal tasarım"
           sourceType={payload.current_source_type}
           url={payload.current_url}
           assetId={payload.current_design_asset_id}
-          urlLabel="Mevcut tasarım URL'si"
+          urlLabel="Orijinal sayfanın URL'si"
           urlFieldId="wizard-current-url"
           urlError={fieldErrors.current_url}
           assetError={fieldErrors.current_design_asset_id}
@@ -52,7 +57,7 @@ export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: S
         {payload.current_source_type === "screenshot" && (
           <ScreenshotCtaSelector
             slot="current"
-            label="Tasarım A"
+            label="Varyant A"
             draftId={draftId ?? null}
             assetId={payload.current_design_asset_id}
             annotation={payload.current_cta_annotation}
@@ -66,11 +71,11 @@ export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: S
           </p>
         )}
         <DesignSourcePicker
-          label="Tasarım B — Alternatif tasarım"
+          label="Varyant B — Aynı sitenin değiştirilmiş tasarımı"
           sourceType={effectiveNewSourceType}
           url={payload.new_url}
           assetId={legacyUnacceptedAiDraft ? undefined : payload.new_design_asset_id}
-          urlLabel="Yeni tasarım URL'si"
+          urlLabel="Değiştirilmiş sayfanın URL'si"
           urlFieldId="wizard-new-url"
           urlError={fieldErrors.new_url}
           assetError={fieldErrors.new_design_asset_id}
@@ -83,7 +88,7 @@ export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: S
         {effectiveNewSourceType === "screenshot" && (
           <ScreenshotCtaSelector
             slot="new"
-            label="Tasarım B"
+            label="Varyant B"
             draftId={draftId ?? null}
             assetId={payload.new_design_asset_id}
             annotation={payload.new_cta_annotation}

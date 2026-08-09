@@ -517,6 +517,7 @@ async def process_run(session: AsyncSession, run: SimulationRun) -> None:
         attention = module_results.get("synthetic_attention_estimate")
         if attention is not None:
             result["attention_grid"] = attention["grid"]
+            result["click_attention_grid"] = attention.get("click_grid")
 
     # Paket 4B/4 Final: sonucun gercek PageAnalysis verisinden mi (DOM veya
     # gorsel/OpenCV) yoksa legacy sha256(url) yer tutucusundan mi turedigi

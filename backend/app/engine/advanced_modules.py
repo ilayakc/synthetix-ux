@@ -364,6 +364,36 @@ def run_synthetic_attention_estimate(
         regions.append({"key": key, "label": label, "attention_share": share})
         grid.append({"key": key, "label": label, "score": share})
 
+    # Ayri bir sentetik tiklama-ilgisi katmani uretilir. Bu katman gercek
+    # tiklama kaydi degildir; etkileşimli alan, ilk ekran ve CTA sayisi gibi
+    # sayfa yapisi ozelliklerini agirliklandiran deterministik bir heuristiktir.
+    click_base_weights = {
+        "ust_navigasyon": 1.0 + min(page.primary_cta_count, 5) * 0.04,
+        "hero_baslik": 0.65 + heading_bonus,
+        "birincil_cta": 2.25 + fold_bonus + min(page.primary_cta_count, 5) * 0.08,
+        "govde_metni": 0.55 + min(body_bonus, 0.25),
+        "alt_bilgi": 0.25,
+    }
+    click_seed_material = f"{page.input_hash}:click-attention"
+    click_weights: dict[str, float] = {}
+    for index, (key, _label) in enumerate(_ATTENTION_REGIONS):
+        base = click_base_weights[key]
+        jitter = (
+            (_seeded_unit_value(click_seed_material, index) - 0.5)
+            * 2
+            * rules.attention_jitter_ratio
+        )
+        click_weights[key] = max(0.01, base * (1 + jitter))
+    click_total = sum(click_weights.values())
+    click_grid = [
+        {
+            "key": key,
+            "label": label,
+            "score": round(click_weights[key] / click_total, 4),
+        }
+        for key, label in _ATTENTION_REGIONS
+    ]
+
     result = {
         "module_key": "synthetic_attention_estimate",
         "engine_version": ADVANCED_MODULES_ENGINE_VERSION,
@@ -376,6 +406,8 @@ def run_synthetic_attention_estimate(
         "source_reference": identity.source_reference,
         "regions": regions,
         "grid": grid,
+        "gaze_grid": grid,
+        "click_grid": click_grid,
         "disclaimer": SYNTHETIC_ATTENTION_DISCLAIMER,
         "methodology_reference": "docs/methodology.md",
     }

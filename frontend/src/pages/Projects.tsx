@@ -22,7 +22,7 @@ function ProjectCard({ project }: { project: ProjectResponse }) {
         {project.description?.trim() ? project.description : "Açıklama eklenmedi."}
       </p>
       <div className="project-card__footer">
-        <span className="chip-pill">{project.test_count} test</span>
+        <span className="chip-pill">{project.test_count} başlatılmış test</span>
       </div>
     </Link>
   );

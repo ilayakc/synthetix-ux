@@ -31,6 +31,8 @@ class ChipReservationStatus(str, enum.Enum):
 
 class ChipTopUpRequestStatus(str, enum.Enum):
     PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
 class Entitlement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -139,6 +141,9 @@ class ChipTopUpRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     requested_by_user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     package_key: Mapped[str] = mapped_column(String(100), nullable=False)
     chip_amount: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[ChipTopUpRequestStatus] = mapped_column(
@@ -146,3 +151,5 @@ class ChipTopUpRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         nullable=False,
         default=ChipTopUpRequestStatus.PENDING,
     )
+    review_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

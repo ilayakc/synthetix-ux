@@ -148,6 +148,15 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
+export function LogOutIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10 5H5.75A1.75 1.75 0 0 0 4 6.75v10.5C4 18.22 4.78 19 5.75 19H10" />
+      <path d="m15 8 4 4-4 4M19 12H9" />
+    </svg>
+  );
+}
+
 export function ShieldCheckIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

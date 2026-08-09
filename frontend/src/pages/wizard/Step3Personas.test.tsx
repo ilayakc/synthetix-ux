@@ -19,6 +19,7 @@ import {
   listPersonaPresets,
   previewPersonaSample,
 } from "../../api/client";
+import type { PersonaPresetResponse } from "../../api/client";
 
 const preset = {
   id: "builtin:general_web_users",
@@ -32,7 +33,7 @@ const preset = {
   created_at: null,
   updated_at: null,
   archived_at: null,
-};
+} satisfies PersonaPresetResponse;
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -67,6 +68,7 @@ describe("Step3Personas preset/boyut yukleme teshisi", () => {
     vi.mocked(listPersonaPresets).mockResolvedValue([preset]);
     vi.mocked(previewPersonaSample).mockResolvedValue({
       generator_version: "v1",
+      deterministic_seed: 1,
       distribution_snapshot: {},
       segments: [],
       total_count: 500,

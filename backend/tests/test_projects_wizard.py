@@ -292,6 +292,31 @@ def test_wizard_draft_persists_partial_payload_across_patches_and_resumes(client
     assert step2["payload"]["name"] == "Sepet akisi testi"
 
 
+def test_wizard_draft_listing_returns_only_current_organization_drafts(client):
+    _register(client)
+    project_a = _create_project(client)
+    draft_a = _create_draft(client)
+    _patch_draft(
+        client,
+        draft_a["id"],
+        {"project_id": project_a["id"], "name": "Yarim kalan test"},
+        current_step=3,
+    )
+    cookies_a = _snapshot_cookies(client)
+
+    client.cookies.clear()
+    _register(client)
+    _create_draft(client)
+
+    _restore_cookies(client, cookies_a)
+    response = client.get("/api/tests/drafts")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [draft_a["id"]]
+    assert response.json()[0]["current_step"] == 3
+    assert response.json()[0]["payload"]["project_id"] == project_a["id"]
+
+
 def test_wizard_invalid_url_syntax_is_rejected(client):
     _register(client)
     draft = _create_draft(client)

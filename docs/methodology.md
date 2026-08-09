@@ -241,9 +241,12 @@ birbirinin yerine sunulmaz.
   OLARAK gercek goz izleme (eye-tracking) verisi veya gercek kullanici
   dikkat davranisi DEGILDIR; yalnizca sayfa yapisindan/gorsel belirginlikten
   turetilmis bir heuristiktir (bkz. `SYNTHETIC_ATTENTION_DISCLAIMER`).
-  Ciktisi ayrica `SimulationRun.result["attention_grid"]` alanina kopyalanir
-  (rapor sayfasindaki mevcut "Sentetik dikkat tahmini" ısı haritasi
-  bolumunun veri kaynagi budur).
+  Motor iki ayri normalize dagilim saklar: `attention_grid`/`gaze_grid`
+  gorsel belirginlik ve yerlesimden turetilen **sentetik goz odagi**,
+  `click_attention_grid`/`click_grid` ise CTA sayisi, ilk ekran konumu ve
+  etkilesimli alan agirliklarindan turetilen **sentetik tiklama ilgisi**dir.
+  Ikincisi de gercek tiklama kaydi veya analitik verisi degildir. Rapor bu
+  katmanlari ayri secenekler olarak sunar ve ikisinde de bu siniri aciklar.
 
 **Chip/hata iliskisi**: uc modulden herhangi biri kurtarilamaz bir hatayla
 basarisiz olursa (`ModuleInputError`/`ModuleProcessingError`) TUM run

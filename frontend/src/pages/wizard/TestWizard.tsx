@@ -119,6 +119,7 @@ export default function TestWizard() {
   const [draftStatus, setDraftStatus] = useState<"draft" | "launched" | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [banner, setBanner] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -156,6 +157,8 @@ export default function TestWizard() {
   // --- Taslagi yukle veya olustur (sayfa yenilenince kaybolmamasi icin URL'de tutulur) ---
   useEffect(() => {
     let cancelled = false;
+    hydrated.current = false;
+    setLoadError(null);
 
     async function init() {
       try {
@@ -229,7 +232,7 @@ export default function TestWizard() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftId]);
+  }, [draftId, loadAttempt]);
 
   useEffect(() => {
     getUsageSummary()
@@ -459,7 +462,21 @@ export default function TestWizard() {
   }
 
   if (loadError) {
-    return <p className="auth-error">{loadError}</p>;
+    return (
+      <div className="dashboard-error" role="alert">
+        <p>{loadError}</p>
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => {
+            setIsLoading(true);
+            setLoadAttempt((value) => value + 1);
+          }}
+        >
+          Tekrar dene
+        </button>
+      </div>
+    );
   }
 
   if (draftStatus === "launched" && launchResult) {

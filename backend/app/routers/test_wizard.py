@@ -82,6 +82,26 @@ async def create_draft(
     return _to_response(draft)
 
 
+@router.get("", response_model=list[DraftResponse])
+async def list_drafts(
+    organization_id: uuid.UUID = Depends(get_organization_id),
+    session: AsyncSession = Depends(get_session),
+) -> list[DraftResponse]:
+    """Organizasyonun henüz başlatılmamış taslaklarını son güncellenene göre döndürür."""
+
+    result = await session.execute(
+        select(TestWizardDraft)
+        .where(
+            TestWizardDraft.organization_id == organization_id,
+            TestWizardDraft.status == TestWizardDraftStatus.DRAFT,
+        )
+        .order_by(TestWizardDraft.updated_at.desc())
+    )
+    drafts = result.scalars().all()
+    await session.commit()
+    return [_to_response(draft) for draft in drafts]
+
+
 @router.get("/{draft_id}", response_model=DraftResponse)
 async def get_draft(
     draft_id: uuid.UUID,

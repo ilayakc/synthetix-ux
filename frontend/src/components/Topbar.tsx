@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { getUsageSummary } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import { ChipCoinIcon, CloseIcon, MenuIcon } from "./icons";
+import { ChipCoinIcon, CloseIcon, LogOutIcon, MenuIcon } from "./icons";
+import BrandLogo from "./BrandLogo";
 
 interface TopbarProps {
   isMenuOpen: boolean;
@@ -49,7 +50,7 @@ export default function Topbar({ isMenuOpen, onToggleMenu }: TopbarProps) {
         {isMenuOpen ? <CloseIcon /> : <MenuIcon />}
       </button>
 
-      <span className="topbar__brand">Synthetix UX</span>
+      <BrandLogo className="topbar__brand" />
 
       <div className="topbar__actions">
         {chipBalance !== null && (
@@ -64,9 +65,19 @@ export default function Topbar({ isMenuOpen, onToggleMenu }: TopbarProps) {
             <span className="topbar__avatar" aria-hidden="true">
               {initial}
             </span>
-            <span className="topbar__org">{session.organization_name}</span>
-            <button type="button" className="topbar__logout" onClick={handleLogout}>
-              Çıkış yap
+            <span className="topbar__identity">
+              <strong>{session.display_name}</strong>
+              <small>{session.organization_name}</small>
+            </span>
+            <button
+              type="button"
+              className="topbar__logout"
+              aria-label="Çıkış yap"
+              title="Çıkış yap"
+              onClick={handleLogout}
+            >
+              <LogOutIcon />
+              <span>Çıkış yap</span>
             </button>
           </div>
         )}

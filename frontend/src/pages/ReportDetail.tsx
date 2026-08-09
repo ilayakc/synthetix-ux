@@ -1,8 +1,7 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ApiError,
-  type AIExplanationResponse,
   type AIPipelineStatusResponse,
   type CtaOverlayClassification,
   type ReportAbComparison,
@@ -15,12 +14,12 @@ import {
   type ReportHeatmapSection,
   type ReportNetworkDevice,
   type ReportVisualAttentionCell,
-  generateReportAiExplanation,
   getAiPipelineStatus,
   getReport,
   getReportExportUrl,
   getReportHeatmapScreenshotUrl,
 } from "../api/client";
+import { calibrationStatusLabel, normalizeTurkishSystemCopy } from "../lib/turkishCopy";
 import AiReportTab from "./AiReportTab";
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
@@ -283,6 +282,19 @@ const FINDING_COPY: Record<string, { title: string; action: string }> = {
     title: "CTA görünürlüğünü sadeleştirin",
     action: "Sayfadaki birincil CTA sayısını azaltarak dikkatin dağılmasını önleyin.",
   },
+  too_many_ctas: {
+    title: "CTA sayısını azaltın",
+    action:
+      "Birincil eylemi öne çıkarın; ikincil bağlantıları görsel olarak geri plana alarak karar yükünü azaltın.",
+  },
+  cta_not_above_fold: {
+    title: "Birincil CTA'yı ilk ekranda gösterin",
+    action: "Kullanıcının ana eylemi kaydırma yapmadan görebileceği bir konuma taşıyın.",
+  },
+  low_contrast: {
+    title: "CTA kontrastını güçlendirin",
+    action: "CTA metni, buton ve arka plan arasındaki görsel farkı artırın.",
+  },
 };
 
 interface CombinedFinding {
@@ -296,7 +308,17 @@ function collectFindings(report: ReportDetailResponse): CombinedFinding[] {
     ...report.critical_findings,
     ...(report.campaign_cta?.message_clarity_findings ?? []),
   ];
-  return combined.filter((finding) => finding.key !== "no_threshold_triggered");
+  const seen = new Set<string>();
+  return combined.map((finding) => ({
+    ...finding,
+    text: normalizeTurkishSystemCopy(finding.text),
+  })).filter((finding) => {
+    if (finding.key === "no_threshold_triggered") return false;
+    const identity = finding.key;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
 }
 
 function TopFindingsSection({ report }: { report: ReportDetailResponse }) {
@@ -307,7 +329,7 @@ function TopFindingsSection({ report }: { report: ReportDetailResponse }) {
   return (
     <section className="report-section" aria-labelledby="report-top-findings-heading">
       <h2 id="report-top-findings-heading" className="report-section__heading">
-        Öncelikli bulgular
+        Kritik bulgular ve öneriler
       </h2>
       {findings.length === 0 ? (
         <p className="report-section__intro">
@@ -505,7 +527,7 @@ function PersonaSegmentsSection({ report }: { report: ReportDetailResponse }) {
 // takibi"/"kullanicilar buraya bakti" gibi yasakli iddialar KESINLIKLE
 // kullanilmaz.
 const HEATMAP_VISUAL_DISCLAIMER =
-  "Renkli katmanlar algoritmanın tahmini görsel belirginlik dağılımını gösterir. Gerçek göz takibi veya tıklama verisi değildir.";
+  "Isı haritasında yeşil düşük, sarı artan, kırmızı ise en yüksek tahmini yoğunluğu gösterir. Sonuçlar gerçek kullanıcı tıklaması veya göz takibi değil; sayfa yapısından üretilen sentetik tahminlerdir.";
 
 const CTA_SHARED_DISCLAIMER =
   "CTA adayları piksel veya DOM özelliklerinden türetilir. Sizin seçtiğiniz CTA ayrıca işaretlenir.";
@@ -520,11 +542,11 @@ const HEATMAP_LEVEL_LABELS: Record<ReportHeatmapLevel, string> = {
   high: "Yüksek",
 };
 
-// Soguk (dusuk) -> sari/turuncu (orta) -> kirmizi (yuksek); renk TEK BASINA
+// Yesil (dusuk) -> sari/turuncu (orta) -> kirmizi (yuksek); renk TEK BASINA
 // anlam tasimaz, her zaman metin etiketiyle (HEATMAP_LEVEL_LABELS) birlikte
 // gosterilir (bkz. erisilebilirlik gereksinimi).
 const HEATMAP_LEVEL_COLORS: Record<ReportHeatmapLevel, string> = {
-  low: "37, 99, 235",
+  low: "34, 197, 94",
   medium: "217, 119, 6",
   high: "220, 38, 38",
 };
@@ -667,8 +689,11 @@ function VisualAttentionAccessibleTable({
   );
 }
 
-function HeatmapLegend() {
+type AttentionMode = "click" | "gaze";
+
+function HeatmapLegend({ mode }: { mode: AttentionMode }) {
   const levels: ReportHeatmapLevel[] = ["low", "medium", "high"];
+  const suffix = mode === "click" ? "beklenen tıklama" : "görsel odak";
   return (
     <ul className="heatmap-legend">
       {levels.map((level) => (
@@ -678,7 +703,7 @@ function HeatmapLegend() {
             style={{ backgroundColor: `rgba(${HEATMAP_LEVEL_COLORS[level]}, 0.55)` }}
             aria-hidden="true"
           />
-          {HEATMAP_LEVEL_LABELS[level]} sentetik dikkat payı
+          {HEATMAP_LEVEL_LABELS[level]} {suffix}
         </li>
       ))}
     </ul>
@@ -687,26 +712,42 @@ function HeatmapLegend() {
 
 function HeatmapRegionMarker({
   region,
-  layerVisible,
+  mode,
 }: {
   region: ReportHeatmapRegion;
-  layerVisible: boolean;
+  mode: AttentionMode;
 }) {
   if (!region.box) return null;
   const color = HEATMAP_LEVEL_COLORS[region.level];
-  const accessibleLabel = `${region.label}: tahmini görsel yoğunluk %${Math.round(region.score * 100)} (${HEATMAP_LEVEL_LABELS[region.level]})`;
+  const opacity = Math.min(0.92, 0.36 + region.score * 1.7);
+  const isClick = mode === "click";
+  // DOM kutuları çoğu zaman çok yatay ve incedir (ör. navigasyon veya buton).
+  // Kutuyu doğrudan boyamak çizgi görünümü oluşturur. Merkez koordinatını
+  // koruyup boyutu sınırlayarak örneklerdeki okunabilir, yumuşak sıcak noktayı üretiriz.
+  const width = isClick
+    ? Math.min(20, Math.max(8, region.box.width_pct * 1.8))
+    : Math.min(38, Math.max(18, region.box.width_pct * 0.72));
+  const height = isClick
+    ? Math.min(6, Math.max(2.25, region.box.height_pct * 2.2))
+    : Math.min(18, Math.max(9, region.box.height_pct * 4));
+  const centerX = region.box.x_pct + region.box.width_pct / 2;
+  const centerY = region.box.y_pct + region.box.height_pct / 2;
+  const left = Math.max(0, Math.min(100 - width, centerX - width / 2));
+  const top = Math.max(0, Math.min(100 - height, centerY - height / 2));
+  const metricLabel = isClick ? "beklenen tıklama payı" : "görsel odak payı";
+  const accessibleLabel = `${region.label}: ${metricLabel} %${Math.round(region.score * 100)} (${HEATMAP_LEVEL_LABELS[region.level]})`;
   return (
     <button
       type="button"
-      className="heatmap-region"
+      className={`heatmap-region heatmap-region--${mode}`}
       style={{
-        left: `${region.box.x_pct}%`,
-        top: `${region.box.y_pct}%`,
-        width: `${region.box.width_pct}%`,
-        height: `${region.box.height_pct}%`,
-        backgroundColor: `rgba(${color}, 0.38)`,
-        borderColor: `rgba(${color}, 0.95)`,
-        visibility: layerVisible ? "visible" : "hidden",
+        left: `${left}%`,
+        top: `${top}%`,
+        width: `${width}%`,
+        height: `${height}%`,
+        background: `radial-gradient(ellipse at center, rgba(${color}, ${opacity}) 0%, rgba(${color}, ${opacity * 0.9}) 28%, rgba(${color}, ${opacity * 0.58}) 58%, rgba(${color}, 0) 100%)`,
+        borderColor: "transparent",
+        boxShadow: `0 0 ${isClick ? 12 : 18}px rgba(${color}, ${region.level === "high" ? 0.9 : 0.68}), 0 0 ${isClick ? 28 : 42}px rgba(${color}, ${region.level === "high" ? 0.62 : 0.46})`,
       }}
       aria-label={accessibleLabel}
       title={accessibleLabel}
@@ -714,18 +755,113 @@ function HeatmapRegionMarker({
   );
 }
 
+// Tıklama haritası semantik başlık/gövde bölgelerine çizilmez. Gerçek DOM
+// koordinatı bulunan buton ve bağlantı adayları önem büyüklüğü, merkezilik ve
+// ilk ekran konumuyla sıralanır. Böylece bütün CTA'ların toplam skoru tek bir
+// `buttons[0]` kutusuna aktarılmaz ve başlık gibi tıklanamaz alanlar kırmızı
+// gösterilmez.
+function deriveInteractiveClickRegions(
+  boxes: ReportCtaOverlaySection["boxes"],
+): ReportHeatmapRegion[] {
+  const candidates = dedupeCtaBoxes(boxes)
+    .filter(
+      (box) =>
+        Number.isFinite(box.x) &&
+        Number.isFinite(box.y) &&
+        Number.isFinite(box.w) &&
+        Number.isFinite(box.h) &&
+        box.w > 0 &&
+        box.h > 0,
+    )
+    .map((box) => {
+      const area = Math.max(0.000001, box.w * box.h);
+      const aspect = box.h > 0 ? box.w / box.h : Number.POSITIVE_INFINITY;
+      const inferredKind =
+        box.interaction_kind ??
+        (box.w > 0.55 || aspect > 16
+          ? "container_link"
+          : box.w <= 0.011 && box.h <= 0.016
+            ? "pagination_control"
+            : box.y < 0.14
+              ? "navigation_link"
+              : "content_link");
+      const kindBias =
+        {
+          form_action: 4.2,
+          button: 3.2,
+          content_link: 1.7,
+          image_link: 1.25,
+          navigation_action: 1.15,
+          navigation_link: 0.55,
+          pagination_control: 0.18,
+          container_link: 0,
+        }[inferredKind] ?? 1;
+      const confidence =
+        {
+          form_action: 1,
+          button: 0.9,
+          content_link: 0.7,
+          image_link: 0.55,
+          navigation_action: 0.45,
+          navigation_link: 0.3,
+          pagination_control: 0.12,
+          container_link: 0,
+        }[inferredKind] ?? 0.5;
+      const centerX = box.x + box.w / 2;
+      const centerDistance = Math.min(1, Math.abs(centerX - 0.5) / 0.5);
+      const centerBias = 1.15 - centerDistance * 0.35;
+      const headerBias = box.y < 0.14 ? 0.72 : 1;
+      const aboveFoldBias = box.y >= 0.14 && box.y < 0.65 ? 1.12 : 1;
+      const confirmedBias = box.classification === "user_confirmed_cta" ? 1.35 : 1;
+      return {
+        box,
+        confidence,
+        weight:
+          Math.min(0.08, Math.sqrt(area)) *
+          kindBias *
+          centerBias *
+          headerBias *
+          aboveFoldBias *
+          confirmedBias,
+      };
+    })
+    .filter((candidate) => candidate.weight > 0)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 6);
+
+  const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
+  if (totalWeight <= 0) return [];
+
+  return candidates.map((candidate, index) => {
+    const score = candidate.weight / totalWeight;
+    return {
+      key: `interactive-${index}`,
+      label:
+        candidate.box.classification === "user_confirmed_cta"
+          ? "Sizin seçtiğiniz CTA"
+          : index === 0
+            ? "Birincil etkileşim alanı"
+            : `Etkileşim alanı ${index + 1}`,
+      score,
+      // Goreli pay tek basina guven gostergesi degildir: sayfada yalnizca iki
+      // carousel oku varsa her biri yuksek pay alabilir ama kirmizi CTA olmaz.
+      level: scoreToLevel(score * candidate.confidence),
+      box: {
+        x_pct: candidate.box.x * 100,
+        y_pct: candidate.box.y * 100,
+        width_pct: candidate.box.w * 100,
+        height_pct: candidate.box.h * 100,
+      },
+    };
+  });
+}
+
 // Piksel-tabanli gercek OpenCV grid hucresi (screenshot/AI kaynagi) -
 // bolge-tabanli `HeatmapRegionMarker`dan (5 isimli DOM bolgesi) BILEREK
 // AYRI bir bilesendir: farkli veri sekli (yogunluk grid'i), etkilesimli
 // DEGIL (48 hucreyi tek tek Tab ile gezmek erisilebilirligi bozar -
 // erisilebilir alternatif VisualAttentionAccessibleTable'dir).
-function VisualAttentionCellMarker({
-  cell,
-  layerVisible,
-}: {
-  cell: ReportVisualAttentionCell;
-  layerVisible: boolean;
-}) {
+function VisualAttentionCellMarker({ cell }: { cell: ReportVisualAttentionCell }) {
   const level = visualCellLevel(cell.intensity);
   const color = HEATMAP_LEVEL_COLORS[level];
   return (
@@ -737,10 +873,104 @@ function VisualAttentionCellMarker({
         top: `${cell.y * 100}%`,
         width: `${cell.w * 100}%`,
         height: `${cell.h * 100}%`,
-        backgroundColor: `rgba(${color}, ${0.15 + cell.intensity * 0.45})`,
-        visibility: layerVisible ? "visible" : "hidden",
+        background: `radial-gradient(ellipse at center, rgba(${color}, ${0.3 + cell.intensity * 0.66}) 0%, rgba(${color}, ${0.18 + cell.intensity * 0.46}) 42%, rgba(${color}, ${0.08 + cell.intensity * 0.24}) 68%, rgba(${color}, 0) 100%)`,
+        boxShadow: `0 0 18px rgba(${color}, ${0.4 + cell.intensity * 0.42}), 0 0 34px rgba(${color}, ${0.24 + cell.intensity * 0.3})`,
       }}
     />
+  );
+}
+
+function HeatmapInsights({
+  regions,
+  mode,
+  ctaCount,
+}: {
+  regions: ReportHeatmapRegion[];
+  mode: AttentionMode;
+  ctaCount: number;
+}) {
+  const headingId = useId();
+  const ranked = [...regions].sort((a, b) => b.score - a.score);
+  const strongest = ranked[0];
+  if (!strongest) return null;
+  const topTwoShare = ranked.slice(0, 2).reduce((sum, region) => sum + region.score, 0);
+  const metric = mode === "click" ? "tıklama ilgisi" : "görsel odak";
+
+  return (
+    <section className="heatmap-insights" aria-labelledby={headingId}>
+      <h4 id={headingId} className="heatmap-insights__heading">
+        Harita ne anlatıyor?
+      </h4>
+      <div className="heatmap-insights__grid">
+        <article className="heatmap-insight-card heatmap-insight-card--primary">
+          <span className="heatmap-insight-card__eyebrow">En güçlü sinyal</span>
+          <strong>{strongest.label}</strong>
+          <p>
+            Bu bölgenin göreli sentetik {metric} payı %{Math.round(strongest.score * 100)}.
+            Bu değer gerçek bir tıklanma veya bakış oranı değildir.
+          </p>
+        </article>
+        <article className="heatmap-insight-card">
+          <span className="heatmap-insight-card__eyebrow">Dağılım</span>
+          <strong>
+            {topTwoShare >= 0.55 ? "Belirli alanlarda yoğun" : "Sayfaya daha dengeli yayılmış"}
+          </strong>
+          <p>
+            {topTwoShare >= 0.55
+              ? `İlk iki bölge göreli sentetik ${metric} payının %${Math.round(topTwoShare * 100)} kadarını topluyor.`
+              : "Tek bir bölge diğer tüm alanları baskılamıyor."}
+          </p>
+        </article>
+        {ctaCount > 0 && (
+          <article className="heatmap-insight-card heatmap-insight-card--cta">
+            <span className="heatmap-insight-card__eyebrow">CTA kontrolü</span>
+            <strong>{ctaCount} olası etkileşim alanı</strong>
+            <p>Buton ve bağlantı adaylarını görmek için ayrı CTA katmanını açabilirsiniz.</p>
+          </article>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function HeatmapEvidenceSummary({
+  mode,
+  featureSource,
+  hasConfirmedCta,
+}: {
+  mode: AttentionMode;
+  featureSource?: string | null;
+  hasConfirmedCta: boolean;
+}) {
+  const isClick = mode === "click";
+  const source = isClick
+    ? featureSource === "dom"
+      ? "Sayfanın DOM yapısındaki buton ve bağlantılar"
+      : "Ekran görüntüsündeki görsel etkileşim adayları"
+    : "Ekran görüntüsündeki renk, kontrast ve yerleşim özellikleri";
+  const confidence = isClick && featureSource === "dom" ? "Orta" : "Düşük";
+  const reason = isClick
+    ? featureSource === "dom"
+      ? hasConfirmedCta
+        ? "Etkileşimli öğeler DOM'dan bulundu ve kullanıcı seçimiyle desteklendi; gerçek olay verisiyle kalibre edilmedi."
+        : "Etkileşimli öğeler DOM'dan bulundu; hangi öğenin gerçekten tıklanacağını gösteren olay verisi yok."
+      : "Adaylar yalnızca görsel özelliklerden çıkarıldı; DOM ve gerçek olay verisi yok."
+    : "Bu bir görsel belirginlik sezgisidir; gerçek göz takibi verisiyle kalibre edilmedi.";
+
+  return (
+    <div className="heatmap-evidence" role="note" aria-label="Analiz kaynağı ve güven düzeyi">
+      <span>
+        <small>Kaynak</small>
+        <strong>{source}</strong>
+      </span>
+      <span>
+        <small>Güven</small>
+        <strong className={`heatmap-confidence heatmap-confidence--${confidence === "Orta" ? "medium" : "low"}`}>
+          {confidence}
+        </strong>
+      </span>
+      <p>{reason}</p>
+    </div>
   );
 }
 
@@ -916,8 +1146,11 @@ function VisualReportPanel({
   sourceType?: string | null;
 }) {
   const [activeTab, setActiveTab] = useState<"visual" | "table">("visual");
-  const [attentionLayerVisible, setAttentionLayerVisible] = useState(true);
-  const [ctaLayerVisible, setCtaLayerVisible] = useState(true);
+  const [attentionMode, setAttentionMode] = useState<AttentionMode>("click");
+  const [backgroundMuted, setBackgroundMuted] = useState(true);
+  // CTA kutuları ısı haritasından farklı, sezgisel bir teknik katmandır. Ana
+  // görseli kalabalıklaştırmaması için yalnızca kullanıcı isterse açılır.
+  const [ctaLayerVisible, setCtaLayerVisible] = useState(false);
   const [focusedCtaIndex, setFocusedCtaIndex] = useState<number | null>(null);
   const idPrefix = useId();
   const tabVisualId = `${idPrefix}-tab-visual`;
@@ -927,10 +1160,29 @@ function VisualReportPanel({
 
   const isVisualOverlay = heatmap.overlay_kind === "synthetic_visual_attention";
   const visualCells = heatmap.visual_cells ?? [];
-  const regions = deriveHeatmapRegions(heatmap.regions, heatmap.grid);
-  const hasAttentionData = isVisualOverlay
+  const gazeRegions = deriveHeatmapRegions(heatmap.regions, heatmap.grid);
+  const interactiveClickRegions = deriveInteractiveClickRegions(ctaOverlay.boxes);
+  const semanticClickRegions = deriveHeatmapRegions(
+    heatmap.click_regions,
+    heatmap.click_grid ?? null,
+  );
+  // DOM/URL raporunda gerçek etkileşim kutusu yoksa semantik başlık/gövde
+  // bölgelerine düşüp onları tıklanabilir gibi göstermeyiz. Semantik fallback
+  // yalnızca DOM dışı legacy veri biçimleri için korunur.
+  const clickRegions =
+    heatmap.feature_source === "dom"
+      ? interactiveClickRegions
+      : interactiveClickRegions.length > 0
+        ? interactiveClickRegions
+        : semanticClickRegions;
+  const hasClickEstimate = clickRegions.length > 0;
+  const hasGazeData = isVisualOverlay
     ? Boolean(heatmap.available && visualCells.length > 0)
     : Boolean(heatmap.available && heatmap.grid && heatmap.grid.length > 0);
+  const displayedAttentionMode: AttentionMode =
+    attentionMode === "click" && hasClickEstimate ? "click" : "gaze";
+  const regions = displayedAttentionMode === "click" ? clickRegions : gazeRegions;
+  const hasAttentionData = hasGazeData || hasClickEstimate;
   const hasCtaData = Boolean(ctaOverlay.available && ctaOverlay.boxes.length > 0);
   const hasAnyData = hasAttentionData || hasCtaData;
 
@@ -974,10 +1226,12 @@ function VisualReportPanel({
                 "bu nedenle yalnızca erişilebilir tablo/liste görünümü gösteriliyor."}
           </p>
           {hasAttentionData &&
-            (isVisualOverlay ? (
+            (displayedAttentionMode === "click" ? (
+              <HeatmapAccessibleTable regions={clickRegions} />
+            ) : isVisualOverlay ? (
               <VisualAttentionAccessibleTable cells={visualCells} />
             ) : (
-              <HeatmapAccessibleTable regions={regions} />
+              <HeatmapAccessibleTable regions={gazeRegions} />
             ))}
           {hasCtaData && (
             <CtaOverlayAccessibleList boxes={ctaVisible.visible} shortLabels={ctaShortLabelMap} />
@@ -1001,7 +1255,7 @@ function VisualReportPanel({
               className={`report-tab${activeTab === "visual" ? " report-tab--active" : ""}`}
               onClick={() => setActiveTab("visual")}
             >
-              Görsel görünüm
+              Isı haritası
             </button>
             <button
               type="button"
@@ -1012,21 +1266,55 @@ function VisualReportPanel({
               className={`report-tab${activeTab === "table" ? " report-tab--active" : ""}`}
               onClick={() => setActiveTab("table")}
             >
-              Erişilebilir tablo
+              Yoğunluk tablosu
             </button>
           </div>
 
           {activeTab === "visual" && (
             <div role="tabpanel" id={panelVisualId} aria-labelledby={tabVisualId}>
+              {hasGazeData && hasClickEstimate && (
+                <div
+                  className="attention-mode-switch"
+                  role="group"
+                  aria-label="Sentetik analiz görünümü"
+                >
+                  <button
+                    type="button"
+                    className={`report-tab${attentionMode === "click" ? " report-tab--active" : ""}`}
+                    aria-pressed={attentionMode === "click"}
+                    onClick={() => setAttentionMode("click")}
+                  >
+                    Tıklama ısı haritası
+                  </button>
+                  <button
+                    type="button"
+                    className={`report-tab${attentionMode === "gaze" ? " report-tab--active" : ""}`}
+                    aria-pressed={attentionMode === "gaze"}
+                    onClick={() => setAttentionMode("gaze")}
+                  >
+                    Görsel odak haritası
+                  </button>
+                </div>
+              )}
+              {hasAttentionData && hasClickEstimate && (
+                <div className="attention-mode-explanation" aria-live="polite">
+                  <strong>{attentionMode === "click" ? "Eylem tahmini" : "Dikkat tahmini"}</strong>
+                  <span>
+                    {displayedAttentionMode === "click"
+                      ? "Buton, bağlantı ve etkileşimli alanlarda beklenen tıklama eğilimini gösterir."
+                      : "Renk, kontrast, boyut ve yerleşimin bakışı çekmesi beklenen alanları gösterir."}
+                  </span>
+                </div>
+              )}
               <div className="heatmap-layer-toggles">
                 {hasAttentionData && (
                   <label className="heatmap-layer-toggle">
                     <input
                       type="checkbox"
-                      checked={attentionLayerVisible}
-                      onChange={(event) => setAttentionLayerVisible(event.target.checked)}
+                      checked={backgroundMuted}
+                      onChange={(event) => setBackgroundMuted(event.target.checked)}
                     />
-                    Sentetik dikkat katmanını göster
+                    Vurgular için arka planı soluklaştır
                   </label>
                 )}
                 {hasCtaData && (
@@ -1036,34 +1324,54 @@ function VisualReportPanel({
                       checked={ctaLayerVisible}
                       onChange={(event) => setCtaLayerVisible(event.target.checked)}
                     />
-                    CTA adaylarını göster
+                    CTA bölgelerini göster (buton ve bağlantı adayları)
                   </label>
                 )}
               </div>
+
+              {hasAttentionData && (
+                <HeatmapEvidenceSummary
+                  mode={displayedAttentionMode}
+                  featureSource={
+                    displayedAttentionMode === "click"
+                      ? ctaOverlay.feature_source
+                      : heatmap.feature_source
+                  }
+                  hasConfirmedCta={ctaOverlay.boxes.some(
+                    (box) => box.classification === "user_confirmed_cta",
+                  )}
+                />
+              )}
+              {hasCtaData && ctaLayerVisible && (
+                <p className="methodology-note">{CTA_SHARED_DISCLAIMER}</p>
+              )}
 
               <div className="heatmap-visual-layout">
                 <div className="heatmap-image-wrap">
                   <img
                     src={getReportHeatmapScreenshotUrl(screenshotUrl as string)}
                     alt={`${title}: sayfanın/tasarımın analiz anında alınmış güvenli görsel kopyası`}
-                    className="heatmap-screenshot"
+                    className={`heatmap-screenshot${backgroundMuted ? " heatmap-screenshot--muted" : ""}`}
                   />
+                  {hasAttentionData && (
+                    <div
+                      className={`heatmap-base-layer heatmap-base-layer--${displayedAttentionMode}`}
+                      aria-hidden="true"
+                      title="Sayfanın düşük yoğunluklu temel alanı"
+                    />
+                  )}
                   {hasAttentionData &&
-                    (isVisualOverlay
-                      ? visualCells.map((cell, index) => (
-                          <VisualAttentionCellMarker
-                            key={index}
-                            cell={cell}
-                            layerVisible={attentionLayerVisible}
-                          />
+                    (displayedAttentionMode === "click"
+                      ? clickRegions.map((region) => (
+                          <HeatmapRegionMarker key={region.key} region={region} mode="click" />
                         ))
-                      : regions.map((region) => (
-                          <HeatmapRegionMarker
-                            key={region.key}
-                            region={region}
-                            layerVisible={attentionLayerVisible}
-                          />
-                        )))}
+                      : isVisualOverlay
+                        ? visualCells.map((cell, index) => (
+                            <VisualAttentionCellMarker key={index} cell={cell} />
+                          ))
+                        : gazeRegions.map((region) => (
+                            <HeatmapRegionMarker key={region.key} region={region} mode="gaze" />
+                          )))}
                   {hasCtaData &&
                     ctaVisible.visible.map((box, index) => (
                       <CtaOverlayBoxMarker
@@ -1078,12 +1386,14 @@ function VisualReportPanel({
                     ))}
                 </div>
                 <div className="heatmap-legends-stack">
-                  {hasAttentionData && !isVisualOverlay && <HeatmapLegend />}
-                  {hasCtaData && <CtaOverlayLegend boxes={ctaVisible.visible} />}
+                  {hasAttentionData && (displayedAttentionMode === "click" || !isVisualOverlay) && (
+                    <HeatmapLegend mode={displayedAttentionMode} />
+                  )}
+                  {hasCtaData && ctaLayerVisible && <CtaOverlayLegend boxes={ctaVisible.visible} />}
                 </div>
               </div>
 
-              {hasCtaData && ctaVisible.hiddenCount > 0 && (
+              {hasCtaData && ctaLayerVisible && ctaVisible.hiddenCount > 0 && (
                 <button
                   type="button"
                   className="btn-secondary"
@@ -1092,16 +1402,23 @@ function VisualReportPanel({
                   Tüm adayları göster ({ctaVisible.total})
                 </button>
               )}
+              <HeatmapInsights
+                regions={regions}
+                mode={displayedAttentionMode}
+                ctaCount={ctaVisible.total}
+              />
             </div>
           )}
 
           {activeTab === "table" && (
             <div role="tabpanel" id={panelTableId} aria-labelledby={tabTableId}>
               {hasAttentionData &&
-                (isVisualOverlay ? (
+                (displayedAttentionMode === "click" ? (
+                  <HeatmapAccessibleTable regions={clickRegions} />
+                ) : isVisualOverlay ? (
                   <VisualAttentionAccessibleTable cells={visualCells} />
                 ) : (
-                  <HeatmapAccessibleTable regions={regions} />
+                  <HeatmapAccessibleTable regions={gazeRegions} />
                 ))}
               {hasCtaData && (
                 <CtaOverlayAccessibleList
@@ -1132,7 +1449,6 @@ function VisualComparisonTab({ report }: { report: ReportDetailResponse }) {
   return (
     <div>
       <p className="report-section__intro">{HEATMAP_VISUAL_DISCLAIMER}</p>
-      <p className="report-section__intro">{CTA_SHARED_DISCLAIMER}</p>
 
       {!ab ? (
         <VisualReportPanel
@@ -1287,153 +1603,44 @@ function NetworkDeviceSection({ networkDevice }: { networkDevice: ReportNetworkD
 // Dusuk - backend'de su an yalnizca "warning"/"info" siddeti oldugu icin
 // "Orta" grubu veri olmadan render edilmez).
 function FindingsAndRecommendationsTab({ report }: { report: ReportDetailResponse }) {
-  const findings = collectFindings(report);
-  const high = findings.filter((f) => f.severity === "warning");
-  const low = findings.filter((f) => f.severity === "info");
-
-  const ab = report.ab_comparison;
-  const designTag = ab
-    ? ab.this_variant_role === "variant_a"
-      ? "Tasarım A"
-      : "Tasarım B"
-    : report.variant_name;
-
-  const renderGroup = (title: string, items: CombinedFinding[]) => {
-    if (items.length === 0) return null;
-    return (
-      <div className="finding-priority-group">
-        <h3 className="finding-priority-group__title">{title}</h3>
-        <ul className="report-findings">
-          {items.map((finding) => {
-            const copy = FINDING_COPY[finding.key];
-            return (
-              <li key={finding.key} className="finding-detail-card">
-                <p className="finding-detail-card__row">
-                  <strong>Ne bulundu?</strong> {finding.text}
-                </p>
-                <p className="finding-detail-card__row">
-                  <strong>Neden önemli?</strong>{" "}
-                  {finding.severity === "warning"
-                    ? "Bu tip bulgular sayfa deneyimini ve görevi tamamlama olasılığını olumsuz etkileyebilir."
-                    : "Bilgi amaçlıdır; acil bir aksiyon gerekmeyebilir."}
-                </p>
-                <p className="finding-detail-card__row">
-                  <strong>Ne yapılmalı?</strong>{" "}
-                  {copy?.action ??
-                    "Belirli bir öneri kaydedilmemiş; ilgili metrikleri gözden geçirin."}
-                </p>
-                <p className="finding-detail-card__row finding-detail-card__tag">
-                  <strong>İlgili tasarım:</strong> {designTag}
-                </p>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-    );
-  };
+  const findings = collectFindings(report).sort((a, b) =>
+    a.severity === b.severity ? 0 : a.severity === "warning" ? -1 : 1,
+  );
 
   return (
     <div>
       {findings.length === 0 ? (
         <p className="report-section__intro">Tanımlı eşik tabanlı bir bulgu tetiklenmedi.</p>
       ) : (
-        <>
-          {renderGroup("Yüksek öncelik", high)}
-          {renderGroup("Düşük öncelik", low)}
-        </>
+        <section className="report-section" aria-labelledby="findings-action-heading">
+          <h2 id="findings-action-heading" className="report-section__heading">
+            Ne bulduk, ne yapmalısınız?
+          </h2>
+          <p className="report-section__intro">
+            Her kart tek bir bulguyu ve ona karşılık gelen önerilen düzeltmeyi birlikte gösterir.
+          </p>
+          <ul className="report-findings">
+            {findings.map((finding) => {
+              const copy = FINDING_COPY[finding.key];
+              return (
+                <li key={`${finding.key}:${finding.text}`} className="finding-detail-card">
+                  <span className={`finding-priority finding-priority--${finding.severity}`}>
+                    {finding.severity === "warning" ? "Öncelikli" : "İyileştirme fırsatı"}
+                  </span>
+                  <h3 className="finding-detail-card__title">{copy?.title ?? finding.text}</h3>
+                  {copy?.title && <p className="finding-detail-card__row">{finding.text}</p>}
+                  <p className="finding-detail-card__action">
+                    <strong>Önerilen adım:</strong>{" "}
+                    {copy?.action ??
+                      "İlgili metriği inceleyip küçük bir tasarım deneyiyle doğrulayın."}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       )}
-      <AiExplanationSection reportId={report.id} />
     </div>
-  );
-}
-
-function AiExplanationSection({ reportId }: { reportId: string }) {
-  const [explanation, setExplanation] = useState<AIExplanationResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleGenerate = () => {
-    setLoading(true);
-    setError(null);
-    generateReportAiExplanation(reportId)
-      .then(setExplanation)
-      .catch(() => setError("AI destekli açıklama üretilemedi. Lütfen tekrar deneyin."))
-      .finally(() => setLoading(false));
-  };
-
-  return (
-    <section className="report-section" aria-labelledby="report-ai-explanation-heading">
-      <h2 id="report-ai-explanation-heading" className="report-section__heading">
-        AI destekli açıklama
-      </h2>
-      <p className="report-section__intro">
-        Bu bölüm otomatik olarak üretilmiştir; bir AI kararı değildir ve uzman
-        değerlendirmesi/doğrulaması gerektirir. Yalnızca bu rapordaki sentetik, kalibre edilmemiş
-        metrikleri temel alır.
-      </p>
-
-      {!explanation && (
-        <button type="button" className="btn-secondary" onClick={handleGenerate} disabled={loading}>
-          {loading ? "Üretiliyor…" : "Bulguları sade dille açıkla"}
-        </button>
-      )}
-
-      {error && <p className="page-placeholder">{error}</p>}
-
-      {explanation && (
-        <div className="ai-explanation">
-          <p className="report-info-box__title">
-            Kalibrasyon durumu: {explanation.calibration_status}
-          </p>
-
-          <h3>Kısa özet</h3>
-          <p>{explanation.short_summary}</p>
-
-          <h3>Metrik dayanakları</h3>
-          <ul className="report-findings">
-            {explanation.metric_basis.map((finding, index) => (
-              <li key={index}>
-                {finding.text}{" "}
-                <span className="methodology-note">(dayanak: {finding.metric_ids.join(", ")})</span>
-              </li>
-            ))}
-          </ul>
-
-          <h3>Olası açıklamalar</h3>
-          <ul className="report-findings">
-            {explanation.possible_explanations.map((finding, index) => (
-              <li key={index}>
-                {finding.text}{" "}
-                <span className="methodology-note">(dayanak: {finding.metric_ids.join(", ")})</span>
-              </li>
-            ))}
-          </ul>
-
-          <h3>Önerilen doğrulama deneyi</h3>
-          <p>{explanation.suggested_verification_experiment}</p>
-
-          <h3>Sınırlamalar</h3>
-          <p>{explanation.limitations}</p>
-
-          <p className="methodology-note">
-            Sağlayıcı: {explanation.provider}
-            {explanation.model_name ? ` (${explanation.model_name})` : ""} · Prompt sürümü:{" "}
-            {explanation.prompt_version} · Oluşturulma:{" "}
-            {new Date(explanation.generated_at).toLocaleString("tr-TR")}
-          </p>
-
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleGenerate}
-            disabled={loading}
-          >
-            {loading ? "Üretiliyor…" : "Yeniden üret"}
-          </button>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -1494,7 +1701,7 @@ function TechnicalDetailsTab({ report }: { report: ReportDetailResponse }) {
           </div>
           <div>
             <dt>Kalibrasyon durumu</dt>
-            <dd>{report.info_box.calibration_status}</dd>
+            <dd>{calibrationStatusLabel(report.info_box.calibration_status)}</dd>
           </div>
           <div>
             <dt>Oluşturulma tarihi</dt>
@@ -1556,7 +1763,7 @@ function TechnicalDetailsTab({ report }: { report: ReportDetailResponse }) {
             {ab.note} Örneklenen sentetik persona sayısı — A:{" "}
             {ab.sampled_synthetic_persona_count.variant_a}, B:{" "}
             {ab.sampled_synthetic_persona_count.variant_b}. Kalibrasyon durumu:{" "}
-            {ab.calibration_status}.
+            {calibrationStatusLabel(ab.calibration_status)}.
           </p>
         </section>
       )}
@@ -1639,7 +1846,7 @@ function TechnicalVisualDataPanel({
 
 const TOP_LEVEL_TABS: TabDef[] = [
   { id: "summary", label: "Özet" },
-  { id: "visual", label: "Görsel Karşılaştırma" },
+  { id: "visual", label: "Isı Haritası" },
   { id: "findings", label: "Bulgular ve Öneriler" },
   { id: "technical", label: "Teknik Detaylar" },
 ];
@@ -1666,10 +1873,12 @@ export default function ReportDetail() {
   const [aiProbe, setAiProbe] = useState<AiProbe>({ state: "loading" });
   const idPrefix = useId();
 
-  useEffect(() => {
+  const loadReport = useCallback(() => {
     if (!reportId) return;
-    getReport(reportId)
-      .then(setReport)
+    setError(null);
+    setNotFound(false);
+    return getReport(reportId)
+      .then((data) => setReport(data))
       .catch((err) => {
         if (err instanceof ApiError && err.status === 404) {
           setNotFound(true);
@@ -1678,6 +1887,10 @@ export default function ReportDetail() {
         }
       });
   }, [reportId]);
+
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
 
   // Rapor yuklendikten sonra, ait oldugu SimulationRun icin bir AI pipeline
   // olup olmadigini TEK sefer sonda ile belirle (sekme gorunurlugu icin).
@@ -1718,7 +1931,14 @@ export default function ReportDetail() {
   }
 
   if (error) {
-    return <p className="page-placeholder">{error}</p>;
+    return (
+      <div className="dashboard-error" role="alert">
+        <p>{error}</p>
+        <button type="button" className="btn-secondary" onClick={() => void loadReport()}>
+          Tekrar dene
+        </button>
+      </div>
+    );
   }
 
   if (!report) {
@@ -1746,7 +1966,7 @@ export default function ReportDetail() {
       <div className="report-header-row">
         <div>
           <h1 id="report-detail-heading" className="page-heading">
-            {isAbReport ? "A/B Tasarım Karşılaştırması" : report.title}
+            {isAbReport ? "A/B Tasarım Karşılaştırması" : normalizeTurkishSystemCopy(report.title)}
           </h1>
           <p className="report-header-row__subtitle">{report.test_definition_name}</p>
           <div className="report-header-row__badges">
@@ -1790,6 +2010,7 @@ export default function ReportDetail() {
           aria-labelledby={`${idPrefix}-tab-visual`}
         >
           <VisualComparisonTab report={report} />
+          <TopFindingsSection report={report} />
         </div>
       )}
 
@@ -1821,6 +2042,7 @@ export default function ReportDetail() {
         >
           <AiReportTab
             runId={report.simulation_run_id}
+            isAbComparison={isAbReport}
             initialStatus={aiProbe.state === "present" ? aiProbe.status : null}
             initialError={aiProbe.state === "error"}
           />

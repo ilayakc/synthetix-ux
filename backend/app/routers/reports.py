@@ -165,6 +165,8 @@ class HeatmapSection(BaseModel):
     grid: list[dict] | None
     disclaimer: str | None = None
     regions: list[HeatmapRegion] | None = None
+    click_grid: list[dict] | None = None
+    click_regions: list[HeatmapRegion] | None = None
     visual_cells: list[VisualAttentionCell] | None = None
     algorithm_version: str | None = None
     image_width: int | None = None
@@ -185,6 +187,7 @@ CTA_CLASSIFICATION_LABELS: dict[str, str] = {
 class CtaOverlayBox(BaseModel):
     classification: str
     label: str
+    interaction_kind: str | None = None
     x: float
     y: float
     w: float
@@ -331,6 +334,100 @@ def _score_level(score: float) -> str:
     return "medium"
 
 
+def _pixel_box_to_percent(
+    raw: dict, *, image_width: int | None, image_height: int | None
+) -> HeatmapRegionBox | None:
+    """Analyzer'in CSS-piksel kutusunu ekranda sunulan görsele göre normalize eder.
+
+    `layout_regions` eski kayıtlarda tam sayfa yakalama yüksekliğine göre
+    yüzdeleştirilmiş olabilir; raporda sunulan screenshot ise viewport
+    yüksekliğindedir. `element_boxes` doğrudan CSS pikseli taşıdığı için gerçek
+    `image_width`/`image_height` ile normalize etmek bu ölçek kaymasını önler.
+    """
+
+    if not image_width or not image_height or image_width <= 0 or image_height <= 0:
+        return None
+    try:
+        x = float(raw["x"])
+        y = float(raw["y"])
+        width = float(raw["width"])
+        height = float(raw["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+
+    left = max(0.0, min(float(image_width), x))
+    top = max(0.0, min(float(image_height), y))
+    right = max(left, min(float(image_width), x + width))
+    bottom = max(top, min(float(image_height), y + height))
+    if right <= left or bottom <= top:
+        return None
+    return HeatmapRegionBox(
+        x_pct=left / image_width * 100,
+        y_pct=top / image_height * 100,
+        width_pct=(right - left) / image_width * 100,
+        height_pct=(bottom - top) / image_height * 100,
+    )
+
+
+def _union_percent_boxes(boxes: list[HeatmapRegionBox]) -> HeatmapRegionBox | None:
+    if not boxes:
+        return None
+    left = min(box.x_pct for box in boxes)
+    top = min(box.y_pct for box in boxes)
+    right = max(box.x_pct + box.width_pct for box in boxes)
+    bottom = max(box.y_pct + box.height_pct for box in boxes)
+    return HeatmapRegionBox(
+        x_pct=left,
+        y_pct=top,
+        width_pct=right - left,
+        height_pct=bottom - top,
+    )
+
+
+def _derive_semantic_boxes_from_elements(analysis: PageAnalysis) -> dict[str, HeatmapRegionBox]:
+    """Semantik odak bölgelerini gerçek DOM öğelerinin screenshot koordinatına bağlar."""
+
+    raw_boxes = (analysis.features or {}).get("element_boxes") or []
+    if not isinstance(raw_boxes, list):
+        return {}
+
+    converted: list[tuple[str, HeatmapRegionBox]] = []
+    for raw in raw_boxes:
+        if not isinstance(raw, dict):
+            continue
+        role = raw.get("role")
+        if role not in ("heading", "button", "link"):
+            continue
+        box = _pixel_box_to_percent(
+            raw, image_width=analysis.image_width, image_height=analysis.image_height
+        )
+        if box is not None:
+            converted.append((role, box))
+
+    headings = [box for role, box in converted if role == "heading"]
+    buttons = [box for role, box in converted if role == "button"]
+    top_links = [
+        box
+        for role, box in converted
+        if role == "link" and box.y_pct + box.height_pct / 2 <= 20
+    ]
+
+    result: dict[str, HeatmapRegionBox] = {}
+    nav_box = _union_percent_boxes(top_links)
+    if nav_box is not None:
+        result["ust_navigasyon"] = nav_box
+    if headings:
+        result["hero_baslik"] = headings[0]
+    if buttons:
+        result["birincil_cta"] = max(buttons, key=lambda box: box.width_pct * box.height_pct)
+    body_box = _union_percent_boxes(headings[1:])
+    if body_box is not None:
+        result["govde_metni"] = body_box
+    return result
+
+
 async def _find_linked_screenshot_analysis_by_url(
     session: AsyncSession, organization_id: uuid.UUID, url: str | None
 ) -> PageAnalysis | None:
@@ -470,7 +567,7 @@ async def _build_heatmap(
     # Paket 4 Final Hardening: screenshot/AI (DesignAsset) kaynakli raporlar
     # artik DOM'un 5 sabit semantik bolgesini GORSEL heatmap gibi KULLANMAZ -
     # gercek OpenCV piksel grid'ine erken donulur (bkz. `_build_visual_attention_heatmap`).
-    if analysis is not None and analysis.source_kind == PageAnalysisSourceKind.DESIGN_ASSET:
+    if analysis is not None and (analysis.features or {}).get("synthetic_attention_estimate"):
         return _build_visual_attention_heatmap(analysis, report_id)
 
     # --- URL/DOM yolu (degismedi): 5 sabit semantik bolge -------------------
@@ -497,6 +594,22 @@ async def _build_heatmap(
         )
         for cell in grid
     ]
+    click_grid = content.get("click_attention_grid") or (
+        attention_module.get("click_grid") if attention_module else None
+    )
+    click_regions = (
+        [
+            HeatmapRegion(
+                key=cell["key"],
+                label=cell["label"],
+                score=cell["score"],
+                level=_score_level(cell["score"]),
+            )
+            for cell in click_grid
+        ]
+        if click_grid
+        else None
+    )
 
     screenshot_url: str | None = None
     coordinates_available = False
@@ -506,16 +619,31 @@ async def _build_heatmap(
         coordinates_unavailable_reason = SCREENSHOT_MISSING_REASON
     else:
         layout_regions = (analysis.features or {}).get("layout_regions") or {}
-        missing = [key for key in HEATMAP_REGION_KEYS if not layout_regions.get(key)]
-        if missing:
-            coordinates_unavailable_reason = COORDINATES_MISSING_REASON
-        else:
+        element_boxes = _derive_semantic_boxes_from_elements(analysis)
+        # Gerçek element kutusu varsa onu kullan; yalnızca eski/eksik analiz
+        # kayıtlarında geriye dönük `layout_regions` verisine düş.
+        available_boxes = {
+            key: element_boxes.get(key) or layout_regions.get(key) for key in HEATMAP_REGION_KEYS
+        }
+        available_boxes = {key: box for key, box in available_boxes.items() if box}
+        if available_boxes:
             coordinates_available = True
             screenshot_url = f"/api/reports/{report_id}/heatmap-screenshot"
             for region in regions:
-                box = layout_regions.get(region.key)
+                box = available_boxes.get(region.key)
                 if box:
                     region.box = HeatmapRegionBox.model_validate(box)
+            for region in click_regions or []:
+                box = available_boxes.get(region.key)
+                if box:
+                    region.box = HeatmapRegionBox.model_validate(box)
+            if len(available_boxes) < len(HEATMAP_REGION_KEYS):
+                coordinates_unavailable_reason = (
+                    "Bazı semantik bölgeler sayfada tespit edilemedi; yalnızca gerçek konumu bulunan "
+                    "bölgeler gösteriliyor, eksik alanlar için koordinat uydurulmuyor."
+                )
+        else:
+            coordinates_unavailable_reason = COORDINATES_MISSING_REASON
 
     return HeatmapSection(
         available=True,
@@ -525,6 +653,8 @@ async def _build_heatmap(
         grid=grid,
         disclaimer=disclaimer,
         regions=regions,
+        click_grid=click_grid,
+        click_regions=click_regions,
         screenshot_url=screenshot_url,
         coordinates_available=coordinates_available,
         coordinates_unavailable_reason=coordinates_unavailable_reason,
@@ -630,10 +760,26 @@ async def _build_cta_overlay(
                     h = float(element["height"]) / height
                 except (KeyError, TypeError, ValueError, ZeroDivisionError):
                     continue
+                interaction_kind = element.get("interaction_kind")
+                if not isinstance(interaction_kind, str):
+                    aspect = w / h if h > 0 else float("inf")
+                    if w > 0.55 or aspect > 16:
+                        interaction_kind = "container_link"
+                    elif w <= 0.028 and h <= 0.07:
+                        interaction_kind = "pagination_control"
+                    elif element.get("role") == "button":
+                        interaction_kind = "button"
+                    elif y < 0.14:
+                        interaction_kind = "navigation_link"
+                    else:
+                        interaction_kind = "content_link"
+                if interaction_kind == "container_link":
+                    continue
                 boxes.append(
                     CtaOverlayBox(
                         classification="dom_interactive_candidate",
                         label=CTA_CLASSIFICATION_LABELS["dom_interactive_candidate"],
+                        interaction_kind=interaction_kind,
                         x=x,
                         y=y,
                         w=w,

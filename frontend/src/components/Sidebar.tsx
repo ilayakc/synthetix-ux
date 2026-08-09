@@ -25,7 +25,7 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
   { to: "/projeler", label: "Projeler", icon: FolderIcon },
   { to: "/simulasyonlar", label: "Simülasyonlar", icon: ActivityIcon },
   { to: "/raporlar", label: "Raporlar", icon: FileTextIcon },
-  { to: "/kullanim-ve-chip", label: "Çip Cüzdanı", icon: ChipCoinIcon },
+  { to: "/kullanim-ve-chip", label: "Chip Cüzdanı", icon: ChipCoinIcon },
 ];
 
 const TOOLS_NAV_ITEMS: NavItem[] = [
@@ -111,14 +111,8 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
       className={`sidebar${isOpen ? " is-open" : ""}`}
       aria-label="Ana menü"
     >
-      <div className="sidebar__brand">
-        <span className="sidebar__brand-mark" aria-hidden="true">
-          SX
-        </span>
-        <span className="sidebar__brand-text">
-          <span className="sidebar__brand-name">Synthetix UX</span>
-          <span className="sidebar__brand-tagline">Sentetik kullanıcı araştırma platformu</span>
-        </span>
+      <div className="sidebar__heading">
+        <span>Çalışma Alanı</span>
       </div>
 
       <nav className="sidebar__nav">

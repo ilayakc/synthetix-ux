@@ -163,6 +163,21 @@ describe("Simulations", () => {
     expect(screen.getByText(/Hata: analyzer'a ulasilamadi/)).toBeInTheDocument();
   });
 
+  it("ayni hata metnini ilerleme mesaji olarak tekrar etmez", async () => {
+    const legacyError = "Bagli sayfa analizi basarisiz oldugu icin bu calistirma islenemedi";
+    stubRuns([
+      baseRun({
+        retryable: true,
+        progress_message: legacyError,
+        error: legacyError,
+      }),
+    ]);
+    renderSimulations();
+
+    await waitFor(() => expect(screen.getByText(/Çalıştırma 11111111/)).toBeInTheDocument());
+    expect(screen.getAllByText(/Bağlı sayfa analizi başarısız olduğu için/)).toHaveLength(1);
+  });
+
   it("basarili bir calistirmada ne 'Yeniden dene' ne de 'Yeni test oluştur' gosterir", async () => {
     stubRuns([
       baseRun({

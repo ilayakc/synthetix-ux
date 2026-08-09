@@ -492,6 +492,11 @@ heuristic motorun (`backend/app/engine/baseline.py`,
   her etkileşimli DOM öğesi mutlaka bir pazarlama CTA'sı değildir);
   `layout_regions.birincil_cta` (semantik kanıtsız, yalnızca "ilk eşleşen
   buton" heuristiği) `cta_candidate`/`attention_region` olarak kalır.
+- URL yakalaması, dinamik/tembel yüklenen içeriği pasif kaydırmayla görünür
+  hale getirir ve en fazla 4.000 px yüksekliğinde uzun sayfa görüntüsü alır.
+  DOM kutuları aynı yakalama sınırına göre filtrelenir; metinsiz etkileşimli
+  öğeler ve görüntü dışındaki kutular CTA adayı olarak saklanmaz. Kaydırma
+  sırasında tıklama, form gönderme veya oturum açma yapılmaz.
 - **Paket 4 Final itibarıyla güncel değil**: ekran görüntüsü/AI kaynaklı
   launch engeli kaldırıldı (bkz. `app.services.test_wizard._revalidate_launch_sources`,
   `app.services.page_analysis_adapter.adapt_visual_page_analysis`) — DesignAsset

@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     max_pages_per_request: int = 1  # bu asamada tek sayfa analizi; coklu sayfa gezinme yok
     viewport_width: int = 1366
     viewport_height: int = 900
+    # Uzun sayfalarda tembel yuklenen icerigi yakala; backend'in 4.000 px
+    # boyut guvenlik sinirini asmamak icin ekran goruntusunu sinirla.
+    screenshot_max_height: int = 4000
+    dynamic_content_settle_ms: int = 750
 
     # --- Eszamanlilik ve kaynak sinirlari ---
     max_concurrent_analyses: int = 2

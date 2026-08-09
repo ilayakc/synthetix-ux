@@ -1549,10 +1549,12 @@ describe("TestWizard", () => {
     // Bileşen etiketi (label) yalnızca radiogroup'un aria-label'ına gömer,
     // ayrı bir görünür başlık olarak render etmez (bkz. DesignSourcePicker.tsx).
     expect(
-      screen.getByRole("radiogroup", { name: "Tasarım A — Orijinal tasarım - kaynak türü" }),
+      screen.getByRole("radiogroup", { name: "Varyant A — Orijinal tasarım - kaynak türü" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("radiogroup", { name: "Tasarım B — Alternatif tasarım - kaynak türü" }),
+      screen.getByRole("radiogroup", {
+        name: "Varyant B — Aynı sitenin değiştirilmiş tasarımı - kaynak türü",
+      }),
     ).toBeInTheDocument();
   });
 

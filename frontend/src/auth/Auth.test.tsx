@@ -153,6 +153,23 @@ describe("Kimlik dogrulama route guard ve akislari", () => {
     expect(screen.queryByText("veya")).not.toBeInTheDocument();
   });
 
+  it("development ortaminda demo kullanici bilgilerini kutu gostermeden doldurur", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.endsWith("/api/auth/me")) return jsonResponse(401, { detail: "Oturum bulunamadi" });
+        throw new Error(`Beklenmeyen istek: ${url}`);
+      }),
+    );
+
+    renderApp("/giris");
+    await screen.findByRole("heading", { name: "Giriş yap" });
+
+    expect(screen.queryByText("Sunum hesapları")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("E-posta")).toHaveValue("synthetix.demo.user@example.com");
+    expect(screen.getByLabelText("Parola")).toHaveValue("DemoSynthetix123!");
+  });
+
   it("arka planda 401 alindiginda oturumu sonlandirir ve giris ekraninda uyari gosterir", async () => {
     vi.stubGlobal(
       "fetch",

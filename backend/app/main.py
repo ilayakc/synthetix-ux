@@ -15,6 +15,7 @@ from app.db import engine, get_session
 from app.logging_config import configure_logging
 from app.logging_middleware import install_request_logging
 from app.redis_client import check_redis_connection
+from app.routers.admin import router as admin_router
 from app.routers.ai_explanations import router as ai_explanations_router
 from app.routers.analysis_modules import router as analysis_modules_router
 from app.routers.auth import router as auth_router
@@ -144,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # (ornekin bilinmeyen bir Host header'i) suresi/durumuyla loglanir.
     install_request_logging(app, cfg)
 
+    app.include_router(admin_router)
     app.include_router(ai_explanations_router)
     app.include_router(analysis_modules_router)
     app.include_router(auth_router)

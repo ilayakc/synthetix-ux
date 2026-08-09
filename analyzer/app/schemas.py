@@ -39,6 +39,7 @@ class HeadingInfo(BaseModel):
 
 class ElementBox(BaseModel):
     role: str
+    interaction_kind: str | None = None
     x: float
     y: float
     width: float
@@ -100,8 +101,8 @@ class Screenshot(BaseModel):
 # Sentetik dikkat tahmini isi haritasinin ekran goruntusu uzerinde
 # konumlandirilabilmesi icin, sayfanin gorunur (viewport, above-the-fold)
 # alanindaki bes anonim yerlesim bolgesinin (nav, hero/baslik, birincil CTA,
-# govde icerigi, alt bilgi) sinirlayici kutusu (bounding box) viewport
-# yuzdesi olarak hesaplanir. Element METNI, form degeri veya baska bir
+# govde icerigi, alt bilgi) sinirlayici kutusu (bounding box) yakalanan
+# uzun sayfa goruntusunun yuzdesi olarak hesaplanir. Element METNI, form degeri veya baska bir
 # kisisel/hassas veri ASLA saklanmaz - yalnizca anonim rol + geometrik alan.
 # Sayfada karsilik gelen bir eleman bulunamazsa (ör. footer yoksa) o bolge
 # icin `None` donulur; RASTGELE/tahmini koordinat UYDURULMAZ.

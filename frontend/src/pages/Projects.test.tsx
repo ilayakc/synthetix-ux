@@ -65,7 +65,7 @@ describe("Projects", () => {
 
     await waitFor(() => expect(screen.getByText("Anasayfa Yenileme")).toBeInTheDocument());
     expect(screen.getByText("Aktif")).toBeInTheDocument();
-    expect(screen.getByText("3 test")).toBeInTheDocument();
+    expect(screen.getByText("3 başlatılmış test")).toBeInTheDocument();
     expect(screen.getByText("Yeni Proje")).toBeInTheDocument();
   });
 

@@ -119,16 +119,13 @@ describe("AiReportTab", () => {
     await waitFor(() => expect(getAiReport).toHaveBeenCalledWith("r1"));
 
     expect(await screen.findByText("1 sentetik bulgu üretildi.")).toBeInTheDocument();
-    expect(screen.getByText(/Olası bir sürtünme noktası/)).toBeInTheDocument();
+    expect(screen.getByText(/görevi tamamlamadan sayfadan ayrılma riski/)).toBeInTheDocument();
     // Öncelik metinle gösterilir (yalnızca renk değil).
     expect(screen.getByText("Orta öncelik")).toBeInTheDocument();
-    // Confidence yüzde olarak: 0.3895 -> %39.
-    expect(screen.getByText(/Güven: %39/)).toBeInTheDocument();
-    expect(screen.getByText(/Bu sürtünme noktasını gerçek kullanıcı testiyle/)).toBeInTheDocument();
+    expect(screen.getByText(/Güven düzeyi: Düşük/)).toBeInTheDocument();
+    expect(screen.getByText(/Akıştaki gereksiz adımları azaltın/)).toBeInTheDocument();
     expect(screen.getByText(/220/)).toBeInTheDocument();
-    // Boş affected_persona_groups UI'ı bozmaz -> "Belirtilmedi".
-    expect(screen.getByText(/Belirtilmedi/)).toBeInTheDocument();
-    expect(screen.getByText(/metric:abandonment_probability/)).toBeInTheDocument();
+    expect(screen.queryByText(/metric:abandonment_probability/)).not.toBeInTheDocument();
     expect(screen.getByText(/ux-report-v1/)).toBeInTheDocument();
     // Sınırlamalar görünür; yinelenen rapor-içi uyarı gösterilmez. Genel
     // sentetik-veri uyarısı uygulama kabuğundaki IntegrityBanner'dadır.
@@ -162,8 +159,8 @@ describe("AiReportTab", () => {
     render(<AiReportTab runId="r1" initialStatus={succeededStatus} />);
 
     expect(await screen.findByText("1 sentetik bulgu üretildi.")).toBeInTheDocument();
-    expect(screen.getByText(/Kanıt ile ilişkili olası bir sürtünme noktası/)).toBeInTheDocument();
-    expect(screen.getByText(/doğrulamayı düşünün/)).toBeInTheDocument();
+    expect(screen.getByText(/görevi tamamlamadan sayfadan ayrılma riski/)).toBeInTheDocument();
+    expect(screen.getByText(/Akıştaki gereksiz adımları azaltın/)).toBeInTheDocument();
     expect(screen.getByText(/bağlamsal çeşitlilik/)).toBeInTheDocument();
     expect(screen.queryByText(/gercek kullanici olcumu degildir/)).not.toBeInTheDocument();
   });

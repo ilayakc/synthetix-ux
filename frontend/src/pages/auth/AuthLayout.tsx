@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import BrandLogo from "../../components/BrandLogo";
 
 interface AuthLayoutProps {
   title: string;
@@ -19,7 +20,7 @@ export default function AuthLayout({ title, subtitle, children, footer }: AuthLa
     <div className="auth-page">
       <aside className="auth-promo" aria-hidden="true">
         <Link to="/" className="auth-promo__brand">
-          Synthetix UX
+          <BrandLogo />
         </Link>
 
         <h2 className="auth-promo__headline">
@@ -119,7 +120,7 @@ export default function AuthLayout({ title, subtitle, children, footer }: AuthLa
       <div className="auth-content">
         <div className="auth-card" role="main" aria-labelledby="auth-heading">
           <Link to="/" className="auth-card__brand">
-            Synthetix UX
+            <BrandLogo />
           </Link>
           <h1 id="auth-heading" className="auth-card__title">
             {title}

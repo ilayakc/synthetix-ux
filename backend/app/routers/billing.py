@@ -210,6 +210,8 @@ class TopUpRequestResponse(BaseModel):
     chip_amount: int
     status: str
     created_at: datetime
+    reviewed_at: datetime | None
+    review_note: str | None
 
 
 @router.post("/topup-requests", response_model=TopUpRequestResponse, status_code=201)
@@ -246,6 +248,8 @@ async def create_topup_request(
         chip_amount=request.chip_amount,
         status=request.status.value,
         created_at=request.created_at,
+        reviewed_at=request.reviewed_at,
+        review_note=request.review_note,
     )
 
 
@@ -270,6 +274,8 @@ async def list_topup_requests(
             chip_amount=req.chip_amount,
             status=req.status.value,
             created_at=req.created_at,
+            reviewed_at=req.reviewed_at,
+            review_note=req.review_note,
         )
         for req in requests
     ]

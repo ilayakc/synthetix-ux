@@ -107,13 +107,79 @@ def _make_route_handler(pinned_hostname: str, validated_hosts: dict[str, bool], 
 
 
 _FEATURE_EXTRACTION_JS = """
-() => {
+(captureHeight) => {
   function isVisible(el) {
     if (!el) return false;
     const style = window.getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) return false;
     const rect = el.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
+  }
+
+  function isInsideCapture(el) {
+    if (!isVisible(el)) return false;
+    const rect = el.getBoundingClientRect();
+    return rect.right > 0 && rect.left < window.innerWidth && rect.bottom > 0 && rect.top < captureHeight;
+  }
+
+  function accessibleName(el) {
+    const imageAlt = Array.from(el.querySelectorAll ? el.querySelectorAll('img[alt]') : [])
+      .map((img) => img.getAttribute('alt') || '').join(' ');
+    return [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), el.value, imageAlt]
+      .filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim();
+  }
+
+  function isMeaningfulInteractive(el) {
+    return isInsideCapture(el) && accessibleName(el).length >= 2;
+  }
+
+  function interactionKind(el, role) {
+    const rect = el.getBoundingClientRect();
+    const tag = (el.tagName || '').toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const inForm = Boolean(el.closest('form'));
+    const inNavigation = Boolean(el.closest('nav, header, [role="navigation"]'));
+    const inCarousel = Boolean(el.closest('[class*="carousel"], [class*="slider"], [class*="swiper"], [class*="slick"]'));
+    const hasImage = Boolean(el.querySelector && el.querySelector('img, svg'));
+    const controlHint = [el.className, el.id, el.getAttribute('aria-label'), el.getAttribute('title')]
+      .filter((value) => typeof value === 'string').join(' ').toLowerCase();
+    const aspect = rect.height > 0 ? rect.width / rect.height : Number.POSITIVE_INFINITY;
+
+    // Yalnizca tur saklanir; gorunen metin/accessible name kalici veriye yazilmaz.
+    if (rect.width > window.innerWidth * 0.55 || aspect > 16) return 'container_link';
+    if (
+      rect.width <= 14 && rect.height <= 14 ||
+      inCarousel ||
+      /(carousel|slider|swiper|slick|pagination|next|prev|ileri|geri)/.test(controlHint)
+    ) return 'pagination_control';
+    if (role === 'button') {
+      if (type === 'submit' || inForm) return 'form_action';
+      if (inNavigation) return 'navigation_action';
+      return 'button';
+    }
+    if (inNavigation) return 'navigation_link';
+    if (hasImage || tag === 'a' && el.children.length > 2) return 'image_link';
+    return 'content_link';
+  }
+
+  function interactionPriority(el, role) {
+    const rect = el.getBoundingClientRect();
+    const kind = interactionKind(el, role);
+    const kindWeight = {
+      form_action: 10,
+      button: 7,
+      content_link: 4.5,
+      image_link: 3.5,
+      navigation_action: 3,
+      navigation_link: 2,
+      pagination_control: 0.8,
+      container_link: 0.05,
+    }[kind] || 1;
+    const sizeBonus = Math.min(2, Math.sqrt(Math.max(1, rect.width * rect.height)) / 45);
+    const centerX = rect.x + rect.width / 2;
+    const centerBonus = Math.max(0, 1 - Math.abs(centerX - window.innerWidth / 2) / (window.innerWidth / 2));
+    const visibleStartBonus = rect.y >= 0 && rect.y < window.innerHeight * 0.8 ? 0.5 : 0;
+    return kindWeight + sizeBonus + centerBonus * 0.35 + visibleStartBonus;
   }
 
   function relativeLuminance(r, g, b) {
@@ -149,7 +215,7 @@ _FEATURE_EXTRACTION_JS = """
   }
 
   const title = document.title || '';
-  const headingEls = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6')).filter(isVisible);
+  const headingEls = Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6')).filter(isInsideCapture);
   const headings = headingEls.slice(0, 50).map((el, i) => ({
     level: parseInt(el.tagName.substring(1), 10),
     text: (el.innerText || '').trim().slice(0, 200),
@@ -164,24 +230,46 @@ _FEATURE_EXTRACTION_JS = """
     ? sentenceWordCounts.reduce((a, b) => a + b, 0) / sentenceWordCounts.length
     : 0;
 
-  const links = Array.from(document.querySelectorAll('a[href]')).filter(isVisible);
+  const links = Array.from(document.querySelectorAll('a[href]')).filter(isMeaningfulInteractive);
   const buttons = Array.from(
     document.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]')
-  ).filter(isVisible);
+  ).filter(isMeaningfulInteractive);
   const forms = Array.from(document.querySelectorAll('form'));
   const formFields = Array.from(
     document.querySelectorAll('form input, form select, form textarea')
-  ).filter((el) => !['hidden', 'submit', 'button'].includes((el.getAttribute('type') || '').toLowerCase()) && isVisible(el));
+  ).filter((el) => !['hidden', 'submit', 'button'].includes((el.getAttribute('type') || '').toLowerCase()) && isInsideCapture(el));
+
+  const interactiveCandidates = [];
+  const seenInteractive = new Set();
+  buttons.forEach((el) => {
+    if (!seenInteractive.has(el)) {
+      seenInteractive.add(el);
+      interactiveCandidates.push(['button', el]);
+    }
+  });
+  links.forEach((el) => {
+    if (!seenInteractive.has(el)) {
+      seenInteractive.add(el);
+      interactiveCandidates.push(['link', el]);
+    }
+  });
+  interactiveCandidates.sort((a, b) => interactionPriority(b[1], b[0]) - interactionPriority(a[1], a[0]));
 
   const boxCandidates = [];
   headingEls.slice(0, 5).forEach((el) => boxCandidates.push(['heading', el]));
-  buttons.slice(0, 8).forEach((el) => boxCandidates.push(['button', el]));
-  forms.slice(0, 5).forEach((el) => boxCandidates.push(['form', el]));
-  links.slice(0, 7).forEach((el) => boxCandidates.push(['link', el]));
+  interactiveCandidates.slice(0, 12).forEach(([role, el]) => boxCandidates.push([role, el]));
+  forms.filter(isInsideCapture).slice(0, 3).forEach((el) => boxCandidates.push(['form', el]));
 
   const elementBoxes = boxCandidates.slice(0, 20).map(([role, el]) => {
     const rect = el.getBoundingClientRect();
-    return { role, x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    return {
+      role,
+      interaction_kind: role === 'button' || role === 'link' ? interactionKind(el, role) : null,
+      x: rect.x,
+      y: rect.y,
+      width: rect.width,
+      height: rect.height,
+    };
   });
 
   // Sentetik dikkat isi haritasi icin sinirli (bounded) yerlesim bolgeleri:
@@ -190,10 +278,10 @@ _FEATURE_EXTRACTION_JS = """
   // ASLA okunmaz/saklanmaz. Eslesen bir eleman yoksa (ör. <footer> yok) o
   // bolge icin null donulur - rastgele/tahmini koordinat uretilmez.
   function boundedBoxPercent(el) {
-    if (!el || !isVisible(el)) return null;
+    if (!el || !isInsideCapture(el)) return null;
     const rect = el.getBoundingClientRect();
     const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const vh = captureHeight;
     const x = Math.max(0, rect.x);
     const y = Math.max(0, rect.y);
     const width = Math.min(rect.x + rect.width, vw) - x;
@@ -222,7 +310,7 @@ _FEATURE_EXTRACTION_JS = """
   };
 
   const textCandidates = Array.from(document.querySelectorAll('body *')).filter((el) => {
-    if (!isVisible(el)) return false;
+    if (!isInsideCapture(el)) return false;
     const ownText = Array.from(el.childNodes)
       .filter((n) => n.nodeType === Node.TEXT_NODE)
       .map((n) => n.textContent.trim())
@@ -296,6 +384,8 @@ def _build_snapshot(
     screenshot_bytes: bytes,
     axe_response: dict,
     warnings: list[str],
+    screenshot_width: int,
+    screenshot_height: int,
 ) -> PageFeatureSnapshotV1:
     accessibility = {
         "violations": [
@@ -325,8 +415,8 @@ def _build_snapshot(
         "contrast_candidates": features["contrast_candidates"],
         "accessibility_precheck": accessibility,
         "screenshot": {
-            "width": settings.viewport_width,
-            "height": settings.viewport_height,
+            "width": screenshot_width,
+            "height": screenshot_height,
             "base64_data": base64.b64encode(screenshot_bytes).decode("ascii"),
         },
         "warnings": warnings,
@@ -382,8 +472,50 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
     if redirect_state["count"] > 0:
         warnings.append(f"{redirect_state['count']} yonlendirme takip edildi")
 
-    screenshot_bytes = await page.screenshot(full_page=False, type="png")
-    features = await page.evaluate(_FEATURE_EXTRACTION_JS)
+    # SPA ve tembel yuklenen bolumlerin yerlesmesi icin sinirli bir bekleme
+    # ve pasif kaydirma yapilir; tiklama/form gonderme yapilmaz.
+    try:
+        await page.wait_for_load_state("networkidle", timeout=5000)
+    except PlaywrightTimeoutError:
+        warnings.append("Ag istekleri 5 saniyede sakinlesmedi; mevcut icerikle devam edildi")
+
+    await page.evaluate(
+        """async ({step, limit, settle}) => {
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          let previousHeight = 0;
+          for (let y = 0; y < limit; y += step) {
+            window.scrollTo(0, y);
+            await sleep(settle);
+            const height = Math.max(document.body?.scrollHeight || 0, document.documentElement.scrollHeight || 0);
+            if (height === previousHeight && y + step >= height) break;
+            previousHeight = height;
+          }
+          window.scrollTo(0, 0);
+          await sleep(settle);
+        }""",
+        {
+            "step": settings.viewport_height,
+            "limit": settings.screenshot_max_height,
+            "settle": settings.dynamic_content_settle_ms,
+        },
+    )
+    document_height = await page.evaluate(
+        "Math.max(document.body?.scrollHeight || 0, document.documentElement.scrollHeight || 0)"
+    )
+    capture_height = min(
+        max(settings.viewport_height, int(document_height)), settings.screenshot_max_height
+    )
+    if int(document_height) > capture_height:
+        warnings.append(
+            f"Sayfa {int(document_height)} px; ekran goruntusu guvenlik siniri nedeniyle {capture_height} px ile sinirlandi"
+        )
+
+    screenshot_bytes = await page.screenshot(
+        type="png",
+        animations="disabled",
+        clip={"x": 0, "y": 0, "width": settings.viewport_width, "height": capture_height},
+    )
+    features = await page.evaluate(_FEATURE_EXTRACTION_JS, capture_height)
 
     axe = Axe()
     axe_results = await axe.run(page, options={"resultTypes": ["violations", "passes", "incomplete"]})
@@ -398,6 +530,8 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
         screenshot_bytes=screenshot_bytes,
         axe_response=axe_results.response,
         warnings=warnings,
+        screenshot_width=settings.viewport_width,
+        screenshot_height=capture_height,
     )
 
 

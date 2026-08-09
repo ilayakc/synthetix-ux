@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Reports from "./Reports";
 
@@ -21,6 +21,7 @@ describe("Reports", () => {
       "fetch",
       vi.fn().mockImplementation((url: string) => {
         if (url.includes("/api/reports")) return jsonResponse(200, []);
+        if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
@@ -33,7 +34,7 @@ describe("Reports", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText("Henüz tamamlanmış bir simülasyondan üretilmiş rapor yok."),
+        screen.getByText("Henüz yarım kalan test veya tamamlanmış rapor yok."),
       ).toBeInTheDocument(),
     );
   });
@@ -60,6 +61,7 @@ describe("Reports", () => {
             },
           ]);
         }
+        if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
@@ -70,10 +72,50 @@ describe("Reports", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText("Anasayfa testi — Ana Senaryo")).toBeInTheDocument(),
+    await waitFor(() => expect(screen.getByText("Anasayfa testi")).toBeInTheDocument());
+    expect(screen.getByText(/Ana Senaryo · Anasayfa Yenileme/)).toBeInTheDocument();
+    expect(screen.getByText("Kalibre edilmemiş")).toBeInTheDocument();
+  });
+
+  it("yarim kalan testleri kaldigi adim ve devam baglantisiyla gosterir", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/reports")) return jsonResponse(200, []);
+        if (url.includes("/api/tests/drafts")) {
+          return jsonResponse(200, [
+            {
+              id: "draft-1",
+              organization_id: "org",
+              status: "draft",
+              current_step: 3,
+              payload: { name: "Mobil ödeme denemesi" },
+              missing_fields: [],
+              created_at: "2026-07-03T00:00:00Z",
+              updated_at: "2026-07-04T00:00:00Z",
+              warnings: [],
+            },
+          ]);
+        }
+        throw new Error(`Beklenmeyen istek: ${url}`);
+      }),
     );
-    expect(screen.getByText("uncalibrated")).toBeInTheDocument();
+
+    render(
+      <MemoryRouter>
+        <Reports />
+      </MemoryRouter>,
+    );
+
+    const draftHeading = await screen.findByText("Yarım Kalan Testler");
+    expect(draftHeading).toBeInTheDocument();
+    expect(draftHeading.closest("section")).toHaveAttribute("id", "yarim-kalan-testler");
+    expect(screen.getByText("Mobil ödeme denemesi")).toBeInTheDocument();
+    expect(screen.getByText(/3. adımda bırakıldı/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Mobil ödeme denemesi/ })).toHaveAttribute(
+      "href",
+      "/tests/new?draft=draft-1",
+    );
   });
 
   it("raporlar alinamadiginda hata mesaji gosterir", async () => {
@@ -81,6 +123,7 @@ describe("Reports", () => {
       "fetch",
       vi.fn().mockImplementation((url: string) => {
         if (url.includes("/api/reports")) return jsonResponse(500, { detail: "Sunucu hatası" });
+        if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
         throw new Error(`Beklenmeyen istek: ${url}`);
       }),
     );
@@ -92,5 +135,33 @@ describe("Reports", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Raporlar yüklenemedi.")).toBeInTheDocument());
+  });
+
+  it("hata sonrasinda tekrar deneyerek listeyi yukler", async () => {
+    let reportAttempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/reports")) {
+          reportAttempts += 1;
+          return reportAttempts === 1 ? jsonResponse(500, {}) : jsonResponse(200, []);
+        }
+        if (url.includes("/api/tests/drafts")) return jsonResponse(200, []);
+        throw new Error(`Beklenmeyen istek: ${url}`);
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <Reports />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Tekrar dene" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Henüz yarım kalan test veya tamamlanmış rapor yok.")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Raporlar yüklenemedi.")).not.toBeInTheDocument();
   });
 });

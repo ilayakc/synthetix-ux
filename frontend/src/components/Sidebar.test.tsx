@@ -59,11 +59,11 @@ describe("Sidebar", () => {
       </MemoryRouter>,
     );
 
-    const primaryLabels = ["Genel Bakış", "Projeler", "Simülasyonlar", "Raporlar", "Çip Cüzdanı"];
+    const primaryLabels = ["Genel Bakış", "Projeler", "Simülasyonlar", "Raporlar", "Chip Cüzdanı"];
     for (const label of primaryLabels) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
-    expect(screen.getByRole("link", { name: "Çip Cüzdanı" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Chip Cüzdanı" })).toHaveAttribute(
       "href",
       "/kullanim-ve-chip",
     );

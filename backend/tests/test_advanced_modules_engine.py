@@ -100,6 +100,14 @@ def test_attention_grid_matches_regions():
     assert grid_keys == region_keys
 
 
+def test_attention_produces_distinct_normalized_click_interest_grid():
+    result = advanced_modules.run_synthetic_attention_estimate(_snapshot(), deterministic_seed=1)
+    assert result["gaze_grid"] == result["grid"]
+    assert len(result["click_grid"]) == len(result["grid"])
+    assert sum(cell["score"] for cell in result["click_grid"]) == pytest.approx(1.0, abs=0.01)
+    assert result["click_grid"] != result["grid"]
+
+
 def test_attention_missing_url_raises_module_input_error():
     with pytest.raises(advanced_modules.ModuleInputError):
         advanced_modules.run_synthetic_attention_estimate({"role": "primary"}, deterministic_seed=1)

@@ -85,13 +85,15 @@ describe("ChipTopUp", () => {
     expect(screen.queryByLabelText(/kart üzerindeki isim/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/son kullanma tarihi/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/güvenlik kodu/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Ödeme sağlayıcısı henüz aktif değildir/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/yönetici onayından sonra Chip hesabınıza eklenir/i),
+    ).toBeInTheDocument();
 
     const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
     fireEvent.click(screen.getByText("Yükleme talebi gönder"));
 
     await waitFor(() =>
-      expect(screen.getByText(/Chip bakiyeniz henüz değişmedi/)).toBeInTheDocument(),
+      expect(screen.getByText(/talebiniz yönetime iletildi/i)).toBeInTheDocument(),
     );
 
     const topupCall = fetchMock.mock.calls.find(
@@ -104,7 +106,7 @@ describe("ChipTopUp", () => {
     expect(requestBody).toEqual({ package_key: expect.any(String) });
   });
 
-  it("talep gonderme basarili olunca bakiyenin degismedigini belirten bilgilendirme gosterir", async () => {
+  it("talep gonderme basarili olunca yonetici onayi bilgilendirmesi gosterir", async () => {
     stubFetch({});
 
     render(<ChipTopUp />);
@@ -113,7 +115,7 @@ describe("ChipTopUp", () => {
     fireEvent.click(screen.getByText("Yükleme talebi gönder"));
 
     await waitFor(() =>
-      expect(screen.getByText(/Chip bakiyeniz henüz değişmedi/)).toBeInTheDocument(),
+      expect(screen.getByText(/talebiniz yönetime iletildi/i)).toBeInTheDocument(),
     );
   });
 

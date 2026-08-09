@@ -6,13 +6,14 @@ import {
   type ProjectResponse,
   type ReportListItemResponse,
   type SimulationRunResponse,
-  type SimulationRunStatus,
   type UsageSummaryResponse,
+  type WizardDraftResponse,
   getChipLedger,
   getUsageSummary,
   listProjects,
   listReports,
   listSimulationRuns,
+  listWizardDrafts,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { normalizeTurkishSystemCopy } from "../lib/turkishCopy";
@@ -22,7 +23,6 @@ import {
   ChipCoinIcon,
   FolderIcon,
   ShieldCheckIcon,
-  TicketIcon,
 } from "../components/icons";
 
 interface DashboardData {
@@ -31,26 +31,7 @@ interface DashboardData {
   usage: UsageSummaryResponse;
   reports: ReportListItemResponse[];
   ledger: ChipLedgerEntryResponse[];
-}
-
-const RUN_STATUS_LABELS: Record<SimulationRunStatus, string> = {
-  queued: "Kuyrukta",
-  running: "Çalışıyor",
-  succeeded: "Tamamlandı",
-  failed: "Başarısız",
-  cancelled: "İptal edildi",
-};
-
-const ENTITLEMENT_STATUS_LABELS: Record<string, string> = {
-  available: "Kullanılabilir",
-  reserved: "Rezerve edildi",
-  consumed: "Kullanıldı",
-};
-
-function StatusBadge({ status }: { status: SimulationRunStatus }) {
-  return (
-    <span className={`status-badge status-badge--${status}`}>{RUN_STATUS_LABELS[status]}</span>
-  );
+  drafts: WizardDraftResponse[];
 }
 
 function formatDateTime(value: string): string {
@@ -81,9 +62,15 @@ function SummaryCard({
       <p className="summary-card__value">{value}</p>
       {helper && <p className="summary-card__helper">{helper}</p>}
       {to && (
-        <Link to={to} className="summary-card__link">
-          {linkLabel ?? "Görüntüle"}
-        </Link>
+        to.includes("#") ? (
+          <a href={to} className="summary-card__link">
+            {linkLabel ?? "Görüntüle"}
+          </a>
+        ) : (
+          <Link to={to} className="summary-card__link">
+            {linkLabel ?? "Görüntüle"}
+          </Link>
+        )
       )}
     </div>
   );
@@ -97,23 +84,6 @@ function SummaryCardSkeleton() {
       <div className="skeleton-block skeleton-block--value" />
     </div>
   );
-}
-
-function entitlementFor(usage: UsageSummaryResponse, featureKey: string) {
-  const entitlement = usage.entitlements.find((item) => item.feature_key === featureKey);
-  if (!entitlement) {
-    return { remaining: 0, statusLabel: "Hak bilgisi bulunamadı" };
-  }
-  const remaining = entitlement.status === "available" ? entitlement.quantity : 0;
-  return { remaining, statusLabel: ENTITLEMENT_STATUS_LABELS[entitlement.status] };
-}
-
-function findActiveRun(runs: SimulationRunResponse[]): SimulationRunResponse | null {
-  const active = runs.filter((run) => run.status === "queued" || run.status === "running");
-  if (active.length === 0) return null;
-  return [...active].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  )[0];
 }
 
 interface ActivityItem {
@@ -174,7 +144,7 @@ function buildActivity(data: DashboardData): ActivityItem[] {
   for (const report of data.reports) {
     items.push({
       id: `report-created-${report.id}`,
-      label: `Rapor oluşturuldu: ${report.test_definition_name} — ${report.variant_name}`,
+      label: `Rapor oluşturuldu: ${report.test_definition_name} — ${normalizeTurkishSystemCopy(report.variant_name)}`,
       timestamp: report.created_at,
       href: `/raporlar/${report.id}`,
     });
@@ -211,17 +181,19 @@ export default function Dashboard() {
       getUsageSummary(),
       listReports(),
       getChipLedger(),
+      listWizardDrafts(),
     ])
-      .then(([projects, runs, usage, reports, ledger]) => {
+      .then(([projects, runs, usage, reports, ledger, drafts]) => {
         if (
           !Array.isArray(projects) ||
           !Array.isArray(runs) ||
           !Array.isArray(reports) ||
-          !Array.isArray(ledger)
+          !Array.isArray(ledger) ||
+          !Array.isArray(drafts)
         ) {
           throw new Error("Beklenmeyen veri biçimi");
         }
-        setData({ projects, runs, usage, reports, ledger });
+        setData({ projects, runs, usage, reports, ledger, drafts });
       })
       .catch(() => {
         setHasError(true);
@@ -241,8 +213,30 @@ export default function Dashboard() {
     [],
   );
 
-  const activeRun = data ? findActiveRun(data.runs) : null;
   const activity = data ? buildActivity(data) : [];
+  const dashboardSummary = useMemo(() => {
+    if (!data) return null;
+
+    const completedDefinitionIds = new Set(
+      data.reports.map((report) => report.test_definition_id),
+    );
+    const activeRuns = data.runs.filter(
+      (run) => run.status === "queued" || run.status === "running",
+    ).length;
+    const availableModuleRights = data.usage.entitlements.reduce(
+      (total, entitlement) =>
+        total + (entitlement.status === "available" ? entitlement.quantity : 0),
+      0,
+    );
+
+    return {
+      completedTests: completedDefinitionIds.size,
+      continuingWork: data.drafts.length + activeRuns,
+      availableModuleRights,
+      draftCount: data.drafts.length,
+      activeRuns,
+    };
+  }, [data]);
 
   return (
     <section aria-labelledby="dashboard-heading">
@@ -261,9 +255,6 @@ export default function Dashboard() {
             kullanımına dair güncel özet aşağıda.
           </p>
         </div>
-        <Link to="/tests/new" className="auth-submit dashboard-welcome__cta">
-          Yeni Test Başlat
-        </Link>
       </div>
 
       {hasError && (
@@ -283,7 +274,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {data && (
+      {data && dashboardSummary && (
         <div className="dashboard-grid dashboard-grid--summary">
           <SummaryCard
             icon={<ChipCoinIcon />}
@@ -294,44 +285,34 @@ export default function Dashboard() {
             linkLabel="Chip kullanımını görüntüle"
           />
           <SummaryCard
-            icon={<TicketIcon />}
-            title="Ücretsiz Temel UX Testi"
-            value={entitlementFor(data.usage, "basic_ux_test").remaining.toString()}
-            helper={entitlementFor(data.usage, "basic_ux_test").statusLabel}
-            to="/kullanim-ve-chip"
-            linkLabel="Haklarımı görüntüle"
-          />
-          <SummaryCard
             icon={<ShieldCheckIcon />}
-            title="Ücretsiz Erişilebilirlik Ön Kontrolü"
-            value={entitlementFor(data.usage, "accessibility_precheck").remaining.toString()}
-            helper={entitlementFor(data.usage, "accessibility_precheck").statusLabel}
-            to="/kullanim-ve-chip"
+            title="Analiz Modülleri"
+            value={dashboardSummary.availableModuleRights.toString()}
+            helper="Kullanılabilir ücretsiz analiz hakkı"
+            to="/analiz-modulleri"
             linkLabel="Haklarımı görüntüle"
           />
           <SummaryCard
             icon={<FolderIcon />}
-            title="Aktif Proje Sayısı"
-            value={data.projects.filter((project) => project.status === "active").length.toString()}
-            helper="Arşivlenmemiş projeleriniz"
+            title="Toplam Proje"
+            value={data.projects.length.toString()}
+            helper="Aktif ve arşivlenmiş tüm projeler"
             to="/projeler"
             linkLabel="Projeleri görüntüle"
           />
           <SummaryCard
             icon={<ActivityIcon />}
-            title="Devam Eden Simülasyon Sayısı"
-            value={data.runs
-              .filter((run) => run.status === "queued" || run.status === "running")
-              .length.toString()}
-            helper="Kuyrukta veya çalışan testler"
-            to="/simulasyonlar"
-            linkLabel="Simülasyonları görüntüle"
+            title="Devam Eden Çalışmalar"
+            value={dashboardSummary.continuingWork.toString()}
+            helper={`${dashboardSummary.draftCount} yarım kalan taslak · ${dashboardSummary.activeRuns} çalışan test`}
+            to="/raporlar#yarim-kalan-testler"
+            linkLabel="Yarım kalanları görüntüle"
           />
           <SummaryCard
             icon={<CheckCircleIcon />}
-            title="Tamamlanan Simülasyonlar"
-            value={data.runs.filter((run) => run.status === "succeeded").length.toString()}
-            helper="Rapor üretilen çalıştırmalar"
+            title="Tamamlanan Testler"
+            value={dashboardSummary.completedTests.toString()}
+            helper="Raporu hazır olan benzersiz testler"
             to="/raporlar"
             linkLabel="Raporları görüntüle"
           />
@@ -339,57 +320,135 @@ export default function Dashboard() {
       )}
 
       <div className="dashboard-columns">
-        <section className="dashboard-section" aria-labelledby="active-test-heading">
-          <h2 id="active-test-heading" className="dashboard-section__title">
-            Aktif Test
-          </h2>
+        <section id="project-tests-heading" className="dashboard-section" aria-labelledby="project-tests-title">
+          <div className="dashboard-section__heading-row">
+            <div>
+              <h2 id="project-tests-title" className="dashboard-section__title">
+                Projelerim ve Testler
+              </h2>
+              <p>Bir projeyi açarak tamamlanan testleri ve yarım kalan taslakları görüntüleyin.</p>
+            </div>
+            <Link to="/projeler" className="dashboard-section__text-link">
+              Tüm projeler
+            </Link>
+          </div>
 
           {isLoading && !data && !hasError && (
             <div className="dashboard-card-skeleton" aria-hidden="true" />
           )}
 
-          {data && activeRun && (
-            <div className="active-test-card">
-              <div className="active-test-card__header">
-                <span className="active-test-card__name">
-                  Çalıştırma {activeRun.id.slice(0, 8)}
-                </span>
-                <StatusBadge status={activeRun.status} />
-              </div>
-              <dl className="active-test-card__meta">
-                <div>
-                  <dt>Başlangıç tarihi</dt>
-                  <dd>{formatDateTime(activeRun.created_at)}</dd>
-                </div>
-                <div>
-                  <dt>İşlem aşaması</dt>
-                  <dd>{activeRun.progress_message ?? RUN_STATUS_LABELS[activeRun.status]}</dd>
-                </div>
-              </dl>
-              {activeRun.status === "running" && (
-                <div
-                  className="progress-bar"
-                  role="progressbar"
-                  aria-valuenow={activeRun.progress_percent}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label="Simülasyon ilerlemesi"
-                >
-                  <div
-                    className="progress-bar__fill"
-                    style={{ width: `${activeRun.progress_percent}%` }}
-                  />
-                </div>
-              )}
-              <Link to="/simulasyonlar" className="active-test-card__link">
-                Simülasyon detayına git →
+          {data && data.projects.length === 0 && (
+            <div className="empty-state">
+              <p>Henüz bir projeniz yok.</p>
+              <Link to="/projeler" className="btn-secondary">
+                İlk projeyi oluştur
               </Link>
             </div>
           )}
 
-          {data && !activeRun && (
-            <div className="empty-state">
-              <p>Şu anda devam eden test bulunmuyor.</p>
+          {data && data.projects.length > 0 && (
+            <div className="project-test-list">
+              {data.projects.map((project) => {
+                const projectDrafts = data.drafts.filter(
+                  (draft) => draft.payload.project_id === project.id,
+                );
+                const completedByDefinition = new Map<string, ReportListItemResponse>();
+                data.reports
+                  .filter((report) => report.project_id === project.id)
+                  .forEach((report) => {
+                    if (!completedByDefinition.has(report.test_definition_id)) {
+                      completedByDefinition.set(report.test_definition_id, report);
+                    }
+                  });
+                const completedTests = [...completedByDefinition.values()];
+                const processingCount = Math.max(project.test_count - completedTests.length, 0);
+                const totalCount = project.test_count + projectDrafts.length;
+
+                return (
+                  <details key={project.id} className="project-test-group">
+                    <summary>
+                      <span>
+                        <strong>{project.name}</strong>
+                        <small>
+                          {project.test_count} başlatılmış test · {projectDrafts.length} taslak ·{" "}
+                          {completedTests.length} tamamlandı
+                        </small>
+                      </span>
+                      <span className="project-test-group__count">{totalCount}</span>
+                    </summary>
+                    <div className="project-test-group__content">
+                      {projectDrafts.length > 0 && (
+                        <div className="project-test-subsection">
+                          <h3>Yarım kalan testler</h3>
+                          <ul>
+                            {projectDrafts.map((draft) => (
+                              <li key={draft.id}>
+                                <Link to={`/tests/new?draft=${draft.id}`}>
+                                  <span>
+                                    <strong>
+                                      {draft.payload.name?.trim() || "Adsız test taslağı"}
+                                    </strong>
+                                    <small>
+                                      {draft.current_step}. adımda bırakıldı · Son değişiklik{" "}
+                                      {formatDateTime(draft.updated_at)}
+                                    </small>
+                                  </span>
+                                  <span>Devam et →</span>
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {completedTests.length > 0 && (
+                        <div className="project-test-subsection">
+                          <h3>Tamamlanan testler</h3>
+                          <ul>
+                            {completedTests.map((report) => (
+                              <li key={report.test_definition_id}>
+                                <Link to={`/raporlar/${report.id}`}>
+                                  <span>
+                                    <strong>{report.test_definition_name}</strong>
+                                    <small>Rapor hazır · {formatDateTime(report.created_at)}</small>
+                                  </span>
+                                  <span>Raporu aç →</span>
+                                </Link>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {processingCount > 0 && (
+                        <Link to="/simulasyonlar" className="project-test-processing">
+                          {processingCount} test çalışıyor veya sonuç bekliyor →
+                        </Link>
+                      )}
+
+                      {totalCount === 0 && (
+                        <p className="project-test-group__empty">
+                          Bu projede henüz test bulunmuyor.
+                        </p>
+                      )}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          )}
+
+          {data && data.drafts.some((draft) => !draft.payload.project_id) && (
+            <div className="unassigned-drafts">
+              <strong>Projeye bağlanmamış taslaklar</strong>
+              {data.drafts
+                .filter((draft) => !draft.payload.project_id)
+                .map((draft) => (
+                  <Link key={draft.id} to={`/tests/new?draft=${draft.id}`}>
+                    {draft.payload.name?.trim() || "Adsız test taslağı"} · {draft.current_step}.
+                    adımdan devam et →
+                  </Link>
+                ))}
             </div>
           )}
         </section>

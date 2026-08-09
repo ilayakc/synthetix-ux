@@ -9,6 +9,8 @@ export function normalizeTurkishSystemCopy(value: string): string {
       "A/B grup karşılaştırması",
     ],
     [/\bAI pipeline\b/g, "AI işlem hattı"],
+    [/\bAI işlem hattı sonucu: tum varyantlar basarili\b/g, "AI raporu tamamlandı"],
+    [/\bAI işlem hattı sonucu: tüm varyantlar başarılı\b/g, "AI raporu tamamlandı"],
     [/\bLaunch grubu\b/g, "Başlatma grubu"],
     [/\bAB\/grup karsilastirmasi\b/g, "A/B grup karşılaştırması"],
     [/\bpersona kohortlarıyla\b/g, "persona gruplarıyla"],
@@ -44,6 +46,11 @@ export function normalizeTurkishSystemCopy(value: string): string {
     [/\bdegildir\b/g, "değildir"],
     [/\bgoruntusu\b/g, "görüntüsü"],
     [/\bCalistirma\b/g, "Çalıştırma"],
+    [/\bcalistirma\b/g, "çalıştırma"],
+    [/\bBagli\b/g, "Bağlı"],
+    [/\bbagli\b/g, "bağlı"],
+    [/\boldugu\b/g, "olduğu"],
+    [/\bislenemedi\b/g, "işlenemedi"],
     [/\bUcretsiz\b/g, "Ücretsiz"],
     [/\bKarsilastirma\b/g, "Karşılaştırma"],
     [/\bkarsilastirilmasi\b/g, "karşılaştırılması"],
@@ -72,6 +79,18 @@ export function normalizeTurkishSystemCopy(value: string): string {
     [/\bGorev\b/g, "Görev"],
     [/\bSimulasyon\b/g, "Simülasyon"],
     [/\bsimulasyon\b/g, "simülasyon"],
+    [/\bsimülasyon yeniden deneme:\s*[0-9a-f-]{8,36}\b/gi, "Simülasyon yeniden denendi"],
+    [/\bTamamlandi\b/g, "Tamamlandı"],
+    [/\bBasarisiz\b/g, "Başarısız"],
+    [/\bsonuclar\b/g, "sonuçlar"],
+    [/\basama\b/g, "aşama"],
+    [/\bEsik\b/g, "Eşik"],
+    [/\besik\b/g, "eşik"],
+    [/\boraninda\b/g, "oranında"],
+    [/\bolusturma\b/g, "oluşturma"],
+    [/\bkullanici\b/g, "kullanıcı"],
+    [/\bkullanicilar\b/g, "kullanıcılar"],
+    [/\byerini almaz\b/g, "yerini almaz"],
     [/\bsonuclarindan\b/g, "sonuçlarından"],
     [/\bcok\b/g, "çok"],
     [/\basamali\b/g, "aşamalı"],
@@ -136,4 +155,13 @@ export function normalizeTurkishSystemCopy(value: string): string {
     (text, [pattern, replacement]) => text.replace(pattern, replacement),
     value,
   );
+}
+
+export function calibrationStatusLabel(value: string): string {
+  const labels: Record<string, string> = {
+    uncalibrated: "Kalibre edilmemiş",
+    calibrated: "Kalibre edilmiş",
+    partially_calibrated: "Kısmen kalibre edilmiş",
+  };
+  return labels[value] ?? normalizeTurkishSystemCopy(value.replaceAll("_", " "));
 }

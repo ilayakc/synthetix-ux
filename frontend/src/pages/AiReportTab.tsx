@@ -60,8 +60,10 @@ const TERMINAL_FAILURE_MESSAGES: Record<string, string> = {
 const GENERIC_ERROR =
   "AI raporu durumu şu anda alınamadı. Bu geçici bir sorun olabilir; lütfen tekrar deneyin.";
 
-function formatConfidence(confidence: number): string {
-  return `%${Math.round(confidence * 100)}`;
+function confidenceLabel(confidence: number): string {
+  if (confidence < 0.45) return "Düşük — gerçek kullanıcı testiyle doğrulayın";
+  if (confidence < 0.75) return "Orta — küçük bir A/B deneyiyle doğrulayın";
+  return "Yüksek — yine de sentetik bir tahmin";
 }
 
 function formatDateTime(value: string | null): string {
@@ -110,6 +112,7 @@ function polishLegacyMockCopy(value: string): string {
 
 interface AiReportTabProps {
   runId: string;
+  isAbComparison?: boolean;
   /** Ust bilesenin (ReportDetail) sekme gorunurlugu icin yaptigi ilk durum
    * sondasinin sonucu - cift istek yapmamak icin buradan devralinir. */
   initialStatus: AIPipelineStatusResponse | null;
@@ -120,7 +123,12 @@ interface AiReportTabProps {
 
 type ReportFetchState = "idle" | "loading" | "not_ready" | "error";
 
-export default function AiReportTab({ runId, initialStatus, initialError }: AiReportTabProps) {
+export default function AiReportTab({
+  runId,
+  isAbComparison = false,
+  initialStatus,
+  initialError,
+}: AiReportTabProps) {
   const [status, setStatus] = useState<AIPipelineStatusResponse | null>(initialStatus);
   const [statusError, setStatusError] = useState<boolean>(Boolean(initialError));
   const [report, setReport] = useState<AIReportResponse | null>(null);
@@ -225,8 +233,21 @@ export default function AiReportTab({ runId, initialStatus, initialError }: AiRe
         AI Raporu
       </h2>
       <p className="report-section__intro">
-        Çok aşamalı AI işlem hattının nihai çıktısını gösterir.
+        En önemli riski, bunun kullanıcı için anlamını ve atılabilecek sonraki adımı kısa biçimde
+        gösterir.
       </p>
+
+      {isAbComparison && (
+        <div className="ai-ab-guidance">
+          <strong>A/B testi nasıl okunmalı?</strong>
+          <p>
+            Varyant A aynı ürünün orijinal arayüzü, Varyant B ise yalnızca ölçmek istediğiniz
+            değişikliği içeren alternatif olmalıdır. Örneğin buton rengi, CTA metni veya yerleşim
+            değişir; hedef görev ve persona grubu aynı kalır. Böylece farkın hangi tasarım
+            değişikliğinden kaynaklandığını daha güvenli yorumlayabilirsiniz.
+          </p>
+        </div>
+      )}
 
       <AiReportBody
         status={status}
@@ -380,14 +401,12 @@ function AiReportContent({ report }: { report: AIReportResponse }) {
   const ux = report.report;
   return (
     <div className="ai-report-content">
-      <p className="methodology-note">
-        Üretim tarihi: {formatDateTime(report.generated_at)} · Rapor sürümü: {ux.report_version}
-      </p>
+      <div className="ai-summary-card">
+        <span className="ai-summary-card__label">Kısa özet</span>
+        <p>{polishLegacyMockCopy(ux.summary)}</p>
+      </div>
 
-      <h3>Özet</h3>
-      <p>{polishLegacyMockCopy(ux.summary)}</p>
-
-      <h3>Bulgular</h3>
+      <h3>Önerilen iyileştirmeler</h3>
       {ux.findings.length === 0 ? (
         <p className="report-section__intro">Bu raporda listelenen bir bulgu bulunmuyor.</p>
       ) : (
@@ -398,21 +417,59 @@ function AiReportContent({ report }: { report: AIReportResponse }) {
         </ul>
       )}
 
-      <h3>Sınırlamalar</h3>
-      <p className="methodology-note">{polishLegacyMockCopy(ux.limitations)}</p>
+      <details className="ai-technical-notes">
+        <summary>Teknik bilgiler ve sınırlamalar</summary>
+        <p>{polishLegacyMockCopy(ux.limitations)}</p>
+        <p className="methodology-note">
+          Üretim tarihi: {formatDateTime(report.generated_at)} · Rapor sürümü: {ux.report_version}
+        </p>
+      </details>
     </div>
   );
+}
+
+function readableFindingCopy(finding: AIReportFinding): {
+  finding: string;
+  recommendation: string;
+} {
+  const evidence = finding.evidence_references.join(" ");
+  if (evidence.includes("abandonment_probability")) {
+    return {
+      finding: "Bazı kullanıcıların hedef görevi tamamlamadan sayfadan ayrılma riski bulunuyor.",
+      recommendation:
+        "Akıştaki gereksiz adımları azaltın, birincil eylemi daha görünür yapın ve bu değişikliği gerçek kullanıcılarla doğrulayın.",
+    };
+  }
+  if (evidence.includes("misclick_probability")) {
+    return {
+      finding: "Kullanıcıların hedef dışındaki öğelere yönelme ihtimali dikkat gerektiriyor.",
+      recommendation:
+        "Birincil butonu çevresindeki ikincil bağlantıları sadeleştirin ve butonun görsel önceliğini artırın.",
+    };
+  }
+  if (evidence.includes("task_duration")) {
+    return {
+      finding: "Hedef görevi tamamlama süresi beklenenden uzun olabilir.",
+      recommendation:
+        "Adım sayısını azaltın ve kullanıcının bir sonraki hareketini daha açık gösterin.",
+    };
+  }
+  if (evidence.includes("task_completion")) {
+    return {
+      finding: "Hedef görevin tamamlanması bazı kullanıcılar için yeterince kolay görünmüyor.",
+      recommendation: "Ana yolu sadeleştirin ve en önemli eylemi ilk görünür alana taşıyın.",
+    };
+  }
+  return {
+    finding: polishLegacyMockCopy(finding.finding),
+    recommendation: polishLegacyMockCopy(finding.recommendation),
+  };
 }
 
 function AiFindingCard({ finding }: { finding: AIReportFinding }) {
   const priorityLabel = PRIORITY_LABELS[finding.priority] ?? finding.priority;
   const priorityColor = PRIORITY_COLORS[finding.priority] ?? "100, 116, 139";
-  const personaGroups =
-    finding.affected_persona_groups.length > 0
-      ? finding.affected_persona_groups.join(", ")
-      : "Belirtilmedi";
-  const evidence =
-    finding.evidence_references.length > 0 ? finding.evidence_references.join(", ") : "—";
+  const copy = readableFindingCopy(finding);
 
   return (
     <li className="finding-detail-card">
@@ -426,26 +483,20 @@ function AiFindingCard({ finding }: { finding: AIReportFinding }) {
         >
           {priorityLabel}
         </span>{" "}
-        <span className="methodology-note">Güven: {formatConfidence(finding.confidence)}</span>
+        <span className="methodology-note">
+          Güven düzeyi: {confidenceLabel(finding.confidence)}
+        </span>
       </p>
       <p className="finding-detail-card__row">
-        <strong>Bulgu:</strong> {polishLegacyMockCopy(finding.finding)}
+        <strong>Ne anlama geliyor?</strong> {copy.finding}
+      </p>
+      <p className="finding-detail-card__action">
+        <strong>Önerilen adım:</strong> {copy.recommendation}
       </p>
       <p className="finding-detail-card__row">
-        <strong>Öneri:</strong> {polishLegacyMockCopy(finding.recommendation)}
-      </p>
-      <p className="finding-detail-card__row">
-        <strong>Tahmini etkilenen kullanıcı:</strong>{" "}
+        <strong>Tahmini etki alanı:</strong>{" "}
         {finding.estimated_affected_users.toLocaleString("tr-TR")}
-      </p>
-      <p className="finding-detail-card__row">
-        <strong>Etkilenen persona grupları:</strong> {personaGroups}
-      </p>
-      <p className="finding-detail-card__row">
-        <strong>Kanıt referansları:</strong> {evidence}
-      </p>
-      <p className="finding-detail-card__row finding-detail-card__tag">
-        <strong>Kaynak aşama:</strong> {finding.source_stage}
+        {" sentetik persona"}
       </p>
     </li>
   );

@@ -151,6 +151,9 @@ async def _make_page_analysis(
     status: PageAnalysisStatus = PageAnalysisStatus.SUCCEEDED,
     screenshot_data: bytes | None = b"fake-png-bytes",
     layout_regions: dict | None = None,
+    element_boxes: list[dict] | None = None,
+    image_width: int | None = None,
+    image_height: int | None = None,
 ) -> PageAnalysis:
     analysis = PageAnalysis(
         organization_id=organization.id,
@@ -158,10 +161,13 @@ async def _make_page_analysis(
         authorization_confirmed=True,
         status=status,
         screenshot_data=screenshot_data,
+        image_width=image_width,
+        image_height=image_height,
         features={
             "final_url": url,
             "redirect_count": 0,
             "layout_regions": layout_regions if layout_regions is not None else dict(_FULL_LAYOUT_REGIONS),
+            "element_boxes": element_boxes or [],
         },
     )
     session.add(analysis)
@@ -435,7 +441,20 @@ async def test_heatmap_shows_visual_coordinates_when_screenshot_and_layout_regio
     session: AsyncSession, organization: Organization
 ):
     url = "https://example.com/anasayfa"
-    await _make_page_analysis(session, organization, url=url)
+    await _make_page_analysis(
+        session,
+        organization,
+        url=url,
+        image_width=1000,
+        image_height=500,
+        element_boxes=[
+            {"role": "heading", "x": 100, "y": 100, "width": 600, "height": 50},
+            {"role": "heading", "x": 80, "y": 300, "width": 700, "height": 40},
+            {"role": "button", "x": 600, "y": 200, "width": 160, "height": 50},
+            {"role": "link", "x": 100, "y": 20, "width": 80, "height": 20},
+            {"role": "link", "x": 200, "y": 20, "width": 80, "height": 20},
+        ],
+    )
 
     _project, _definition, variant = await _make_project_and_variant(session, organization, url=url)
     run = await _make_succeeded_run_with_report(
@@ -455,6 +474,12 @@ async def test_heatmap_shows_visual_coordinates_when_screenshot_and_layout_regio
         assert region.box is not None
         assert region.level in ("low", "medium", "high")
 
+    by_key = {region.key: region for region in detail.heatmap.regions}
+    # `layout_regions.hero_baslik.y_pct` fixture'da %8 olsa da gerçek DOM
+    # kutusu 100/500 = %20 konumundadır; sunulan görselle aynı ölçek seçilir.
+    assert by_key["hero_baslik"].box.y_pct == pytest.approx(20.0)
+    assert by_key["birincil_cta"].box.y_pct == pytest.approx(40.0)
+
     screenshot_response = await reports_router.get_report_heatmap_screenshot(
         report.id, organization_id=organization.id, session=session
     )
@@ -462,7 +487,7 @@ async def test_heatmap_shows_visual_coordinates_when_screenshot_and_layout_regio
     assert screenshot_response.body == b"fake-png-bytes"
 
 
-async def test_heatmap_falls_back_to_table_when_layout_regions_incomplete(
+async def test_heatmap_shows_only_detected_regions_when_layout_regions_incomplete(
     session: AsyncSession, organization: Organization
 ):
     url = "https://example.com/anasayfa"
@@ -479,12 +504,14 @@ async def test_heatmap_falls_back_to_table_when_layout_regions_incomplete(
     detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
 
     assert detail.heatmap.available is True
-    assert detail.heatmap.coordinates_available is False
-    assert detail.heatmap.screenshot_url is None
-    assert "koordinat" in detail.heatmap.coordinates_unavailable_reason.lower()
+    assert detail.heatmap.coordinates_available is True
+    assert detail.heatmap.screenshot_url == f"/api/reports/{report.id}/heatmap-screenshot"
+    assert "uydurulmuyor" in detail.heatmap.coordinates_unavailable_reason.lower()
     # Puan/bolge tablosu (erisilebilir alternatif) her zaman doludur.
     assert detail.heatmap.grid is not None
     assert len(detail.heatmap.grid) == 5
+    assert detail.heatmap.regions is not None
+    assert sum(region.box is not None for region in detail.heatmap.regions) == 4
 
 
 async def test_heatmap_screenshot_unavailable_when_retention_expired(
@@ -982,10 +1009,10 @@ async def test_heatmap_for_design_asset_source_unavailable_when_cells_missing(
     assert detail.heatmap.visual_cells is None
 
 
-async def test_url_source_heatmap_still_uses_semantic_regions(
+async def test_url_source_heatmap_uses_semantic_regions_when_visual_cells_are_missing(
     session: AsyncSession, organization: Organization
 ):
-    """URL/DOM raporlarinda mevcut 5-bolge davranisi DEGISMEDI."""
+    """Eski URL kayitlari gorsel grid tasimiyorsa DOM bolgelerine guvenli geri doner."""
 
     url = "https://example.com/anasayfa"
     await _make_page_analysis(session, organization, url=url)
@@ -1000,6 +1027,41 @@ async def test_url_source_heatmap_still_uses_semantic_regions(
     assert detail.heatmap.feature_source == "dom"
     assert detail.heatmap.visual_cells is None
     assert detail.heatmap.regions is not None
+
+
+async def test_url_source_heatmap_prefers_screenshot_visual_attention_cells(
+    session: AsyncSession, organization: Organization
+):
+    url = "https://example.com/gorsel-odak"
+    analysis = await _make_page_analysis(
+        session,
+        organization,
+        url=url,
+        image_width=1366,
+        image_height=900,
+    )
+    analysis.features = {
+        **analysis.features,
+        "visual_attention_algorithm_version": "visual-analysis-1",
+        "synthetic_attention_estimate": {
+            "grid": {"rows": 1, "cols": 2},
+            "cells": list(_VISUAL_ATTENTION_CELLS),
+        },
+    }
+    _project, _definition, variant = await _make_project_and_variant(session, organization, url=url)
+    run = await _make_succeeded_run_with_report(
+        session, organization, variant, url=url, modules=["synthetic_attention_estimate"]
+    )
+    run.page_analysis_id = analysis.id
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+    assert detail.heatmap.overlay_kind == "synthetic_visual_attention"
+    assert detail.heatmap.feature_source == "visual_heuristic"
+    assert detail.heatmap.visual_cells is not None
+    assert len(detail.heatmap.visual_cells) == 2
+    assert detail.heatmap.regions is None
 
 
 # --- Paket 4 Final Hardening: CTA overlay sozlesmesi ---------------------------
@@ -1101,8 +1163,17 @@ async def test_cta_overlay_returns_dom_candidates_normalized_for_url_source(
             "final_url": url,
             "redirect_count": 0,
             "element_boxes": [
-                {"role": "button", "x": 100.0, "y": 50.0, "width": 200.0, "height": 40.0},
+                {
+                    "role": "button",
+                    "interaction_kind": "form_action",
+                    "x": 100.0,
+                    "y": 50.0,
+                    "width": 200.0,
+                    "height": 40.0,
+                },
+                {"role": "button", "x": 500.0, "y": 200.0, "width": 20.0, "height": 30.0},
                 {"role": "link", "x": 0.0, "y": 0.0, "width": 50.0, "height": 20.0},
+                {"role": "link", "x": 100.0, "y": 10.0, "width": 700.0, "height": 12.0},
                 {"role": "div", "x": 10.0, "y": 10.0, "width": 10.0, "height": 10.0},
             ],
         },
@@ -1118,12 +1189,15 @@ async def test_cta_overlay_returns_dom_candidates_normalized_for_url_source(
 
     detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
     assert detail.cta_overlay.feature_source == "dom"
-    assert len(detail.cta_overlay.boxes) == 2  # yalnizca button/link, div haric
+    assert len(detail.cta_overlay.boxes) == 3  # div ve asiri genis kapsayici link haric
     box = next(b for b in detail.cta_overlay.boxes if b.x == 0.1)
     assert box.classification == "dom_interactive_candidate"
+    assert box.interaction_kind == "form_action"
     assert box.y == 0.1
     assert box.w == 0.2
     assert box.h == 0.08
+    pagination = next(b for b in detail.cta_overlay.boxes if b.x == 0.5)
+    assert pagination.interaction_kind == "pagination_control"
 
 
 async def test_cta_overlay_unavailable_when_no_boxes(session: AsyncSession, organization: Organization):
