@@ -2,11 +2,12 @@ import asyncio
 import uuid
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.cookies import CSRF_TOKEN_COOKIE
+from app.models.audit import AuditLog
 from tests.conftest import TEST_DATABASE_URL
 
 pytestmark = pytest.mark.integration
@@ -34,6 +35,20 @@ async def _set_platform_admin(user_id: str) -> None:
                 text("UPDATE users SET is_platform_admin = true WHERE id = :user_id"),
                 {"user_id": user_id},
             )
+    finally:
+        await engine.dispose()
+
+
+async def _audit_actions(entity_id: str) -> list[str]:
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with engine.connect() as connection:
+            result = await connection.execute(
+                select(AuditLog.action)
+                .where(AuditLog.entity_id == uuid.UUID(entity_id))
+                .order_by(AuditLog.created_at)
+            )
+            return list(result.scalars())
     finally:
         await engine.dispose()
 
@@ -91,6 +106,10 @@ def test_admin_can_approve_topup_once_and_credit_balance(client):
     balance = client.get("/api/billing/usage-summary")
     assert balance.status_code == 200
     assert balance.json()["chip_balance"] == 100
+    assert asyncio.run(_audit_actions(request_id)) == [
+        "chip_topup_requested",
+        "chip_topup_approved",
+    ]
 
     repeated = client.post(
         f"/api/admin/topup-requests/{request_id}/review",
@@ -99,6 +118,10 @@ def test_admin_can_approve_topup_once_and_credit_balance(client):
     )
     assert repeated.status_code == 200
     assert client.get("/api/billing/usage-summary").json()["chip_balance"] == 100
+    assert asyncio.run(_audit_actions(request_id)) == [
+        "chip_topup_requested",
+        "chip_topup_approved",
+    ]
 
 
 def test_admin_rejection_requires_note_and_does_not_credit(client):
@@ -121,6 +144,10 @@ def test_admin_rejection_requires_note_and_does_not_credit(client):
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected"
     assert client.get("/api/billing/usage-summary").json()["chip_balance"] == 0
+    assert asyncio.run(_audit_actions(request_id)) == [
+        "chip_topup_requested",
+        "chip_topup_rejected",
+    ]
 
 
 def test_admin_summary_returns_platform_counts(client):

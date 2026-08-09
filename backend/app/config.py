@@ -385,6 +385,24 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_render_postgres_url(cls, value: object) -> object:
+        """Render'in yonetilen Postgres URL'ini async SQLAlchemy lehcesine cevirir.
+
+        Render `postgresql://...` dondurur; uygulamanin async engine'i ise
+        acikca `postgresql+asyncpg://...` ister. Mevcut Docker/.env URL'leri
+        zaten dogru lehcede oldugu icin degistirilmez.
+        """
+
+        if not isinstance(value, str):
+            return value
+        if value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+asyncpg://", 1)
+        if value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql+asyncpg://", 1)
+        return value
+
     @field_validator("cookie_secure", "cookie_domain", "log_format", mode="before")
     @classmethod
     def _blank_env_value_means_unset(cls, value: object) -> object:

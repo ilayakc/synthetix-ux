@@ -23,4 +23,6 @@ COPY . .
 
 EXPOSE 8100
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100"]
+# Render `PORT=10000` verir; yerel Docker Compose bu degiskeni vermedigi icin
+# mevcut 8100 varsayilani aynen korunur.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8100}"]

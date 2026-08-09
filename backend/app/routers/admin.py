@@ -11,10 +11,14 @@ from sqlalchemy.orm import aliased
 from app.config import settings
 from app.db import get_session
 from app.dependencies import Principal, require_platform_admin, verify_csrf
+from app.logging_config import get_logger
 from app.models.ai_pipeline import AIPipelineRun, AIPipelineStatus
+from app.models.audit import AuditLog
 from app.models.billing import ChipTopUpRequest, ChipTopUpRequestStatus
 from app.models.tenancy import Organization, User
 from app.services import chip_ledger
+
+audit_logger = get_logger("audit")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -220,11 +224,42 @@ async def review_topup_request(
                 reference_type="chip_topup_request",
                 reference_id=request.id,
             )
+        action = (
+            "chip_topup_approved"
+            if target_status == ChipTopUpRequestStatus.APPROVED
+            else "chip_topup_rejected"
+        )
         request.status = target_status
         request.reviewed_by_user_id = principal.user_id
         request.reviewed_at = datetime.now(UTC)
         request.review_note = note
+        session.add(
+            AuditLog(
+                organization_id=request.organization_id,
+                actor_user_id=principal.user_id,
+                action=action,
+                entity_type="chip_topup_request",
+                entity_id=request.id,
+                entry_metadata={
+                    "status": target_status.value,
+                    "chip_amount": request.chip_amount,
+                    "package_key": request.package_key,
+                    "has_review_note": note is not None,
+                },
+            )
+        )
         await session.commit()
+        audit_logger.info(
+            "Chip yukleme talebi sonuclandirildi",
+            extra={
+                "action": action,
+                "entity_id": str(request.id),
+                "organization_id": str(request.organization_id),
+                "actor_user_id": str(principal.user_id),
+                "status": target_status.value,
+                "chip_amount": request.chip_amount,
+            },
+        )
 
     row = (await session.execute(_topup_query().where(ChipTopUpRequest.id == request.id))).one()
     return _serialize_topup(row)

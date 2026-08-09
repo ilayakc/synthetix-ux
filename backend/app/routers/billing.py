@@ -8,11 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.dependencies import Principal, get_current_principal, get_organization_id
+from app.logging_config import get_logger
+from app.models.audit import AuditLog
 from app.models.billing import ChipLedgerEntry, ChipTopUpRequest
 from app.services import chip_ledger, quotes
 from app.services import entitlements as entitlements_service
 from app.services.chip_packages import CURRENT_CHIP_PACKAGE_VERSION, get_chip_package, get_chip_packages
 from app.services.pricing import CURRENT_PRICING_VERSION
+
+audit_logger = get_logger("audit")
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
@@ -240,7 +244,34 @@ async def create_topup_request(
         chip_amount=package.chip_amount,
     )
     session.add(request)
+    await session.flush()
+    session.add(
+        AuditLog(
+            organization_id=principal.organization_id,
+            actor_user_id=principal.user_id,
+            action="chip_topup_requested",
+            entity_type="chip_topup_request",
+            entity_id=request.id,
+            entry_metadata={
+                "status": request.status.value,
+                "chip_amount": request.chip_amount,
+                "package_key": request.package_key,
+            },
+        )
+    )
     await session.commit()
+    audit_logger.info(
+        "Chip yukleme talebi olusturuldu",
+        extra={
+            "action": "chip_topup_requested",
+            "entity_id": str(request.id),
+            "organization_id": str(principal.organization_id),
+            "actor_user_id": str(principal.user_id),
+            "status": request.status.value,
+            "chip_amount": request.chip_amount,
+            "package_key": request.package_key,
+        },
+    )
 
     return TopUpRequestResponse(
         id=request.id,
