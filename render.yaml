@@ -14,7 +14,6 @@ services:
     dockerfilePath: ./Dockerfile.render-free
     dockerContext: .
     healthCheckPath: /api/health
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: PORT
         value: "10000"
@@ -72,7 +71,6 @@ services:
     dockerfilePath: ./analyzer/Dockerfile
     dockerContext: ./analyzer
     healthCheckPath: /health
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: PORT
         value: "10000"
