@@ -23,7 +23,7 @@ from decimal import Decimal
 # Bu fiyat metadata'sinin dogrulandigi surum/tarih - yeni bir fiyat
 # guncellemesi/dogrulamasi icin bu deger ARTAR ve ESKI kayitlar DEGISTIRILMEZ
 # (bkz. app.services.pricing versioned deseni).
-OPENAI_PRICING_VERSION = "2026.08-v1"
+OPENAI_PRICING_VERSION = "2026.08-v2"
 
 
 @dataclass(frozen=True)
@@ -36,15 +36,14 @@ class OpenAIModelPricing:
     verified_at: str
 
 
-# Faz 3D.1 gorev talimatinda dogrulanan resmi degerler (gpt-5.6-terra,
-# varsayilan model). Yeni bir model eklenirse buraya AYRI bir kayit eklenir;
-# mevcut kayitlar GERIYE DONUK degistirilmez.
+# Resmi OpenAI model sayfasinda dogrulanan degerler (gpt-5.6-terra,
+# varsayilan model). Yeni bir model eklenirse buraya AYRI bir kayit eklenir.
 _OPENAI_MODEL_PRICING: dict[str, OpenAIModelPricing] = {
     "gpt-5.6-terra": OpenAIModelPricing(
         model="gpt-5.6-terra",
-        input_rate_per_million=Decimal("2.50"),
-        output_rate_per_million=Decimal("15.00"),
-        verified_at="2026-08-03",
+        input_rate_per_million=Decimal("2.00"),
+        output_rate_per_million=Decimal("12.00"),
+        verified_at="2026-08-10",
     ),
 }
 

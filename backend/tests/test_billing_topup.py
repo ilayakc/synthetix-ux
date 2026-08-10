@@ -55,10 +55,11 @@ def test_list_chip_packages_does_not_use_disallowed_pdf_amounts(client):
     response = client.get("/api/billing/chip-packages")
     assert response.status_code == 200
     body = response.json()
-    assert body["package_version"] == "2026.1"
+    assert body["package_version"] == "2026.2"
 
     amounts = {p["chip_amount"] for p in body["packages"]}
-    assert amounts == {100, 500, 2000}
+    assert amounts == {50, 100, 200, 500, 1000, 2000}
+    assert {p["price_try"] for p in body["packages"]} == {119, 199, 349, 799, 1399, 2499}
     # PDF'deki 1.500-3.000 Chip araligindaki degerler dogrudan kullanilmamali.
     assert 1500 not in amounts
     assert 3000 not in amounts

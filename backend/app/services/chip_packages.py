@@ -20,6 +20,7 @@ class ChipPackage:
     key: str
     name: str
     chip_amount: int
+    price_try: int | None = None
 
 
 CHIP_PACKAGE_VERSIONS: dict[str, tuple[ChipPackage, ...]] = {
@@ -28,9 +29,17 @@ CHIP_PACKAGE_VERSIONS: dict[str, tuple[ChipPackage, ...]] = {
         ChipPackage(key="growth", name="Büyüme paketi", chip_amount=500),
         ChipPackage(key="scale", name="Ölçek paketi", chip_amount=2000),
     ),
+    "2026.2": (
+        ChipPackage(key="mini", name="Mini paket", chip_amount=50, price_try=119),
+        ChipPackage(key="starter", name="Başlangıç paketi", chip_amount=100, price_try=199),
+        ChipPackage(key="standard", name="Standart paket", chip_amount=200, price_try=349),
+        ChipPackage(key="growth", name="Büyüme paketi", chip_amount=500, price_try=799),
+        ChipPackage(key="pro", name="Profesyonel paket", chip_amount=1000, price_try=1399),
+        ChipPackage(key="scale", name="Ölçek paketi", chip_amount=2000, price_try=2499),
+    ),
 }
 
-CURRENT_CHIP_PACKAGE_VERSION = "2026.1"
+CURRENT_CHIP_PACKAGE_VERSION = "2026.2"
 
 
 def get_chip_packages(version: str | None = None) -> tuple[ChipPackage, ...]:

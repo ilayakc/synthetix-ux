@@ -34,8 +34,12 @@ def test_render_blueprint_declares_only_free_resources():
         "key": "ANALYZER_SHARED_TOKEN",
         "generateValue": True,
     }
-    assert env["AI_REPORT_PROVIDER"]["value"] == "mock"
-    assert env["ALLOW_MOCK_AI_PROVIDER"]["value"] == "true"
+    assert env["AI_REPORT_PROVIDER"]["value"] == "openai"
+    assert env["OPENAI_API_KEY"] == {"key": "OPENAI_API_KEY", "sync": False}
+    assert env["OPENAI_MODEL"]["value"] == "gpt-5.6-terra"
+    assert env["OPENAI_REASONING_EFFORT"]["value"] == "medium"
+    assert env["OPENAI_MAX_OUTPUT_TOKENS"]["value"] == "2000"
+    assert "ALLOW_MOCK_AI_PROVIDER" not in env
     assert env["BOOTSTRAP_ADMIN_EMAIL"]["value"] == "synthetix.demo.admin@example.com"
     assert env["BOOTSTRAP_ADMIN_PASSWORD"] == {
         "key": "BOOTSTRAP_ADMIN_PASSWORD",

@@ -29,8 +29,10 @@ describe("KullanimVeChip", () => {
           return Promise.resolve({
             ok: true,
             json: async () => ({
-              package_version: "2026.1",
-              packages: [{ key: "starter", name: "Başlangıç paketi", chip_amount: 100 }],
+              package_version: "2026.2",
+              packages: [
+                { key: "mini", name: "Mini paket", chip_amount: 50, price_try: 119 },
+              ],
             }),
           });
         }
@@ -48,7 +50,8 @@ describe("KullanimVeChip", () => {
     expect(screen.getByRole("heading", { name: "Chip Cüzdanı" })).toBeInTheDocument();
     expect(screen.getByText("Mevcut Chip Bakiyesi")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Chip Paketleri" })).toBeInTheDocument();
-    expect(screen.getByText(/Başlangıç paketi/)).toBeInTheDocument();
+    expect(screen.getByText(/Mini paket/)).toBeInTheDocument();
+    expect(screen.getByText("119 TL")).toBeInTheDocument();
     expect(screen.queryByText("Ücretsiz Temel UX Testi")).not.toBeInTheDocument();
     expect(screen.queryByText("Ücretsiz Erişilebilirlik Ön Kontrolü")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Chip Yükle" })).not.toBeInTheDocument();

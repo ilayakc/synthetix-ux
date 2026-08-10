@@ -10,7 +10,7 @@ kaynaklarının tamamı `render.yaml` içinde açıkça `plan: free` olarak tan�
 - `synthetix-ux-ily-analyzer`: token korumalı, internete açık analyzer
 - `synthetix-ux-ily-db`: ücretsiz PostgreSQL
 - `synthetix-ux-ily-queue`: ücretsiz Redis uyumlu Key Value
-- AI raporu: production istisnası açıkça belirtilmiş deterministik `mock`
+- AI raporu: OpenAI Responses API (`gpt-5.6-terra`)
 
 Frontend ve API aynı origin üzerinden sunulur. Böylece auth/CSRF cookie'leri
 iki farklı Render alan adı arasında taşınmaz. `ALLOWED_HOSTS` ve
@@ -24,13 +24,17 @@ hostname'den türetilir.
 3. GitHub deposunu bağlayın; Blueprint yolu olarak `render.yaml` kullanın.
 4. Önizleme ekranında iki web servisinin, PostgreSQL'in ve Key Value'nun
    tamamında **Free** yazdığını kontrol edin. Ücret görünürse oluşturmayın.
-5. **Apply** ile kaynakları oluşturun ve iki web deploy'unun tamamlanmasını
+5. Ana web servisi `synthetix-ux-ily` için **Environment** sayfasını açın.
+   `OPENAI_API_KEY` değişkeninin değerine OpenAI API anahtarını yapıştırın. Anahtarı
+   `render.yaml`, `.env`, GitHub veya ekran görüntüsüne eklemeyin. Blueprint'teki
+   `sync: false` tanımı, sırrın GitHub'a yazılmadan Render'da tutulmasını sağlar.
+6. **Apply** ile kaynakları oluşturun ve iki web deploy'unun tamamlanmasını
    bekleyin.
-6. Sağlık kontrollerini açın:
+7. Sağlık kontrollerini açın:
    - `https://synthetix-ux-ily.onrender.com/api/health`
    - `https://synthetix-ux-ily-analyzer.onrender.com/health`
-7. Sunumdan birkaç dakika önce iki adresi de açarak uyuyan servisleri
-   uyandırın. Ardından giriş, yeni test, analyzer ve mock AI raporu akışını
+8. Sunumdan birkaç dakika önce iki adresi de açarak uyuyan servisleri
+   uyandırın. Ardından giriş, yeni test, analyzer ve gerçek AI raporu akışını
    bir kez tamamlayın.
 
 Servis adı Render'da kullanılamıyorsa hem `name` alanını hem de ana servisteki
@@ -47,8 +51,10 @@ Servis adı Render'da kullanılamıyorsa hem `name` alanını hem de ana servist
 - Ücretsiz Key Value yeniden başlatıldığında kuyruk verileri kaybolabilir.
 - Ekran görüntülerinin veritabanını hızla doldurmaması için bağlı rapor
   görüntüleri 7 gün, geçici görüntüler 1 gün tutulur.
-- `mock` AI gerçek model çıktısı değildir; sunumda sentetik/demo sonucu olarak
-  açıkça anlatılmalıdır.
+- Render kaynakları ücretsiz olsa da OpenAI API kullanımı ayrıca ücretlidir.
+  Model, akıl yürütme seviyesi ve çıktı sınırı `render.yaml` içinde maliyet kontrollü
+  varsayılanlarla tanımlanmıştır. Kullanım ve harcama limitleri OpenAI panelinden
+  ayrıca izlenmelidir.
 
 ## Yerel Docker etkilenmez
 

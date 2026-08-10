@@ -67,9 +67,15 @@ services:
       - key: AI_REPORT_ENABLED
         value: "true"
       - key: AI_REPORT_PROVIDER
-        value: mock
-      - key: ALLOW_MOCK_AI_PROVIDER
-        value: "true"
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6-terra
+      - key: OPENAI_REASONING_EFFORT
+        value: medium
+      - key: OPENAI_MAX_OUTPUT_TOKENS
+        value: "2000"
 
   - type: web
     name: synthetix-ux-ily-analyzer

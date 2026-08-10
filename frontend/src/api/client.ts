@@ -290,6 +290,7 @@ export interface ChipPackage {
   key: string;
   name: string;
   chip_amount: number;
+  price_try: number | null;
 }
 
 export interface ChipPackageListResponse {

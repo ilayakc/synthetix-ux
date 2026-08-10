@@ -374,6 +374,14 @@ def test_unknown_model_pricing_returns_none_not_fabricated():
     assert estimate_cost_usd(model="some-unknown-model", input_tokens=100, output_tokens=100) is None
 
 
+def test_default_model_pricing_matches_verified_openai_rates():
+    pricing = get_model_pricing("gpt-5.6-terra")
+    assert pricing is not None
+    assert str(pricing.input_rate_per_million) == "2.00"
+    assert str(pricing.output_rate_per_million) == "12.00"
+    assert pricing.verified_at == "2026-08-10"
+
+
 # =================================================================================
 # SUCCESS / STRUCTURED OUTPUT PARSE (persona/ux report ayrica)
 # =================================================================================

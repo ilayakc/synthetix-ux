@@ -11,11 +11,14 @@ function jsonResponse(status: number, body: unknown) {
 }
 
 const packagesResponse = {
-  package_version: "2026.1",
+  package_version: "2026.2",
   packages: [
-    { key: "starter", name: "Başlangıç paketi", chip_amount: 100 },
-    { key: "growth", name: "Büyüme paketi", chip_amount: 500 },
-    { key: "scale", name: "Ölçek paketi", chip_amount: 2000 },
+    { key: "mini", name: "Mini paket", chip_amount: 50, price_try: 119 },
+    { key: "starter", name: "Başlangıç paketi", chip_amount: 100, price_try: 199 },
+    { key: "standard", name: "Standart paket", chip_amount: 200, price_try: 349 },
+    { key: "growth", name: "Büyüme paketi", chip_amount: 500, price_try: 799 },
+    { key: "pro", name: "Profesyonel paket", chip_amount: 1000, price_try: 1399 },
+    { key: "scale", name: "Ölçek paketi", chip_amount: 2000, price_try: 2499 },
   ],
 };
 
@@ -69,9 +72,14 @@ describe("ChipTopUp", () => {
 
     render(<ChipTopUp />);
 
-    await waitFor(() => expect(screen.getByText(/Başlangıç paketi/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Mini paket/)).toBeInTheDocument());
+    expect(screen.getByText(/Başlangıç paketi/)).toBeInTheDocument();
+    expect(screen.getByText(/Standart paket/)).toBeInTheDocument();
     expect(screen.getByText(/Büyüme paketi/)).toBeInTheDocument();
+    expect(screen.getByText(/Profesyonel paket/)).toBeInTheDocument();
     expect(screen.getByText(/Ölçek paketi/)).toBeInTheDocument();
+    expect(screen.getByText("119 TL")).toBeInTheDocument();
+    expect(screen.getByText("2.499 TL")).toBeInTheDocument();
   });
 
   it("sahte kart alanlarini gostermez ve yalnizca secilen paketi gonderir", async () => {
@@ -86,8 +94,9 @@ describe("ChipTopUp", () => {
     expect(screen.queryByLabelText(/son kullanma tarihi/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/güvenlik kodu/i)).not.toBeInTheDocument();
     expect(
-      screen.getByText(/yönetici onayından sonra bakiyenize eklenir/i),
+      screen.getByText(/çevrimiçi ödeme henüz açık değildir/i),
     ).toBeInTheDocument();
+    expect(screen.getByText(/kart veya ödeme bilgisi alınmaz/i)).toBeInTheDocument();
 
     const fetchMock = window.fetch as unknown as ReturnType<typeof vi.fn>;
     fireEvent.click(screen.getByText("Yükleme talebi gönder"));

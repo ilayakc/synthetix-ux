@@ -184,6 +184,7 @@ class ChipPackageResponse(BaseModel):
     key: str
     name: str
     chip_amount: int
+    price_try: int | None
 
 
 class ChipPackageListResponse(BaseModel):
@@ -198,7 +199,12 @@ async def list_chip_packages() -> ChipPackageListResponse:
     return ChipPackageListResponse(
         package_version=CURRENT_CHIP_PACKAGE_VERSION,
         packages=[
-            ChipPackageResponse(key=pkg.key, name=pkg.name, chip_amount=pkg.chip_amount)
+            ChipPackageResponse(
+                key=pkg.key,
+                name=pkg.name,
+                chip_amount=pkg.chip_amount,
+                price_try=pkg.price_try,
+            )
             for pkg in get_chip_packages()
         ],
     )

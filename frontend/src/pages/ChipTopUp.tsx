@@ -21,6 +21,8 @@ const REQUEST_STATUS_ORDER: TopUpRequestResponse["status"][] = [
   "rejected",
 ];
 
+const formatTry = (amount: number) => `${amount.toLocaleString("tr-TR")} TL`;
+
 export default function ChipTopUp() {
   const [chipBalance, setChipBalance] = useState<number | null>(null);
   const [packages, setPackages] = useState<ChipPackage[]>([]);
@@ -87,8 +89,8 @@ export default function ChipTopUp() {
         Chip Cüzdanı
       </h1>
       <p className="page-placeholder">
-        Bakiyenizi görüntüleyin ve ihtiyacınıza uygun Chip paketini doğrudan seçin. Talep,
-        yönetici onayından sonra bakiyenize eklenir.
+        Bakiyenizi görüntüleyin ve ihtiyacınıza uygun Chip paketini seçin. Çevrimiçi ödeme
+        henüz açık değildir; talebiniz yönetici onayından sonra bakiyenize eklenir.
       </p>
 
       {isLoading && <p className="page-placeholder">Yükleniyor…</p>}
@@ -108,18 +110,30 @@ export default function ChipTopUp() {
             <h2 className="page-heading" style={{ fontSize: "1.125rem", marginBottom: 4 }}>
               Chip Paketleri
             </h2>
-            <p className="page-placeholder">Yüklemek istediğiniz paketi seçin.</p>
-            <div className="wizard-radio-group">
+            <p className="page-placeholder">
+              Tanıtım fiyatlarıdır. Bu ekranda kart veya ödeme bilgisi alınmaz.
+            </p>
+            <div className="wizard-radio-group chip-package-grid">
               {packages.map((pkg) => (
-                <label key={pkg.key} className="wizard-radio-option">
+                <label key={pkg.key} className="wizard-radio-option chip-package-option">
                   <input
                     type="radio"
                     name="chip-package"
                     checked={selectedPackage === pkg.key}
                     onChange={() => setSelectedPackage(pkg.key)}
                   />
-                  <span>
-                    {pkg.name} — {pkg.chip_amount.toLocaleString("tr-TR")} Chip
+                  <span className="chip-package-option__content">
+                    <span className="chip-package-option__heading">
+                      <strong>{pkg.name}</strong>
+                      {pkg.price_try !== null && (
+                        <strong className="chip-package-option__price">
+                          {formatTry(pkg.price_try)}
+                        </strong>
+                      )}
+                    </span>
+                    <span className="chip-package-option__amount">
+                      {pkg.chip_amount.toLocaleString("tr-TR")} Chip
+                    </span>
                   </span>
                 </label>
               ))}

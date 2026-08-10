@@ -9,8 +9,13 @@ pytestmark = pytest.mark.unit
 
 def test_get_chip_packages_returns_current_version_by_default():
     packages = get_chip_packages()
-    assert {p.key for p in packages} == {"starter", "growth", "scale"}
-    assert {p.name for p in packages} == {"Başlangıç paketi", "Büyüme paketi", "Ölçek paketi"}
+    assert {p.key for p in packages} == {"mini", "starter", "standard", "growth", "pro", "scale"}
+    assert {p.chip_amount for p in packages} == {50, 100, 200, 500, 1000, 2000}
+    assert {p.price_try for p in packages} == {119, 199, 349, 799, 1399, 2499}
+
+
+def test_legacy_chip_packages_remain_resolvable_without_prices():
+    assert all(package.price_try is None for package in get_chip_packages("2026.1"))
 
 
 def test_get_chip_packages_rejects_unknown_version():

@@ -1746,6 +1746,42 @@
   margin-top: 3px;
 }
 
+.chip-package-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.chip-package-option {
+  min-width: 0;
+  padding: 14px;
+}
+
+.chip-package-option__content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chip-package-option__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chip-package-option__price {
+  color: var(--color-accent);
+  white-space: nowrap;
+}
+
+.chip-package-option__amount {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
 .wizard-actions {
   display: flex;
   justify-content: space-between;
