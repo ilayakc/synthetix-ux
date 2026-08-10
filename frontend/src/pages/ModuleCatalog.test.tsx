@@ -23,6 +23,7 @@ const catalogResponse = {
       measurement_type: "synthetic_estimate",
       chip_cost: 0,
       free_entitlement_feature_key: "basic_ux_test",
+      post_entitlement_cost_label: "Persona başına 1 Chip",
       estimated_duration_minutes: 5,
       selectable_in_wizard: false,
     },
@@ -82,11 +83,44 @@ describe("ModuleCatalog", () => {
 
     await waitFor(() => expect(screen.getByText("Temel UX testi")).toBeInTheDocument());
     expect(screen.getByText("Ağ ve cihaz testi")).toBeInTheDocument();
-    expect(screen.getByText("Ücretsiz hak uygunluğu var")).toBeInTheDocument();
+    expect(screen.getByText("Tek kullanımlık ücretsiz hakla kullanılabilir")).toBeInTheDocument();
     expect(screen.getByText("40 Chip")).toBeInTheDocument();
     expect(screen.getByText("Teknik ölçüm")).toBeInTheDocument();
     expect(screen.getAllByText("Sentetik tahmin").length).toBeGreaterThan(0);
     expect(screen.getByText(/Katalog sürümü: 2026.1/)).toBeInTheDocument();
+  });
+
+  it("kullanılmış ücretsiz hakkı gerçek Chip ücretine çevirerek gösterir", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/api/analysis-modules/catalog")) {
+          return jsonResponse(200, catalogResponse);
+        }
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 100,
+            pricing_version: "2026.3",
+            entitlements: [
+              {
+                feature_key: "basic_ux_test",
+                status: "consumed",
+                quantity: 1,
+                reserved_until: null,
+              },
+            ],
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${url}`);
+      }),
+    );
+
+    renderCatalog();
+
+    expect(
+      await screen.findByText("Ücretsiz hak kullanıldı · Persona başına 1 Chip"),
+    ).toBeInTheDocument();
   });
 
   it("secilemeyen temel moduller icin devre disi checkbox yerine aciklama gosterir", async () => {

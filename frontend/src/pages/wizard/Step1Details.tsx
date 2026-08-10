@@ -63,8 +63,11 @@ export default function Step1Details({ payload, fieldErrors, onChange }: StepPro
       </div>
 
       <div className="wizard-field">
-        <label>Test türü</label>
-        <div className="wizard-radio-group" role="radiogroup" aria-label="Test türü">
+        <label>Ana test türü</label>
+        <p className="wizard-field-hint">
+          Burada testin temel amacını seçersiniz. Bu ana analiz 4. adımda yeniden seçilmez.
+        </p>
+        <div className="wizard-radio-group" role="radiogroup" aria-label="Ana test türü">
           {TEST_TYPES.map((type) => (
             <label key={type} className="wizard-radio-option">
               <input

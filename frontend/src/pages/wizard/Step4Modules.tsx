@@ -4,7 +4,10 @@ import {
   aiReportRequiresPersonaSelection,
 } from "./aiReportPersona";
 import ModuleCatalogCard from "./ModuleCatalogCard";
-import { NETWORK_DEVICE_TEST_DISABLED_REASON, isModuleCompatibleWithSources } from "./moduleCompatibility";
+import {
+  NETWORK_DEVICE_TEST_DISABLED_REASON,
+  isModuleCompatibleWithSources,
+} from "./moduleCompatibility";
 import type { StepProps } from "./types";
 
 interface Step4Props extends StepProps {
@@ -60,7 +63,11 @@ export default function Step4Modules({
   return (
     <div>
       <div className="wizard-field">
-        <label>Analiz modülleri (isteğe bağlı)</label>
+        <label>Ek analiz modülleri (isteğe bağlı)</label>
+        <p className="wizard-field-hint">
+          1. adımda seçtiğiniz ana test burada tekrarlanmaz. Buradan yalnızca teste eklenecek ağ,
+          CTA, dikkat tahmini veya AI raporu gibi ek analizleri seçersiniz.
+        </p>
         <div className="module-card-grid">
           {selectableModules.map((module) => {
             const compatible = isModuleCompatibleWithSources(module, payload);

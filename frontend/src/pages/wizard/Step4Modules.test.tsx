@@ -68,6 +68,15 @@ describe("Step4Modules", () => {
     expect(screen.getByRole("heading", { name: "Kampanya ve CTA testi" })).toBeInTheDocument();
   });
 
+  it("1. adimdaki ana test ile 4. adimdaki ek modullerin farkini aciklar", () => {
+    renderStep4();
+
+    expect(screen.getByText("Ek analiz modülleri (isteğe bağlı)")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1\. adımda seçtiğiniz ana test burada tekrarlanmaz/),
+    ).toBeInTheDocument();
+  });
+
   it("bir kartin checkbox'ina tiklanmasi payload.modules'i gunceller", () => {
     const { onChange } = renderStep4();
 

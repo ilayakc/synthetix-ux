@@ -4,6 +4,8 @@ import {
   type AnalysisModuleCatalogResponse,
   ApiError,
   getAnalysisModuleCatalog,
+  getUsageSummary,
+  type EntitlementStatus,
 } from "../api/client";
 import ModuleCatalogCard from "./wizard/ModuleCatalogCard";
 
@@ -13,13 +15,26 @@ export default function ModuleCatalog() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [staged, setStaged] = useState<string[]>([]);
+  const [entitlementStatuses, setEntitlementStatuses] = useState<Record<string, EntitlementStatus>>(
+    {},
+  );
 
   useEffect(() => {
     let cancelled = false;
 
-    getAnalysisModuleCatalog()
-      .then((data) => {
-        if (!cancelled) setCatalog(data);
+    Promise.all([getAnalysisModuleCatalog(), getUsageSummary().catch(() => null)])
+      .then(([data, usage]) => {
+        if (!cancelled) {
+          setCatalog(data);
+          setEntitlementStatuses(
+            Object.fromEntries(
+              (usage?.entitlements ?? []).map((entitlement) => [
+                entitlement.feature_key,
+                entitlement.status,
+              ]),
+            ),
+          );
+        }
       })
       .catch((err) => {
         if (!cancelled) {
@@ -75,6 +90,11 @@ export default function ModuleCatalog() {
               module={module}
               queued={staged.includes(module.key)}
               onUseInTest={toggleStaged}
+              entitlementStatus={
+                module.free_entitlement_feature_key
+                  ? entitlementStatuses[module.free_entitlement_feature_key]
+                  : undefined
+              }
             />
           ))}
         </div>

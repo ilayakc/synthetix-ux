@@ -419,6 +419,7 @@ export interface AnalysisModuleDefinition {
   measurement_type: ModuleMeasurementType;
   chip_cost: number;
   free_entitlement_feature_key: string | null;
+  post_entitlement_cost_label?: string | null;
   estimated_duration_minutes: number;
   selectable_in_wizard: boolean;
   supported_source_types: ModuleSourceType[];

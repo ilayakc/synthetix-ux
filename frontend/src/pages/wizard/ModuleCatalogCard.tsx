@@ -1,4 +1,4 @@
-import type { AnalysisModuleDefinition } from "../../api/client";
+import type { AnalysisModuleDefinition, EntitlementStatus } from "../../api/client";
 import { normalizeTurkishSystemCopy } from "../../lib/turkishCopy";
 
 const MEASUREMENT_TYPE_LABELS: Record<AnalysisModuleDefinition["measurement_type"], string> = {
@@ -27,16 +27,39 @@ interface ModuleCatalogCardCatalogProps {
   /** Katalog sayfasindaki "test hazirligi" tepsisine eklenmis mi. */
   queued: boolean;
   onUseInTest: (key: string) => void;
+  entitlementStatus?: EntitlementStatus;
 }
 
 type ModuleCatalogCardProps = ModuleCatalogCardWizardProps | ModuleCatalogCardCatalogProps;
 
-function ModuleCatalogCardBody({ module }: { module: AnalysisModuleDefinition }) {
-  const costLabel =
-    module.chip_cost === 0
-      ? module.free_entitlement_feature_key
-        ? "Ücretsiz hak uygunluğu var"
-        : "Ücretsiz"
+function freeEntitlementLabel(
+  module: AnalysisModuleDefinition,
+  status?: EntitlementStatus,
+): string {
+  const paidLabel = module.post_entitlement_cost_label ?? "Chip ile kullanılabilir";
+  if (status === "consumed") return `Ücretsiz hak kullanıldı · ${paidLabel}`;
+  if (status === "reserved") return `Ücretsiz hak devam eden testte ayrıldı · ${paidLabel}`;
+  if (status === "available") {
+    return module.key === "ab_comparison"
+      ? "Temel UX ücretsiz hakkı mevcut"
+      : "1 ücretsiz kullanım hakkı mevcut";
+  }
+  return module.key === "ab_comparison"
+    ? "Temel UX ücretsiz hakkını paylaşır"
+    : "Tek kullanımlık ücretsiz hakla kullanılabilir";
+}
+
+function ModuleCatalogCardBody({
+  module,
+  entitlementStatus,
+}: {
+  module: AnalysisModuleDefinition;
+  entitlementStatus?: EntitlementStatus;
+}) {
+  const costLabel = module.free_entitlement_feature_key
+    ? freeEntitlementLabel(module, entitlementStatus)
+    : module.chip_cost === 0
+      ? "Ücretsiz"
       : `${module.chip_cost.toLocaleString("tr-TR")} Chip`;
 
   return (
@@ -93,13 +116,13 @@ export default function ModuleCatalogCard(props: ModuleCatalogCardProps) {
     );
   }
 
-  const { queued, onUseInTest } = props;
+  const { queued, onUseInTest, entitlementStatus } = props;
   return (
     <div className={`module-card module-card--static${queued ? " module-card--selected" : ""}`}>
       <div className="module-card__header">
         <h3>{normalizeTurkishSystemCopy(module.name)}</h3>
       </div>
-      <ModuleCatalogCardBody module={module} />
+      <ModuleCatalogCardBody module={module} entitlementStatus={entitlementStatus} />
       <div className="module-card__actions">
         {module.selectable_in_wizard ? (
           <button type="button" className="btn-secondary" onClick={() => onUseInTest(module.key)}>

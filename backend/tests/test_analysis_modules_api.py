@@ -82,6 +82,7 @@ def test_catalog_lists_seven_active_modules_with_full_metadata(client):
         "measurement_type",
         "chip_cost",
         "free_entitlement_feature_key",
+        "post_entitlement_cost_label",
         "estimated_duration_minutes",
         "selectable_in_wizard",
         "supported_source_types",
@@ -91,6 +92,9 @@ def test_catalog_lists_seven_active_modules_with_full_metadata(client):
     assert by_key["network_device_test"]["measurement_type"] == "technical_measurement"
     assert by_key["synthetic_attention_estimate"]["measurement_type"] == "synthetic_estimate"
     assert by_key["basic_ux_test"]["selectable_in_wizard"] is False
+    assert by_key["basic_ux_test"]["post_entitlement_cost_label"] == "Persona başına 1 Chip"
+    assert by_key["ab_comparison"]["post_entitlement_cost_label"] == "Persona başına 1 Chip"
+    assert by_key["accessibility_precheck"]["post_entitlement_cost_label"] == "30 Chip"
     assert by_key["network_device_test"]["selectable_in_wizard"] is True
     assert by_key["network_device_test"]["supported_source_types"] == ["url"]
     assert set(by_key["campaign_cta_test"]["supported_source_types"]) == {"url", "screenshot", "ai_generated"}

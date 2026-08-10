@@ -308,7 +308,7 @@ describe("TestWizard", () => {
 
     // 4. adim yuklendi.
     await waitFor(() =>
-      expect(screen.getByText("Analiz modülleri (isteğe bağlı)")).toBeInTheDocument(),
+      expect(screen.getByText("Ek analiz modülleri (isteğe bağlı)")).toBeInTheDocument(),
     );
 
     fireEvent.click(screen.getByText("İleri"));
