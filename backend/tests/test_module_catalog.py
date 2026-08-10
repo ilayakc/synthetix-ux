@@ -101,6 +101,8 @@ def test_new_advanced_modules_have_nonzero_chip_cost_and_no_free_entitlement():
 def test_ai_explanation_module_is_always_free_and_not_selectable():
     modules = {m.key: m for m in module_catalog.get_module_catalog()}
     ai_module = modules["ai_explanation"]
+    assert ai_module.name == "Hızlı rapor özeti"
+    assert "yeni bir AI analizi üretmez" in ai_module.description
     assert ai_module.chip_cost == 0
     assert ai_module.selectable_in_wizard is False
 

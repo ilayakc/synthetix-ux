@@ -168,10 +168,10 @@ MODULE_CATALOG_VERSIONS: dict[str, tuple[AnalysisModuleDefinition, ...]] = {
         ),
         AnalysisModuleDefinition(
             key="ai_explanation",
-            name="AI destekli aciklama",
+            name="Hızlı rapor özeti",
             description=(
-                "Zaten hesaplanmis rapor metriklerinden otomatik uretilen, uzman "
-                "degerlendirmesi gerektiren bir aciklama (bir 'AI karari' degildir)."
+                "Mevcut rapor sonuçlarını kısaca açıklayan otomatik bir özet; "
+                "yeni bir AI analizi üretmez."
             ),
             outputs=("Kisa ozet", "Olasi aciklamalar", "Onerilen dogrulama deneyi"),
             measurement_type=SYNTHETIC_ESTIMATE,
@@ -278,10 +278,10 @@ MODULE_CATALOG_VERSIONS: dict[str, tuple[AnalysisModuleDefinition, ...]] = {
         ),
         AnalysisModuleDefinition(
             key="ai_explanation",
-            name="AI destekli aciklama",
+            name="Hızlı rapor özeti",
             description=(
-                "Zaten hesaplanmis rapor metriklerinden otomatik uretilen, uzman "
-                "degerlendirmesi gerektiren bir aciklama (bir 'AI karari' degildir)."
+                "Mevcut rapor sonuçlarını kısaca açıklayan otomatik bir özet; "
+                "yeni bir AI analizi üretmez."
             ),
             outputs=("Kisa ozet", "Olasi aciklamalar", "Onerilen dogrulama deneyi"),
             measurement_type=SYNTHETIC_ESTIMATE,

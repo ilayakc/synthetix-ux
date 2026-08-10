@@ -46,10 +46,10 @@ _llm_logger = get_logger("llm")
 
 # UI'da bu bölüm asla "AI kararı" olarak adlandırılmaz; otomatik üretildiği
 # ve uzman değerlendirmesi gerektirdiği her zaman belirtilir.
-AI_SECTION_UI_LABEL = "AI destekli açıklama"
+AI_SECTION_UI_LABEL = "Hızlı rapor özeti"
 AI_SECTION_UI_SUBLABEL = (
-    "Bu bölüm otomatik olarak üretilmiştir ve bir AI kararı değildir; "
-    "uzman değerlendirmesi/doğrulaması gerektirir."
+    "Mevcut rapor sonuçlarını kısaca açıklar; yeni bir AI analizi üretmez. "
+    "Uzman değerlendirmesi/doğrulaması gerektirir."
 )
 
 PROMPT_VERSION = "ai-explanation-v1"
