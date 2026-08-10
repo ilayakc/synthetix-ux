@@ -120,6 +120,20 @@ async def seed_platform_admin(*, email: str, password: str) -> None:
         await session.commit()
 
 
+async def seed_demo_user(*, email: str, password: str) -> None:
+    """Ortam sirriyla verilen yetkisiz sunum kullanicisini idempotent hazirlar."""
+    account: DemoAccount = {
+        "email": email.strip().lower(),
+        "display_name": "Sunum Kullanicisi",
+        "organization_name": "Synthetix UX Demo Sirketi",
+        "organization_slug": "synthetix-ux-render-demo-sirketi",
+        "is_platform_admin": False,
+    }
+    async with async_session_maker() as session:
+        await _seed_demo_account(session, account, password=password)
+        await session.commit()
+
+
 async def seed() -> None:
     async with async_session_maker() as session:
         org = (

@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     # bootstrap kapali; sabit/bilinen bir uretim parolasi yoktur.
     bootstrap_admin_email: str | None = None
     bootstrap_admin_password: SecretStr | None = None
+    bootstrap_user_email: str | None = None
+    bootstrap_user_password: SecretStr | None = None
 
     # --- URL analiz servisi (analyzer) ---
     # analyzer, ayri bir container'da calisan, Playwright tabanli, SSRF'e

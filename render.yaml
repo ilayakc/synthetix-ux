@@ -31,6 +31,10 @@ services:
         value: synthetix.demo.admin@example.com
       - key: BOOTSTRAP_ADMIN_PASSWORD
         generateValue: true
+      - key: BOOTSTRAP_USER_EMAIL
+        value: synthetix.demo.user@example.com
+      - key: BOOTSTRAP_USER_PASSWORD
+        generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: ANALYZER_SHARED_TOKEN

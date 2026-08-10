@@ -35,10 +35,16 @@ def _bootstrap_admin() -> None:
     subprocess.run([sys.executable, "-m", "app.bootstrap_admin"], check=True)
 
 
+def _bootstrap_user() -> None:
+    print("render-free: sunum kullanicisi hazirlaniyor", flush=True)
+    subprocess.run([sys.executable, "-m", "app.bootstrap_user"], check=True)
+
+
 def main() -> int:
     _configure_render_origin()
     _run_migrations()
     _bootstrap_admin()
+    _bootstrap_user()
 
     commands = {
         "backend": ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],

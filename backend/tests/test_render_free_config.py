@@ -41,3 +41,8 @@ def test_render_blueprint_declares_only_free_resources():
         "key": "BOOTSTRAP_ADMIN_PASSWORD",
         "generateValue": True,
     }
+    assert env["BOOTSTRAP_USER_EMAIL"]["value"] == "synthetix.demo.user@example.com"
+    assert env["BOOTSTRAP_USER_PASSWORD"] == {
+        "key": "BOOTSTRAP_USER_PASSWORD",
+        "generateValue": True,
+    }
