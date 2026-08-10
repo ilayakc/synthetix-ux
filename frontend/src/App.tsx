@@ -5,7 +5,6 @@ import GuestOnly from "./auth/GuestOnly";
 import RouteFallback from "./auth/RouteFallback";
 import KullanimVeChip from "./pages/KullanimVeChip";
 import ModuleCatalog from "./pages/ModuleCatalog";
-import Placeholder from "./pages/Placeholder";
 import PersonaPresets from "./pages/PersonaPresets";
 import ProjectDetail from "./pages/ProjectDetail";
 import Projects from "./pages/Projects";
@@ -22,6 +21,7 @@ import Home from "./pages/Home";
 import AdminDashboard from "./pages/AdminDashboard";
 import AdminSettings from "./pages/AdminSettings";
 import AdminProtectedLayout from "./components/AdminProtectedLayout";
+import Help from "./pages/Help";
 
 export default function App() {
   useRouteChangeLogging();
@@ -70,7 +70,7 @@ export default function App() {
         <Route path="/raporlar/:reportId" element={<ReportDetail />} />
         <Route path="/kullanim-ve-chip" element={<KullanimVeChip />} />
         <Route path="/ayarlar" element={<Settings />} />
-        <Route path="/yardim" element={<Placeholder title="Yardım" />} />
+        <Route path="/yardim" element={<Help />} />
       </Route>
 
       <Route path="*" element={<RouteFallback />} />
