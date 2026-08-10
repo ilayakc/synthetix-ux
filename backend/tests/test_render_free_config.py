@@ -36,3 +36,8 @@ def test_render_blueprint_declares_only_free_resources():
     }
     assert env["AI_REPORT_PROVIDER"]["value"] == "mock"
     assert env["ALLOW_MOCK_AI_PROVIDER"]["value"] == "true"
+    assert env["BOOTSTRAP_ADMIN_EMAIL"]["value"] == "synthetix.demo.admin@example.com"
+    assert env["BOOTSTRAP_ADMIN_PASSWORD"] == {
+        "key": "BOOTSTRAP_ADMIN_PASSWORD",
+        "generateValue": True,
+    }

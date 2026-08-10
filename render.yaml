@@ -27,6 +27,10 @@ services:
         value: /api/health
       - key: COOKIE_SECURE
         value: "true"
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        value: synthetix.demo.admin@example.com
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: ANALYZER_SHARED_TOKEN

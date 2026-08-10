@@ -57,7 +57,7 @@ DEMO_ACCOUNTS: tuple[DemoAccount, ...] = (
 )
 
 
-async def _seed_demo_account(session, account: DemoAccount) -> None:
+async def _seed_demo_account(session, account: DemoAccount, *, password: str = DEMO_PASSWORD) -> None:
     organization = (
         await session.execute(select(Organization).where(Organization.slug == account["organization_slug"]))
     ).scalar_one_or_none()
@@ -77,14 +77,14 @@ async def _seed_demo_account(session, account: DemoAccount) -> None:
             email=account["email"],
             email_normalized=account["email"],
             display_name=account["display_name"],
-            password_hash=hash_password(DEMO_PASSWORD),
+            password_hash=hash_password(password),
             is_platform_admin=account["is_platform_admin"],
         )
         session.add(user)
         await session.flush()
     else:
         user.display_name = account["display_name"]
-        user.password_hash = hash_password(DEMO_PASSWORD)
+        user.password_hash = hash_password(password)
         user.is_platform_admin = account["is_platform_admin"]
 
     membership = (
@@ -104,6 +104,20 @@ async def _seed_demo_account(session, account: DemoAccount) -> None:
         account["email"],
         account["is_platform_admin"],
     )
+
+
+async def seed_platform_admin(*, email: str, password: str) -> None:
+    """Ortam sirriyla verilen tek sunum yoneticisini idempotent hazirlar."""
+    account: DemoAccount = {
+        "email": email.strip().lower(),
+        "display_name": "Sunum Yoneticisi",
+        "organization_name": "Synthetix UX Yonetim",
+        "organization_slug": "synthetix-ux-render-yonetim",
+        "is_platform_admin": True,
+    }
+    async with async_session_maker() as session:
+        await _seed_demo_account(session, account, password=password)
+        await session.commit()
 
 
 async def seed() -> None:

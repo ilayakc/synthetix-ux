@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     # dondurulur (bkz. docs/architecture.md).
     password_reset_token_ttl_seconds: int = 60 * 60
 
+    # Internete acik sunum kurulumunda yonetici hesabi icin yalnizca ortam
+    # degiskenlerinden verilen kimlik bilgileri kullanilir. Varsayilan olarak
+    # bootstrap kapali; sabit/bilinen bir uretim parolasi yoktur.
+    bootstrap_admin_email: str | None = None
+    bootstrap_admin_password: SecretStr | None = None
+
     # --- URL analiz servisi (analyzer) ---
     # analyzer, ayri bir container'da calisan, Playwright tabanli, SSRF'e
     # karsi korumali bir sayfa analiz servisidir (bkz. docs/security.md).
