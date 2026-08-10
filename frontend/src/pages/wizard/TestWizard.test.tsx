@@ -115,7 +115,20 @@ describe("TestWizard", () => {
           return jsonResponse(200, {
             organization_id: "org-1",
             chip_balance: 0,
-            entitlements: [],
+            entitlements: [
+              {
+                feature_key: "basic_ux_test",
+                status: "consumed",
+                quantity: 1,
+                reserved_until: null,
+              },
+              {
+                feature_key: "accessibility_precheck",
+                status: "available",
+                quantity: 1,
+                reserved_until: null,
+              },
+            ],
             pricing_version: "2026.1",
           });
         }
@@ -132,6 +145,8 @@ describe("TestWizard", () => {
       screen.getByText(/Aynı sitenin orijinal tasarımı ile değiştirilmiş tasarımını/),
     ).toBeInTheDocument();
     expect(screen.getByText(/Kontrast, form alanları, başlık yapısı/)).toBeInTheDocument();
+    expect(screen.getAllByText("Ücretsiz hak kullanıldı · Persona başına 1 Chip")).toHaveLength(2);
+    expect(screen.getByText("1 ücretsiz kullanım hakkı mevcut")).toBeInTheDocument();
   });
 
   it("persona sayisi araligin disindaysa bir sonraki adima gecisi engeller", async () => {

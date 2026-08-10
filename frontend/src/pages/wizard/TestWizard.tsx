@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   type AnalysisModuleDefinition,
   ApiError,
+  type EntitlementStatus,
   type QuoteResponse,
   type WizardDraftPayload,
   type WizardLaunchWarning,
@@ -130,6 +131,9 @@ export default function TestWizard() {
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [chipBalance, setChipBalance] = useState<number | null>(null);
+  const [entitlementStatuses, setEntitlementStatuses] = useState<Record<string, EntitlementStatus>>(
+    {},
+  );
   const [moduleCatalog, setModuleCatalog] = useState<AnalysisModuleDefinition[]>([]);
 
   const [isLaunching, setIsLaunching] = useState(false);
@@ -236,8 +240,21 @@ export default function TestWizard() {
 
   useEffect(() => {
     getUsageSummary()
-      .then((summary) => setChipBalance(summary.chip_balance))
-      .catch(() => setChipBalance(null));
+      .then((summary) => {
+        setChipBalance(summary.chip_balance);
+        setEntitlementStatuses(
+          Object.fromEntries(
+            summary.entitlements.map((entitlement) => [
+              entitlement.feature_key,
+              entitlement.status,
+            ]),
+          ),
+        );
+      })
+      .catch(() => {
+        setChipBalance(null);
+        setEntitlementStatuses({});
+      });
   }, []);
 
   useEffect(() => {
@@ -491,8 +508,8 @@ export default function TestWizard() {
               tamamlandi"/"rapor hazir" gibi YANLIS bir izlenim VERMEMELIDIR -
               kullanici gercek durumu Simulasyonlar sayfasindan takip eder. */}
           <p>
-            Testiniz başlatıldı. Analiz durumunu Simülasyonlar sayfasından takip edebilirsiniz. Rapor,
-            tüm çalıştırmalar başarıyla tamamlandıktan sonra oluşturulur.
+            Testiniz başlatıldı. Analiz durumunu Simülasyonlar sayfasından takip edebilirsiniz.
+            Rapor, tüm çalıştırmalar başarıyla tamamlandıktan sonra oluşturulur.
           </p>
           <p>
             {launchResult.usedFreeEntitlement
@@ -582,10 +599,20 @@ export default function TestWizard() {
 
       <div className="wizard-panel">
         {currentStep === 1 && (
-          <Step1Details payload={payload} fieldErrors={fieldErrors} onChange={handleChange} />
+          <Step1Details
+            payload={payload}
+            fieldErrors={fieldErrors}
+            onChange={handleChange}
+            entitlementStatuses={entitlementStatuses}
+          />
         )}
         {currentStep === 2 && (
-          <Step2Urls payload={payload} fieldErrors={fieldErrors} onChange={handleChange} draftId={draftId} />
+          <Step2Urls
+            payload={payload}
+            fieldErrors={fieldErrors}
+            onChange={handleChange}
+            draftId={draftId}
+          />
         )}
         {currentStep === 3 && (
           <Step3Personas payload={payload} fieldErrors={fieldErrors} onChange={handleChange} />
@@ -656,8 +683,8 @@ export default function TestWizard() {
               )}
               {incompatibleModulesForLaunch.length > 0 && (
                 <p className="auth-error" role="status">
-                  Seçili tasarım kaynağıyla uyumsuz bir analiz modülü var (Ağ ve cihaz testi yalnızca
-                  canlı URL ile çalışır). Devam etmeden önce 4. adımdan bu modülü kaldırın.
+                  Seçili tasarım kaynağıyla uyumsuz bir analiz modülü var (Ağ ve cihaz testi
+                  yalnızca canlı URL ile çalışır). Devam etmeden önce 4. adımdan bu modülü kaldırın.
                 </p>
               )}
             </div>

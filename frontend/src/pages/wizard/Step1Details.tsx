@@ -1,10 +1,46 @@
 import { useEffect, useState } from "react";
-import { type ProjectResponse, listProjects } from "../../api/client";
+import { type EntitlementStatus, type ProjectResponse, listProjects } from "../../api/client";
 import { TEST_TYPE_DESCRIPTIONS, TEST_TYPE_LABELS, type StepProps } from "./types";
 
 const TEST_TYPES = Object.keys(TEST_TYPE_LABELS);
 
-export default function Step1Details({ payload, fieldErrors, onChange }: StepProps) {
+interface Step1DetailsProps extends StepProps {
+  entitlementStatuses: Record<string, EntitlementStatus>;
+}
+
+function testTypePriceStatus(
+  testType: string,
+  entitlementStatuses: Record<string, EntitlementStatus>,
+): { label: string; tone: "free" | "paid" | "reserved" | "unknown" } {
+  const featureKey =
+    testType === "accessibility_precheck" ? "accessibility_precheck" : "basic_ux_test";
+  const status = entitlementStatuses[featureKey];
+  const paidCost = testType === "accessibility_precheck" ? "30 Chip" : "Persona başına 1 Chip";
+
+  if (status === "available") {
+    return {
+      label:
+        testType === "ab_comparison"
+          ? "Temel UX ücretsiz hakkıyla kullanılabilir"
+          : "1 ücretsiz kullanım hakkı mevcut",
+      tone: "free",
+    };
+  }
+  if (status === "consumed") {
+    return { label: `Ücretsiz hak kullanıldı · ${paidCost}`, tone: "paid" };
+  }
+  if (status === "reserved") {
+    return { label: `Ücretsiz hak devam eden testte ayrıldı · ${paidCost}`, tone: "reserved" };
+  }
+  return { label: "Ücret, ücretsiz hak durumuna göre hesaplanır", tone: "unknown" };
+}
+
+export default function Step1Details({
+  payload,
+  fieldErrors,
+  onChange,
+  entitlementStatuses,
+}: Step1DetailsProps) {
   const [projects, setProjects] = useState<ProjectResponse[] | null>(null);
 
   useEffect(() => {
@@ -68,23 +104,31 @@ export default function Step1Details({ payload, fieldErrors, onChange }: StepPro
           Burada testin temel amacını seçersiniz. Bu ana analiz 4. adımda yeniden seçilmez.
         </p>
         <div className="wizard-radio-group" role="radiogroup" aria-label="Ana test türü">
-          {TEST_TYPES.map((type) => (
-            <label key={type} className="wizard-radio-option">
-              <input
-                type="radio"
-                name="test_type"
-                value={type}
-                checked={payload.test_type === type}
-                onChange={() => onChange("test_type", type as StepProps["payload"]["test_type"])}
-              />
-              <span className="wizard-test-type-option__content">
-                <span className="wizard-test-type-option__title">{TEST_TYPE_LABELS[type]}</span>
-                <span className="wizard-test-type-option__description">
-                  {TEST_TYPE_DESCRIPTIONS[type]}
+          {TEST_TYPES.map((type) => {
+            const priceStatus = testTypePriceStatus(type, entitlementStatuses);
+            return (
+              <label key={type} className="wizard-radio-option">
+                <input
+                  type="radio"
+                  name="test_type"
+                  value={type}
+                  checked={payload.test_type === type}
+                  onChange={() => onChange("test_type", type as StepProps["payload"]["test_type"])}
+                />
+                <span className="wizard-test-type-option__content">
+                  <span className="wizard-test-type-option__title">{TEST_TYPE_LABELS[type]}</span>
+                  <span className="wizard-test-type-option__description">
+                    {TEST_TYPE_DESCRIPTIONS[type]}
+                  </span>
+                  <span
+                    className={`wizard-test-type-option__pricing wizard-test-type-option__pricing--${priceStatus.tone}`}
+                  >
+                    {priceStatus.label}
+                  </span>
                 </span>
-              </span>
-            </label>
-          ))}
+              </label>
+            );
+          })}
         </div>
         {fieldErrors.test_type && <p className="auth-error">{fieldErrors.test_type}</p>}
       </div>
