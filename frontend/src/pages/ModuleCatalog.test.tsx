@@ -84,6 +84,7 @@ describe("ModuleCatalog", () => {
     await waitFor(() => expect(screen.getByText("Temel UX testi")).toBeInTheDocument());
     expect(screen.getByText("Ağ ve cihaz testi")).toBeInTheDocument();
     expect(screen.getByText("Tek kullanımlık ücretsiz hakla kullanılabilir")).toBeInTheDocument();
+    expect(screen.getByText("Sonraki kullanımlar: Persona başına 1 Chip")).toBeInTheDocument();
     expect(screen.getByText("40 Chip")).toBeInTheDocument();
     expect(screen.getByText("Teknik ölçüm")).toBeInTheDocument();
     expect(screen.getAllByText("Sentetik tahmin").length).toBeGreaterThan(0);
@@ -118,9 +119,8 @@ describe("ModuleCatalog", () => {
 
     renderCatalog();
 
-    expect(
-      await screen.findByText("Ücretsiz hak kullanıldı · Persona başına 1 Chip"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Persona başına 1 Chip")).toBeInTheDocument();
+    expect(screen.queryByText(/Ücretsiz hak kullanıldı/)).not.toBeInTheDocument();
   });
 
   it("secilemeyen temel moduller icin devre disi checkbox yerine aciklama gosterir", async () => {

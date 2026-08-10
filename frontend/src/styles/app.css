@@ -1404,6 +1404,17 @@
   margin-top: 8px;
 }
 
+.module-card__pricing {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.module-card__pricing small {
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+}
+
 /* --- Rozetler / Chip etiketleri --- */
 .status-badge {
   display: inline-block;
@@ -1790,6 +1801,12 @@
 .wizard-test-type-option__pricing--reserved {
   background: var(--color-warning-bg);
   color: var(--color-warning-text);
+}
+
+.wizard-test-type-option__pricing-detail {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
 .chip-package-grid {

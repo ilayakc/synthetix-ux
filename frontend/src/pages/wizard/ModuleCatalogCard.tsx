@@ -32,21 +32,39 @@ interface ModuleCatalogCardCatalogProps {
 
 type ModuleCatalogCardProps = ModuleCatalogCardWizardProps | ModuleCatalogCardCatalogProps;
 
-function freeEntitlementLabel(
+interface ModulePriceDisplay {
+  primary: string;
+  secondary: string | null;
+}
+
+function freeEntitlementPrice(
   module: AnalysisModuleDefinition,
   status?: EntitlementStatus,
-): string {
+): ModulePriceDisplay {
   const paidLabel = module.post_entitlement_cost_label ?? "Chip ile kullanılabilir";
-  if (status === "consumed") return `Ücretsiz hak kullanıldı · ${paidLabel}`;
-  if (status === "reserved") return `Ücretsiz hak devam eden testte ayrıldı · ${paidLabel}`;
-  if (status === "available") {
-    return module.key === "ab_comparison"
-      ? "Temel UX ücretsiz hakkı mevcut"
-      : "1 ücretsiz kullanım hakkı mevcut";
+  if (status === "consumed") return { primary: paidLabel, secondary: null };
+  if (status === "reserved") {
+    return {
+      primary: paidLabel,
+      secondary: "Ücretsiz hak devam eden testte ayrıldı",
+    };
   }
-  return module.key === "ab_comparison"
-    ? "Temel UX ücretsiz hakkını paylaşır"
-    : "Tek kullanımlık ücretsiz hakla kullanılabilir";
+  if (status === "available") {
+    return {
+      primary:
+        module.key === "ab_comparison"
+          ? "Temel UX ücretsiz hakkıyla kullanılabilir"
+          : "1 ücretsiz kullanım hakkı mevcut",
+      secondary: `Sonraki kullanımlar: ${paidLabel}`,
+    };
+  }
+  return {
+    primary:
+      module.key === "ab_comparison"
+        ? "Temel UX ücretsiz hakkını paylaşır"
+        : "Tek kullanımlık ücretsiz hakla kullanılabilir",
+    secondary: `Sonraki kullanımlar: ${paidLabel}`,
+  };
 }
 
 function ModuleCatalogCardBody({
@@ -56,11 +74,13 @@ function ModuleCatalogCardBody({
   module: AnalysisModuleDefinition;
   entitlementStatus?: EntitlementStatus;
 }) {
-  const costLabel = module.free_entitlement_feature_key
-    ? freeEntitlementLabel(module, entitlementStatus)
-    : module.chip_cost === 0
-      ? "Ücretsiz"
-      : `${module.chip_cost.toLocaleString("tr-TR")} Chip`;
+  const priceDisplay: ModulePriceDisplay = module.free_entitlement_feature_key
+    ? freeEntitlementPrice(module, entitlementStatus)
+    : {
+        primary:
+          module.chip_cost === 0 ? "Ücretsiz" : `${module.chip_cost.toLocaleString("tr-TR")} Chip`,
+        secondary: null,
+      };
 
   return (
     <>
@@ -74,7 +94,10 @@ function ModuleCatalogCardBody({
         <span className="status-badge status-badge--active">
           {MEASUREMENT_TYPE_LABELS[module.measurement_type]}
         </span>
-        <span>{costLabel}</span>
+        <span className="module-card__pricing">
+          <span>{priceDisplay.primary}</span>
+          {priceDisplay.secondary && <small>{priceDisplay.secondary}</small>}
+        </span>
         <span>~{module.estimated_duration_minutes} dk</span>
       </div>
     </>

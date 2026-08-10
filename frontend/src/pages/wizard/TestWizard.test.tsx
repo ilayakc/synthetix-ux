@@ -145,8 +145,9 @@ describe("TestWizard", () => {
       screen.getByText(/Aynı sitenin orijinal tasarımı ile değiştirilmiş tasarımını/),
     ).toBeInTheDocument();
     expect(screen.getByText(/Kontrast, form alanları, başlık yapısı/)).toBeInTheDocument();
-    expect(screen.getAllByText("Ücretsiz hak kullanıldı · Persona başına 1 Chip")).toHaveLength(2);
+    expect(screen.getAllByText("Persona başına 1 Chip")).toHaveLength(2);
     expect(screen.getByText("1 ücretsiz kullanım hakkı mevcut")).toBeInTheDocument();
+    expect(screen.getByText("Sonraki kullanımlar: 30 Chip")).toBeInTheDocument();
   });
 
   it("persona sayisi araligin disindaysa bir sonraki adima gecisi engeller", async () => {

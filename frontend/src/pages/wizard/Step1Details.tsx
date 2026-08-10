@@ -11,7 +11,11 @@ interface Step1DetailsProps extends StepProps {
 function testTypePriceStatus(
   testType: string,
   entitlementStatuses: Record<string, EntitlementStatus>,
-): { label: string; tone: "free" | "paid" | "reserved" | "unknown" } {
+): {
+  label: string;
+  detail: string | null;
+  tone: "free" | "paid" | "reserved" | "unknown";
+} {
   const featureKey =
     testType === "accessibility_precheck" ? "accessibility_precheck" : "basic_ux_test";
   const status = entitlementStatuses[featureKey];
@@ -23,16 +27,28 @@ function testTypePriceStatus(
         testType === "ab_comparison"
           ? "Temel UX ücretsiz hakkıyla kullanılabilir"
           : "1 ücretsiz kullanım hakkı mevcut",
+      detail: `Sonraki kullanımlar: ${paidCost}`,
       tone: "free",
     };
   }
   if (status === "consumed") {
-    return { label: `Ücretsiz hak kullanıldı · ${paidCost}`, tone: "paid" };
+    return { label: paidCost, detail: null, tone: "paid" };
   }
   if (status === "reserved") {
-    return { label: `Ücretsiz hak devam eden testte ayrıldı · ${paidCost}`, tone: "reserved" };
+    return {
+      label: paidCost,
+      detail: "Ücretsiz hak devam eden testte ayrıldı",
+      tone: "reserved",
+    };
   }
-  return { label: "Ücret, ücretsiz hak durumuna göre hesaplanır", tone: "unknown" };
+  return {
+    label:
+      testType === "ab_comparison"
+        ? "Temel UX ücretsiz hakkını paylaşır"
+        : "Tek kullanımlık ücretsiz hakla kullanılabilir",
+    detail: `Sonraki kullanımlar: ${paidCost}`,
+    tone: "unknown",
+  };
 }
 
 export default function Step1Details({
@@ -125,6 +141,11 @@ export default function Step1Details({
                   >
                     {priceStatus.label}
                   </span>
+                  {priceStatus.detail && (
+                    <span className="wizard-test-type-option__pricing-detail">
+                      {priceStatus.detail}
+                    </span>
+                  )}
                 </span>
               </label>
             );
