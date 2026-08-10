@@ -1755,6 +1755,10 @@
 .chip-package-option {
   min-width: 0;
   padding: 14px;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.4;
 }
 
 .chip-package-option__content {
@@ -1772,14 +1776,25 @@
   gap: 12px;
 }
 
+.chip-package-option__name {
+  font-weight: 600;
+}
+
 .chip-package-option__price {
   color: var(--color-accent);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: normal;
   white-space: nowrap;
 }
 
 .chip-package-option__amount {
   color: var(--color-text-muted);
+  font-family: inherit;
   font-size: 0.875rem;
+  font-weight: 400;
+  letter-spacing: normal;
 }
 
 .wizard-actions {

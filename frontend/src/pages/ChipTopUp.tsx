@@ -124,11 +124,11 @@ export default function ChipTopUp() {
                   />
                   <span className="chip-package-option__content">
                     <span className="chip-package-option__heading">
-                      <strong>{pkg.name}</strong>
+                      <span className="chip-package-option__name">{pkg.name}</span>
                       {pkg.price_try !== null && (
-                        <strong className="chip-package-option__price">
+                        <span className="chip-package-option__price">
                           {formatTry(pkg.price_try)}
-                        </strong>
+                        </span>
                       )}
                     </span>
                     <span className="chip-package-option__amount">
