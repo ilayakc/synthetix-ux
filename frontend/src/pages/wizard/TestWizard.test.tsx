@@ -127,6 +127,11 @@ describe("TestWizard", () => {
 
     await waitFor(() => expect(screen.getByText("1. Test Detayları")).toBeInTheDocument());
     expect(screen.getByLabelText("Test adı")).toBeInTheDocument();
+    expect(screen.getByText(/Tek bir tasarımda kullanıcıların hedef görevi/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Aynı sitenin orijinal tasarımı ile değiştirilmiş tasarımını/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Kontrast, form alanları, başlık yapısı/)).toBeInTheDocument();
   });
 
   it("persona sayisi araligin disindaysa bir sonraki adima gecisi engeller", async () => {

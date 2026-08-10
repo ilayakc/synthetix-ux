@@ -16,3 +16,12 @@ export const TEST_TYPE_LABELS: Record<string, string> = {
   ab_comparison: "A/B testi: aynı sitenin orijinal ve değiştirilmiş tasarımı",
   accessibility_precheck: "Erişilebilirlik ön kontrolü",
 };
+
+export const TEST_TYPE_DESCRIPTIONS: Record<string, string> = {
+  existing_site_basic_ux:
+    "Tek bir tasarımda kullanıcıların hedef görevi ne kadar kolay tamamladığını ölçer. URL veya ekran görüntüsüyle çalışır.",
+  ab_comparison:
+    "Aynı sitenin orijinal tasarımı ile değiştirilmiş tasarımını karşılaştırır. İki farklı siteyi karşılaştırmak için kullanılmaz.",
+  accessibility_precheck:
+    "Kontrast, form alanları, başlık yapısı ve temel WCAG sorunlarını inceler. Sayfanın HTML yapısı gerektiği için URL ile çalışır.",
+};

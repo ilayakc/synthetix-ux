@@ -1746,6 +1746,25 @@
   margin-top: 3px;
 }
 
+.wizard-test-type-option__content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wizard-test-type-option__title {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.wizard-test-type-option__description {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
 .chip-package-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));

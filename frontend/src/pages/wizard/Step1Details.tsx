@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { type ProjectResponse, listProjects } from "../../api/client";
-import { TEST_TYPE_LABELS, type StepProps } from "./types";
+import { TEST_TYPE_DESCRIPTIONS, TEST_TYPE_LABELS, type StepProps } from "./types";
 
 const TEST_TYPES = Object.keys(TEST_TYPE_LABELS);
 
@@ -77,7 +77,12 @@ export default function Step1Details({ payload, fieldErrors, onChange }: StepPro
                 checked={payload.test_type === type}
                 onChange={() => onChange("test_type", type as StepProps["payload"]["test_type"])}
               />
-              <span>{TEST_TYPE_LABELS[type]}</span>
+              <span className="wizard-test-type-option__content">
+                <span className="wizard-test-type-option__title">{TEST_TYPE_LABELS[type]}</span>
+                <span className="wizard-test-type-option__description">
+                  {TEST_TYPE_DESCRIPTIONS[type]}
+                </span>
+              </span>
             </label>
           ))}
         </div>
