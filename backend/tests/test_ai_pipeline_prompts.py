@@ -29,11 +29,26 @@ _SAFETY_SUBSTRINGS = (
 )
 
 
-@pytest.mark.parametrize("stage", _LLM_STAGES)
-def test_llm_stages_have_prompt(stage):
+@pytest.mark.parametrize(
+    ("stage", "expected_version"),
+    (
+        (AIPipelineStageType.SCENARIO_INTERPRETATION, "v1"),
+        (AIPipelineStageType.PERSONA_BEHAVIOR, "v1"),
+        (AIPipelineStageType.UX_REPORT, "v4"),
+    ),
+)
+def test_llm_stages_have_prompt(stage, expected_version):
     descriptor = get_prompt(stage)
-    assert descriptor.prompt_version == "v1"
+    assert descriptor.prompt_version == expected_version
     assert descriptor.system_instructions
+
+
+def test_ux_report_prompt_requests_comprehensive_grounded_output():
+    descriptor = get_prompt(AIPipelineStageType.UX_REPORT)
+
+    assert descriptor.model_settings["max_output_tokens"] == 4000
+    assert "4-6 bulgu" in descriptor.system_instructions
+    assert "farkli bir karar veya risk alanini" in descriptor.system_instructions
 
 
 @pytest.mark.parametrize("stage", _PURE_STAGES)

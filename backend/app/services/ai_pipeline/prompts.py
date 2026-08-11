@@ -50,7 +50,7 @@ _COMMON_SAFETY_RULES = (
     "- Cikti dili urunle tutarli sekilde TURKCE olmalidir."
 )
 
-_MODEL_SETTINGS: dict[str, Any] = {"temperature": 0.2, "max_output_tokens": 2000}
+_MODEL_SETTINGS: dict[str, Any] = {"temperature": 0.2, "max_output_tokens": 4000}
 
 _SCENARIO_INTERPRETATION_INSTRUCTIONS = (
     "Sen bir UX arastirma yardimcisisin. Sana verilen sayfa evidence'i ve hedef "
@@ -73,7 +73,10 @@ _UX_REPORT_INSTRUCTIONS = (
     "onceliklendirilmis UX bulgulari (UXFinding) iceren bir rapor uret. Sayisal "
     "degerler yalnizca verilen agregasyondan gelmelidir; yeni sayi uretme. Cikti "
     "`UXReport` semasina uymalidir ve sonuclarin sentetik tahmin oldugunu acikca "
-    "belirtmelidir. Kanit destekliyorsa birbirini tekrar etmeyen 3-6 bulgu uret; "
+    "belirtmelidir. Evidence setinde en az dort farkli evidence_id varsa birbirini "
+    "tekrar etmeyen 4-6 bulgu uret; her bulgu farkli bir karar veya risk alanini "
+    "ele almali ve ayni metrigi farkli cumlelerle yinelememelidir. Daha az kanit "
+    "varsa kanit basina ayri bulgu uret, fakat veri icat etme. "
     "her bulguda hangi UX sorununun goruldugunu, kullaniciya etkisini ve tasarim/urun "
     "ekibinin uygulayabilecegi somut sonraki adimi acikla. CTA etiketi, cihaz/ag sonucu "
     "veya dikkat bolgesi gibi modul kanitlari verildiyse ilgili bulguda bunlari adiyla "
@@ -135,7 +138,7 @@ _PERSONA_BEHAVIOR_DESCRIPTOR = _build_descriptor(
 
 _UX_REPORT_DESCRIPTOR = _build_descriptor(
     prompt_key="ux_report",
-    prompt_version="v3",
+    prompt_version="v4",
     specific_instructions=_UX_REPORT_INSTRUCTIONS,
     input_schema_model=UXReportInput,
     output_schema_model=UXReport,

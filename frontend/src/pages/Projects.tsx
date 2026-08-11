@@ -128,7 +128,7 @@ export default function Projects() {
       .then((items) =>
         setProjects(
           isDemo
-            ? items.map((project) => ({ ...project, test_count: Math.min(2, project.test_count) }))
+            ? items.map((project) => ({ ...project, test_count: Math.min(1, project.test_count) }))
             : items,
         ),
       )
