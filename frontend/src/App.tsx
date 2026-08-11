@@ -22,6 +22,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import AdminSettings from "./pages/AdminSettings";
 import AdminProtectedLayout from "./components/AdminProtectedLayout";
 import Help from "./pages/Help";
+import NasilCalisiyor from "./pages/NasilCalisiyor";
 
 export default function App() {
   useRouteChangeLogging();
@@ -29,6 +30,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Home />} />
+      <Route path="/nasil-calisiyor" element={<NasilCalisiyor />} />
       <Route
         path="/giris"
         element={

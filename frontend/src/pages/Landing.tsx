@@ -5,11 +5,6 @@ import { useAuth } from "../auth/AuthContext";
 import BrandLogo from "../components/BrandLogo";
 import SimulationBackdrop from "./landing/SimulationBackdrop";
 
-// "Nasil calisir?" baglantisi, ayri olarak hazirlanan tanitim sayfasini acar.
-// NOT: Su an bu bir on-izleme sayfasidir; ileride uygulama ici bir rota
-// (or. /nasil-calisiyor) haline getirilebilir.
-const HOW_IT_WORKS_URL = "https://claude.ai/code/artifact/073b8d6b-a02a-4b91-95bc-054baea2bdd8";
-
 const FEATURES = [
   {
     title: "Dakikalar içinde başlayın",
@@ -96,6 +91,9 @@ export default function Landing() {
               <Link to="/kayit" className="landing-primary-button landing-primary-button--large">
                 Ücretsiz hesap oluştur
               </Link>
+              <Link to="/giris" className="landing-secondary-button">
+                Zaten hesabım var
+              </Link>
               <button
                 type="button"
                 className="landing-secondary-button"
@@ -105,9 +103,6 @@ export default function Landing() {
               >
                 {demoLoading ? "Demo açılıyor…" : "Canlı demoyu incele"}
               </button>
-              <Link to="/giris" className="landing-secondary-button">
-                Zaten hesabım var
-              </Link>
             </div>
             {demoError && (
               <p className="landing-hero__note" role="alert" style={{ color: "var(--color-danger-text)" }}>
@@ -116,14 +111,12 @@ export default function Landing() {
             )}
             <p className="landing-hero__note">Kredi kartı gerekmez · 2 ücretsiz kullanım hakkı</p>
             <p className="landing-hero__howitworks">
-              <a
-                href={HOW_IT_WORKS_URL}
-                target="_blank"
-                rel="noopener noreferrer"
+              <Link
+                to="/nasil-calisiyor"
                 style={{ color: "var(--color-accent)", fontWeight: 600, textDecoration: "none" }}
               >
                 Nasıl çalışır?
-              </a>
+              </Link>
             </p>
           </div>
 
