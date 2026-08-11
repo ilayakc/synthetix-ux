@@ -72,6 +72,15 @@ _DESIGN_ASSET_ALLOWED_FORMATS = image_safety.STANDARD_IMAGE_FORMATS
 _SCREENSHOT_VALIDATION_FAILED_MESSAGE = "Ekran goruntusu guvenlik dogrulamasindan gecemedi"
 
 
+class AnalyzerResponseError(RuntimeError):
+    """Analyzer HTTP yanitini retry kararinda durum koduyla birlikte tasir."""
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(f"analyzer hatasi ({status_code}): {detail}")
+        self.status_code = status_code
+        self.detail = detail
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -227,8 +236,51 @@ async def _call_analyzer(client: httpx.AsyncClient, url: str) -> dict:
                 detail = response.json().get("detail", response.text)
             except ValueError:
                 detail = response.text
-            raise RuntimeError(f"analyzer hatasi ({response.status_code}): {detail}")
+            raise AnalyzerResponseError(response.status_code, str(detail))
         return response.json()
+
+
+def _is_retryable_analyzer_failure(exc: Exception) -> bool:
+    """Yalnizca gecici ag/servis hatalarini yeniden dener.
+
+    SSRF/4xx ve boyut limiti gibi ayni girdide degismeyecek reddetmeler
+    terminaldir. Timeout, baglanti kopmasi, 408/429 ve 5xx ise Render cold
+    start dahil gecici altyapi durumlarinda iyilesebilir.
+    """
+
+    if isinstance(exc, httpx.RequestError):
+        return True
+    if not isinstance(exc, AnalyzerResponseError):
+        return False
+    if "yanit boyutu sinirini asti" in exc.detail.lower():
+        return False
+    return exc.status_code in (408, 429) or exc.status_code >= 500
+
+
+async def _record_analyzer_failure(
+    session: AsyncSession,
+    analysis: PageAnalysis,
+    exc: Exception,
+) -> None:
+    retryable = _is_retryable_analyzer_failure(exc)
+    attempts_remaining = analysis.attempt_count < settings.page_analysis_max_attempts
+    analysis.error = str(exc)
+    if retryable and attempts_remaining:
+        analysis.status = PageAnalysisStatus.QUEUED
+        analysis.started_at = None
+        analysis.finished_at = None
+        logger.warning(
+            "analiz gecici hatadan sonra yeniden kuyruga alindi (id=%s, deneme=%s/%s): %s",
+            analysis.id,
+            analysis.attempt_count,
+            settings.page_analysis_max_attempts,
+            exc,
+        )
+    else:
+        analysis.status = PageAnalysisStatus.FAILED
+        analysis.finished_at = _now()
+        logger.warning("analiz basarisiz (id=%s): %s", analysis.id, exc)
+    await session.flush()
 
 
 def _verify_design_asset_snapshot(image_bytes: bytes, content_type_mime: str) -> tuple[int, int]:
@@ -343,11 +395,7 @@ async def process_analysis(
     try:
         snapshot = await _call_analyzer(client, analysis.url)
     except Exception as exc:  # analyzer HTTP hatasi, timeout, baglanti hatasi, SSRF reddi
-        analysis.status = PageAnalysisStatus.FAILED
-        analysis.error = str(exc)
-        analysis.finished_at = _now()
-        await session.flush()
-        logger.warning("analiz basarisiz (id=%s): %s", analysis.id, exc)
+        await _record_analyzer_failure(session, analysis, exc)
         return
     finally:
         if owns_client:

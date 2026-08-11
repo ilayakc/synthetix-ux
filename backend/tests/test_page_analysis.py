@@ -358,12 +358,34 @@ async def test_process_analysis_stores_redirect_metadata(
 # --- Basarisizlik: timeout / buyuk yanit / analyzer SSRF reddi ---------------
 
 
-async def test_process_analysis_marks_failed_on_timeout(
+async def test_process_analysis_requeues_transient_timeout(
     session: AsyncSession, organization: Organization, monkeypatch
 ):
     monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
     analysis = await _make_queued_analysis(session, organization)
     analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 1
+
+    client = _mock_client(raise_exc=httpx.TimeoutException("navigasyon zaman asimi"))
+    try:
+        await page_analysis_service.process_analysis(session, analysis, client=client)
+    finally:
+        await client.aclose()
+
+    assert analysis.status == PageAnalysisStatus.QUEUED
+    assert "zaman asimi" in analysis.error.lower()
+    assert analysis.started_at is None
+    assert analysis.finished_at is None
+    assert analysis.screenshot_data is None
+
+
+async def test_process_analysis_fails_transient_timeout_after_max_attempts(
+    session: AsyncSession, organization: Organization, monkeypatch
+):
+    monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
+    analysis = await _make_queued_analysis(session, organization)
+    analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 3
 
     client = _mock_client(raise_exc=httpx.TimeoutException("navigasyon zaman asimi"))
     try:
@@ -372,8 +394,25 @@ async def test_process_analysis_marks_failed_on_timeout(
         await client.aclose()
 
     assert analysis.status == PageAnalysisStatus.FAILED
-    assert "zaman asimi" in analysis.error.lower()
-    assert analysis.screenshot_data is None
+    assert analysis.finished_at is not None
+
+
+async def test_process_analysis_requeues_transient_analyzer_502(
+    session: AsyncSession, organization: Organization, monkeypatch
+):
+    monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
+    analysis = await _make_queued_analysis(session, organization)
+    analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 1
+
+    client = _mock_client(status_code=502, json_body={"detail": "cold start"})
+    try:
+        await page_analysis_service.process_analysis(session, analysis, client=client)
+    finally:
+        await client.aclose()
+
+    assert analysis.status == PageAnalysisStatus.QUEUED
+    assert "502" in analysis.error
 
 
 async def test_process_analysis_marks_failed_when_analyzer_rejects_oversized_response(

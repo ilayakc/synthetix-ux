@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.engine import baseline
 from app.engine import fixtures as engine_fixtures
 from app.engine.rules_config import CURRENT_RULES_VERSION
-from app.models.billing import EntitlementStatus
+from app.models.billing import ChipReservationStatus, EntitlementStatus
+from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.simulations import SimulationRun, SimulationStatus
 from app.models.tenancy import Organization
 from app.models.tests import TestDefinition, TestVariant
@@ -456,6 +457,70 @@ async def test_retry_after_failure_reserves_and_requeues_without_double_consumpt
     assert run.status == SimulationStatus.SUCCEEDED
     # Basarili tamamlama sonrasi bakiye degismemeli (yalnizca bir kez tuketildi).
     assert await chip_ledger.get_chip_balance(session, organization.id) == 200
+
+
+async def test_retry_requeues_failed_url_page_analysis(
+    session: AsyncSession, organization: Organization
+):
+    analysis = PageAnalysis(
+        organization_id=organization.id,
+        source_kind=PageAnalysisSourceKind.URL,
+        url="https://example.com/",
+        authorization_confirmed=True,
+        status=PageAnalysisStatus.FAILED,
+        attempt_count=3,
+        error="analyzer hatasi (502): cold start",
+    )
+    session.add(analysis)
+    await session.flush()
+
+    run = await _make_queued_run(session, organization)
+    run.page_analysis_id = analysis.id
+    run.status = SimulationStatus.FAILED
+    run.error = "Bagli sayfa analizi basarisiz oldugu icin bu calistirma islenemedi"
+    await session.flush()
+
+    await simulation_worker.retry_run(session, organization.id, run.id)
+
+    assert run.status == SimulationStatus.QUEUED
+    assert analysis.status == PageAnalysisStatus.QUEUED
+    assert analysis.attempt_count == 0
+    assert analysis.error is None
+    assert analysis.started_at is None
+    assert analysis.finished_at is None
+
+
+async def test_retry_recreates_released_ai_reservation(
+    session: AsyncSession, organization: Organization
+):
+    await chip_ledger.credit(session, organization.id, 100, "test credit")
+    launch_run_id = uuid.uuid4()
+    old_ai_reservation = await chip_ledger.reserve_chips(
+        session,
+        organization.id,
+        50,
+        "AI reserve",
+        run_id=launch_run_id,
+    )
+    await chip_ledger.release_reservation(
+        session,
+        organization.id,
+        old_ai_reservation.id,
+        "baseline failed",
+    )
+
+    run = await _make_queued_run(session, organization, launch_run_id=launch_run_id)
+    run.ai_chip_reservation_id = old_ai_reservation.id
+    run.status = SimulationStatus.FAILED
+    await session.flush()
+
+    await simulation_worker.retry_run(session, organization.id, run.id)
+
+    assert run.ai_chip_reservation_id != old_ai_reservation.id
+    new_ai_reservation = await session.get(type(old_ai_reservation), run.ai_chip_reservation_id)
+    assert new_ai_reservation is not None
+    assert new_ai_reservation.status == ChipReservationStatus.RESERVED
+    assert await chip_ledger.get_chip_balance(session, organization.id) == 50
 
 
 async def test_retry_on_non_failed_run_is_rejected(session: AsyncSession, organization: Organization):

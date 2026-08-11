@@ -626,7 +626,7 @@ async def cancel_run(session: AsyncSession, organization_id: uuid.UUID, run_id: 
 
 
 async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: uuid.UUID) -> SimulationRun:
-    """Basarisiz bir calistirmayi, rezervasyonu yeniden yaparak kuyruga alir."""
+    """Basarisiz calistirmayi ve bagli basarisiz sayfa analizini yeniden kuyruga alir."""
 
     run = await _get_owned_run(session, organization_id, run_id)
 
@@ -645,6 +645,33 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
     retryable, _failure_code = classify_run_failure(run)
     if not retryable:
         raise InvalidSimulationStateError(NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE)
+
+    # URL analizi basarisizsa yalnizca SimulationRun'i QUEUED yapmak yeterli
+    # degildir: claim sorgusu FAILED PageAnalysis'e bagli run'i hicbir zaman
+    # almaz ve fail-blocked cron'u hemen yeniden FAILED yapar. Manuel retry,
+    # kullanicinin acik yeniden deneme iradesidir; bu nedenle ayni pasif URL
+    # analizine taze uc deneme hakki verir. DesignAsset kaynaklarindaki kalici
+    # hatalar bu yola girmez (onlar URL disi/yapisal hata olarak ayrica ele
+    # alinir).
+    if run.page_analysis_id is not None:
+        analysis = (
+            await session.execute(
+                select(PageAnalysis)
+                .where(PageAnalysis.id == run.page_analysis_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if (
+            analysis is not None
+            and analysis.organization_id == organization_id
+            and analysis.source_kind == PageAnalysisSourceKind.URL
+            and analysis.status == PageAnalysisStatus.FAILED
+        ):
+            analysis.status = PageAnalysisStatus.QUEUED
+            analysis.attempt_count = 0
+            analysis.error = None
+            analysis.started_at = None
+            analysis.finished_at = None
 
     # NOT: bagimsiz `if`ler (elif degil) - bkz. `_resolve_launch_group` ve
     # app.services.test_wizard.launch_draft: bir run hem ucretsiz hak hem de
@@ -680,6 +707,43 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
                     idempotency_key=f"simulation-retry:{run.id}:{run.attempt_count + 1}",
                 )
                 run.chip_reservation_id = new_reservation.id
+
+    # Baseline basarisizliginda AI rezervasyonu da serbest birakilir. Baseline
+    # manuel olarak yeniden deneniyorsa AI raporunun sonradan sessizce eksik
+    # kalmamasi icin bu ayri rezervasyon da yeniden kurulur ve launch grubunun
+    # tum sibling run'larina ayni yeni id yazilir.
+    if run.ai_chip_reservation_id:
+        previous_ai = await session.get(chip_ledger.ChipReservation, run.ai_chip_reservation_id)
+        ai_already_reserved = (
+            previous_ai is not None
+            and previous_ai.status == chip_ledger.ChipReservationStatus.RESERVED
+        )
+        if not ai_already_reserved and previous_ai is not None and previous_ai.amount > 0:
+            ai_reservation = await chip_ledger.reserve_chips(
+                session,
+                run.organization_id,
+                previous_ai.amount,
+                f"AI raporu baseline yeniden deneme: {run.id}",
+                run_id=run.launch_run_id or run.id,
+                idempotency_key=(
+                    f"ai-report-baseline-retry:{run.launch_run_id or run.id}:{run.attempt_count + 1}"
+                ),
+            )
+            if run.launch_run_id is not None:
+                siblings = list(
+                    (
+                        await session.execute(
+                            select(SimulationRun)
+                            .where(SimulationRun.launch_run_id == run.launch_run_id)
+                            .with_for_update()
+                        )
+                    ).scalars()
+                )
+            else:
+                siblings = [run]
+            for sibling in siblings:
+                if sibling.ai_chip_reservation_id is not None:
+                    sibling.ai_chip_reservation_id = ai_reservation.id
 
     run.status = SimulationStatus.QUEUED
     run.error = None
