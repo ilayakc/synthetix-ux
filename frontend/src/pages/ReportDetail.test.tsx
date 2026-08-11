@@ -18,6 +18,7 @@ afterEach(() => {
 function baseReport(overrides: Record<string, unknown> = {}) {
   return {
     id: "11111111-1111-1111-1111-111111111111",
+    ai_report_requested: false,
     title: "Sentetik simulasyon sonucu",
     created_at: "2026-07-01T10:00:00Z",
     project_id: "33333333-3333-3333-3333-333333333333",
@@ -384,11 +385,14 @@ describe("ReportDetail — AI Raporu sekmesi", () => {
     };
   }
 
-  function renderWithAi(aiPipeline: () => ReturnType<typeof jsonResponse>) {
+  function renderWithAi(
+    aiPipeline: () => ReturnType<typeof jsonResponse>,
+    reportOverrides: Record<string, unknown> = {},
+  ) {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (url.includes(`/api/simulations/runs/${RUN_ID}/ai-pipeline`)) return aiPipeline();
       if (url.includes("/api/reports/"))
-        return jsonResponse(200, baseReport({ simulation_run_id: RUN_ID }));
+        return jsonResponse(200, baseReport({ simulation_run_id: RUN_ID, ...reportOverrides }));
       throw new Error(`Beklenmeyen istek: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -436,6 +440,19 @@ describe("ReportDetail — AI Raporu sekmesi", () => {
     );
     // Yalnizca 4 ust duzey sekme.
     expect(screen.getAllByRole("tab")).toHaveLength(4);
+  });
+
+  it("AI raporu secilmis ama pipeline henuz yoksa sekmeyi gizlemez", async () => {
+    renderWithAi(
+      () => jsonResponse(404, { detail: "ai_pipeline_not_found" }),
+      { ai_report_requested: true },
+    );
+
+    const tab = await screen.findByRole("tab", { name: "AI Raporu" });
+    fireEvent.click(tab);
+
+    expect(screen.getByText(/işlem hattı henüz oluşturulmadı/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Durumu yeniden kontrol et" })).toBeInTheDocument();
   });
 
   it("klavye ok tuslariyla yeni AI Raporu sekmesine gecilebilir", async () => {
@@ -557,7 +574,7 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     const ctaToggle = screen.getByLabelText(
       "CTA bölgelerini göster (buton ve bağlantı adayları)",
     ) as HTMLInputElement;
-    expect(screen.getByRole("button", { name: "Tıklama ısı haritası" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sentetik tıklama eğilimi" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Görsel odak haritası" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Birincil etkileşim alanı: beklenen tıklama payı/i }),
@@ -636,7 +653,7 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
     goToTab("Isı Haritası");
 
-    expect(screen.getByRole("button", { name: "Tıklama ısı haritası" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sentetik tıklama eğilimi" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Görsel odak haritası" })).toBeInTheDocument();
     expect(screen.getByText(/buton, bağlantı ve etkileşimli alanlarda/i)).toBeInTheDocument();
     expect(screen.getByText("Sayfanın DOM yapısındaki buton ve bağlantılar")).toBeInTheDocument();
@@ -819,6 +836,102 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     expect(
       screen.getByRole("button", { name: /Canlı demoyu incele.*Yüksek/i }),
     ).toBeInTheDocument();
+  });
+
+  it("buyuk urun kartini guclu CTA saymaz ve yinelenen etiketi tekillestirir", async () => {
+    const report = baseReport({
+      heatmap: {
+        available: true,
+        label: "Sentetik dikkat tahmini",
+        overlay_kind: "semantic_region",
+        feature_source: "dom",
+        grid: [{ key: "birincil_cta", label: "Birincil CTA", score: 0.6 }],
+        disclaimer: "test",
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+      },
+      cta_overlay: {
+        available: true,
+        feature_source: "dom",
+        boxes: [
+          {
+            classification: "dom_interactive_candidate",
+            label: "Hesap oluştur",
+            interaction_kind: "form_action",
+            x: 0.42,
+            y: 0.2,
+            w: 0.12,
+            h: 0.02,
+          },
+          {
+            classification: "dom_interactive_candidate",
+            label: "Çok Satanlar Çok Satanlar",
+            interaction_kind: "cta_link",
+            x: 0.1,
+            y: 0.78,
+            w: 0.2,
+            h: 0.1,
+          },
+        ],
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        disclaimer: "test",
+      },
+    });
+
+    renderReportDetail(report);
+    await waitFor(() => expect(screen.getByRole("tab", { name: /zet$/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /Haritas/i }));
+
+    expect(screen.getByRole("button", { name: /Hesap oluştur.*Yüksek/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Çok Satanlar.*Düşük/i })).toBeInTheDocument();
+    expect(screen.queryByText("Çok Satanlar Çok Satanlar")).not.toBeInTheDocument();
+  });
+
+  it("hesap olusturma gorevinde eylem linkini kosul metninden ayirir", async () => {
+    const report = baseReport({
+      heatmap: {
+        available: true,
+        label: "Sentetik dikkat tahmini",
+        overlay_kind: "semantic_region",
+        feature_source: "dom",
+        grid: [{ key: "birincil_cta", label: "Birincil CTA", score: 0.6 }],
+        disclaimer: "test",
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+      },
+      cta_overlay: {
+        available: true,
+        feature_source: "dom",
+        boxes: [
+          {
+            classification: "dom_interactive_candidate",
+            label: "Üyelik ve Kullanım Şartları",
+            interaction_kind: "content_link",
+            x: 0.1,
+            y: 0.96,
+            w: 0.18,
+            h: 0.01,
+          },
+          {
+            classification: "dom_interactive_candidate",
+            label: "Üye ol",
+            interaction_kind: "content_link",
+            x: 0.7,
+            y: 0.94,
+            w: 0.08,
+            h: 0.01,
+          },
+        ],
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        disclaimer: "test",
+      },
+    });
+    (report.info_box.input_summary as Record<string, unknown>).target_task = "Yeni hesap oluştur";
+
+    renderReportDetail(report);
+    await waitFor(() => expect(screen.getByRole("tab", { name: /zet$/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /Haritas/i }));
+
+    expect(screen.getByRole("button", { name: /Üye ol.*Yüksek/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Üyelik ve Kullanım Şartları.*Düşük/i })).toBeInTheDocument();
   });
 
   it("ilk 3 CTA adayi + kullanicinin onayladigi CTA varsayilan gorunur, digerleri 'Tum adaylari goster' ile acilir", async () => {

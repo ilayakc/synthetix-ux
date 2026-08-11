@@ -119,6 +119,9 @@ interface AiReportTabProps {
   /** Ilk sonda kontrollu 404 DISINDA (gercek ag/sunucu hatasi) basarisiz
    * olduysa `true` - sekme guvenli bir hata + "Tekrar dene" ile acilir. */
   initialError?: boolean;
+  /** AI modulu secilmis olmasina ragmen ilk sonda 404 donduyse sekmeyi
+   * gizlemek yerine acik bir hazirlik mesaji ve yeniden deneme sunulur. */
+  initialMissing?: boolean;
 }
 
 type ReportFetchState = "idle" | "loading" | "not_ready" | "error";
@@ -128,11 +131,13 @@ export default function AiReportTab({
   isAbComparison = false,
   initialStatus,
   initialError,
+  initialMissing = false,
 }: AiReportTabProps) {
   const [status, setStatus] = useState<AIPipelineStatusResponse | null>(initialStatus);
   const [statusError, setStatusError] = useState<boolean>(Boolean(initialError));
   const [report, setReport] = useState<AIReportResponse | null>(null);
   const [reportState, setReportState] = useState<ReportFetchState>("idle");
+  const [pipelineMissing, setPipelineMissing] = useState(initialMissing);
 
   const statusKey = status?.status ?? null;
   const reportAvailable = status?.report_available ?? false;
@@ -213,6 +218,7 @@ export default function AiReportTab({
   }, [runId, statusKey, reportAvailable]);
 
   const retryStatus = () => {
+    setPipelineMissing(false);
     setStatus(null);
     setStatusError(false);
     setReport(null);
@@ -248,14 +254,26 @@ export default function AiReportTab({
         </div>
       )}
 
-      <AiReportBody
-        status={status}
-        statusError={statusError}
-        report={report}
-        reportState={reportState}
-        onRetryStatus={retryStatus}
-        onRetryReport={retryReport}
-      />
+      {pipelineMissing ? (
+        <div role="status">
+          <p className="auth-error">
+            AI raporu seçildi ancak işlem hattı henüz oluşturulmadı. Birkaç saniye sonra yeniden
+            deneyin.
+          </p>
+          <button type="button" className="btn-secondary" onClick={retryStatus}>
+            Durumu yeniden kontrol et
+          </button>
+        </div>
+      ) : (
+        <AiReportBody
+          status={status}
+          statusError={statusError}
+          report={report}
+          reportState={reportState}
+          onRetryStatus={retryStatus}
+          onRetryReport={retryReport}
+        />
+      )}
     </section>
   );
 }

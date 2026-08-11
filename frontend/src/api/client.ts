@@ -1013,6 +1013,7 @@ export interface ReportInfoBox {
     wizard_test_type?: string | null;
     persona_count?: number | null;
     target_audience?: string | null;
+    target_task?: string | null;
   };
 }
 
@@ -1184,6 +1185,7 @@ export interface ReportDetailResponse {
   // (getAiPipelineStatus/getAiReport) ulaşmak için gereklidir; standart rapor
   // içeriğini değiştirmez (bkz. backend app.routers.reports.ReportDetailResponse).
   simulation_run_id: string;
+  ai_report_requested?: boolean;
   title: string;
   created_at: string;
   project_id: string;

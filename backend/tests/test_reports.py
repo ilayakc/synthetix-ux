@@ -326,6 +326,26 @@ async def test_report_detail_includes_simulation_run_id(session: AsyncSession, o
     assert detail.simulation_run_id == run.id
     # Rapor id'si ile karistirilmamali (ayri kimlikler).
     assert detail.simulation_run_id == report.simulation_run_id
+
+
+async def test_report_detail_exposes_ai_request_and_target_task(
+    session: AsyncSession, organization: Organization
+):
+    _project, _definition, variant = await _make_project_and_variant(session, organization)
+    run = await _make_succeeded_run_with_report(
+        session, organization, variant, modules=["ai_report"]
+    )
+    run.input_snapshot = {
+        **run.input_snapshot,
+        "target_task": "Yeni hesap oluştur",
+    }
+    await session.flush()
+    report = await _get_report_for_run(session, run)
+
+    detail = await reports_router.get_report(report.id, organization_id=organization.id, session=session)
+
+    assert detail.ai_report_requested is True
+    assert detail.info_box.input_summary["target_task"] == "Yeni hesap oluştur"
     assert detail.id == report.id
 
 

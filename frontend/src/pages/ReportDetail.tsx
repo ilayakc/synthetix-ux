@@ -21,7 +21,6 @@ import {
 } from "../api/client";
 import { calibrationStatusLabel, normalizeTurkishSystemCopy } from "../lib/turkishCopy";
 import AiReportTab from "./AiReportTab";
-import { useOptionalAuth } from "../auth/AuthContext";
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   url: "URL",
@@ -763,9 +762,37 @@ function HeatmapRegionMarker({
 // ilk ekran konumuyla sıralanır. Böylece bütün CTA'ların toplam skoru tek bir
 // `buttons[0]` kutusuna aktarılmaz ve başlık gibi tıklanamaz alanlar kırmızı
 // gösterilmez.
+function compactRepeatedLabel(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  const words = normalized.split(" ");
+  if (words.length >= 2 && words.length % 2 === 0) {
+    const midpoint = words.length / 2;
+    const first = words.slice(0, midpoint).join(" ");
+    const second = words.slice(midpoint).join(" ");
+    if (first.localeCompare(second, "tr", { sensitivity: "base" }) === 0) return first;
+  }
+  return normalized;
+}
+
 function deriveInteractiveClickRegions(
   boxes: ReportCtaOverlaySection["boxes"],
+  targetTask?: string | null,
 ): ReportHeatmapRegion[] {
+  const taskTokens = new Set(
+    (targetTask ?? "")
+      .toLocaleLowerCase("tr-TR")
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/ı/g, "i")
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 4),
+  );
+  const accountIntent = [...taskTokens].some((token) =>
+    ["hesap", "uyelik", "kayit", "olustur"].includes(token),
+  );
+  if (accountIntent) {
+    ["hesap", "uyelik", "kayit", "uye", "olustur"].forEach((token) => taskTokens.add(token));
+  }
   const candidates = dedupeCtaBoxes(boxes)
     .filter(
       (box) =>
@@ -788,8 +815,14 @@ function deriveInteractiveClickRegions(
             : box.y < 0.14
               ? "navigation_link"
               : "content_link");
+      const looksLikeLargeContentCard =
+        box.classification !== "user_confirmed_cta" &&
+        (inferredKind === "cta_link" || inferredKind === "content_link") &&
+        (box.h >= 0.065 || box.w * box.h >= 0.018);
       const effectiveKind =
-        inferredKind === "content_link" && box.w >= 0.1 && box.h >= 0.025 && box.y >= 0.14
+        looksLikeLargeContentCard
+          ? "image_link"
+          : inferredKind === "content_link" && box.w >= 0.1 && box.h >= 0.025 && box.y >= 0.14
           ? "cta_link"
           : inferredKind;
       const kindBias =
@@ -798,7 +831,7 @@ function deriveInteractiveClickRegions(
           button: 3.2,
           cta_link: 3.2,
           content_link: 1.7,
-          image_link: 1.25,
+          image_link: 0.35,
           navigation_action: 1.15,
           navigation_link: 0.55,
           pagination_control: 0.18,
@@ -810,15 +843,34 @@ function deriveInteractiveClickRegions(
       const headerBias = box.y < 0.14 ? 0.72 : 1;
       const aboveFoldBias = box.y >= 0.14 && box.y < 0.65 ? 1.12 : 1;
       const confirmedBias = box.classification === "user_confirmed_cta" ? 1.35 : 1;
+      const normalizedLabel = (box.label ?? "")
+        .toLocaleLowerCase("tr-TR")
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/ı/g, "i");
+      const labelTokens = new Set(
+        normalizedLabel.split(/[^a-z0-9]+/).filter((token) => token.length >= 4),
+      );
+      const strongActionMatch =
+        accountIntent && /(uye ol|kayit ol|hesap olustur|hesap ac)/.test(normalizedLabel);
+      const taskMatched =
+        taskTokens.size > 0 && [...taskTokens].some((token) => labelTokens.has(token));
+      const taskMatchBias = strongActionMatch ? 10 : taskMatched ? 3.5 : 1;
+      const deepPageBias = box.y > 0.65 && !taskMatched ? 0.28 : 1;
       return {
         box,
+        effectiveKind,
+        taskMatched,
+        strongActionMatch,
         weight:
           Math.min(0.08, Math.sqrt(area)) *
           kindBias *
           centerBias *
           headerBias *
           aboveFoldBias *
-          confirmedBias,
+          confirmedBias *
+          taskMatchBias *
+          deepPageBias,
       };
     })
     .filter((candidate) => candidate.weight > 0)
@@ -830,6 +882,11 @@ function deriveInteractiveClickRegions(
 
   return candidates.map((candidate, index) => {
     const score = candidate.weight / totalWeight;
+    const canBeStrongSignal =
+      candidate.box.classification === "user_confirmed_cta" ||
+      candidate.strongActionMatch ||
+      (["form_action", "button", "cta_link"].includes(candidate.effectiveKind) &&
+        (candidate.box.y <= 0.65 || candidate.taskMatched));
     return {
       key: `interactive-${index}`,
       label:
@@ -838,7 +895,7 @@ function deriveInteractiveClickRegions(
           : candidate.box.classification === "dom_interactive_candidate" &&
               candidate.box.label &&
               candidate.box.label !== "DOM etkileşimli aday"
-            ? candidate.box.label
+              ? compactRepeatedLabel(candidate.box.label)
             : index === 0
               ? "Birincil etkileşim alanı"
               : `Etkileşim alanı ${index + 1}`,
@@ -846,7 +903,7 @@ function deriveInteractiveClickRegions(
       // Etiket, ekranda gösterilen göreli pay ile aynı skordan türetilir.
       // Düşük güvenli navigasyon/carousel adayları zaten ağırlık aşamasında
       // aşağı çekildiği için ikinci kez cezalandırılmaz.
-      level: scoreToLevel(score),
+      level: canBeStrongSignal ? scoreToLevel(score) : "low",
       box: {
         x_pct: candidate.box.x * 100,
         y_pct: candidate.box.y * 100,
@@ -894,6 +951,7 @@ function HeatmapInsights({
   const ranked = [...regions].sort((a, b) => b.score - a.score);
   const strongest = ranked[0];
   if (!strongest) return null;
+  const hasStrongTaskSignal = strongest.level !== "low";
   const topTwoShare = ranked.slice(0, 2).reduce((sum, region) => sum + region.score, 0);
   const metric = mode === "click" ? "tıklama ilgisi" : "görsel odak";
 
@@ -904,11 +962,17 @@ function HeatmapInsights({
       </h4>
       <div className="heatmap-insights__grid">
         <article className="heatmap-insight-card heatmap-insight-card--primary">
-          <span className="heatmap-insight-card__eyebrow">En güçlü sinyal</span>
-          <strong>{strongest.label}</strong>
+          <span className="heatmap-insight-card__eyebrow">
+            {hasStrongTaskSignal ? "En güçlü sinyal" : "Sınırlı sinyal"}
+          </span>
+          <strong>
+            {hasStrongTaskSignal ? strongest.label : "Görevle güçlü eşleşen alan bulunamadı"}
+          </strong>
           <p>
-            Bu bölgenin göreli sentetik {metric} payı %{Math.round(strongest.score * 100)}. Bu değer
-            gerçek bir tıklanma veya bakış oranı değildir.
+            {hasStrongTaskSignal
+              ? `Bu bölgenin göreli sentetik ${metric} payı %${Math.round(strongest.score * 100)}.`
+              : "Gösterilen düşük sinyaller görev hedefiyle güçlü bir eşleşme kurmuyor."} Bu değer gerçek
+            bir tıklanma veya bakış oranı değildir.
           </p>
         </article>
         <article className="heatmap-insight-card">
@@ -1141,12 +1205,14 @@ function VisualReportPanel({
   headingId,
   title,
   sourceType,
+  targetTask,
 }: {
   heatmap: ReportHeatmapSection;
   ctaOverlay: ReportCtaOverlaySection;
   headingId: string;
   title: string;
   sourceType?: string | null;
+  targetTask?: string | null;
 }) {
   const [activeTab, setActiveTab] = useState<"visual" | "table">("visual");
   const [attentionMode, setAttentionMode] = useState<AttentionMode>("click");
@@ -1164,7 +1230,7 @@ function VisualReportPanel({
   const isVisualOverlay = heatmap.overlay_kind === "synthetic_visual_attention";
   const visualCells = heatmap.visual_cells ?? [];
   const gazeRegions = deriveHeatmapRegions(heatmap.regions, heatmap.grid);
-  const interactiveClickRegions = deriveInteractiveClickRegions(ctaOverlay.boxes);
+  const interactiveClickRegions = deriveInteractiveClickRegions(ctaOverlay.boxes, targetTask);
   const semanticClickRegions = deriveHeatmapRegions(
     heatmap.click_regions,
     heatmap.click_grid ?? null,
@@ -1287,7 +1353,7 @@ function VisualReportPanel({
                     aria-pressed={attentionMode === "click"}
                     onClick={() => setAttentionMode("click")}
                   >
-                    Tıklama ısı haritası
+                    Sentetik tıklama eğilimi
                   </button>
                   <button
                     type="button"
@@ -1460,6 +1526,7 @@ function VisualComparisonTab({ report }: { report: ReportDetailResponse }) {
           headingId="report-heatmap-heading"
           title="Tasarım"
           sourceType={report.info_box.input_summary.source_type}
+          targetTask={report.info_box.input_summary.target_task}
         />
       ) : (
         <VisualComparisonAbPanels report={report} ab={ab} />
@@ -1500,6 +1567,7 @@ function VisualComparisonAbPanels({
           headingId="report-heatmap-heading-a"
           title="Tasarım A"
           sourceType={aSourceType}
+          targetTask={report.info_box.input_summary.target_task}
         />
         <VisualReportPanel
           heatmap={bHeatmap}
@@ -1507,6 +1575,7 @@ function VisualComparisonAbPanels({
           headingId="report-heatmap-heading-b"
           title="Tasarım B"
           sourceType={bSourceType}
+          targetTask={report.info_box.input_summary.target_task}
         />
       </div>
     </>
@@ -1868,7 +1937,6 @@ type AiProbe =
   | { state: "error" };
 
 export default function ReportDetail() {
-  const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const { reportId } = useParams<{ reportId: string }>();
   const [report, setReport] = useState<ReportDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1954,7 +2022,8 @@ export default function ReportDetail() {
   // gercek hata sessizce gizlenmez ("absent" -> gizli, "present"/"error" -> acik).
   const showAiTab =
     aiProbe.state === "error" ||
-    (aiProbe.state === "present" && (!isDemo || aiProbe.status.status === "succeeded"));
+    aiProbe.state === "present" ||
+    (aiProbe.state === "absent" && Boolean(report.ai_report_requested));
   const tabs = showAiTab
     ? [...TOP_LEVEL_TABS, { id: AI_REPORT_TAB_ID, label: "AI Raporu" }]
     : TOP_LEVEL_TABS;
@@ -2016,7 +2085,6 @@ export default function ReportDetail() {
           aria-labelledby={`${idPrefix}-tab-visual`}
         >
           <VisualComparisonTab report={report} />
-          <TopFindingsSection report={report} />
         </div>
       )}
 
@@ -2050,7 +2118,8 @@ export default function ReportDetail() {
             runId={report.simulation_run_id}
             isAbComparison={isAbReport}
             initialStatus={aiProbe.state === "present" ? aiProbe.status : null}
-            initialError={aiProbe.state === "error"}
+            initialError={aiProbe.state === "error" || aiProbe.state === "absent"}
+            initialMissing={aiProbe.state === "absent" && Boolean(report.ai_report_requested)}
           />
         </div>
       )}

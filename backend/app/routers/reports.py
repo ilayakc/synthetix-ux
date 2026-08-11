@@ -229,6 +229,7 @@ class ReportDetailResponse(BaseModel):
     # pipeline'ina (GET /api/simulations/runs/{run_id}/ai-pipeline|ai-report)
     # ulasabilmek icin bu alani kullanir; standart rapor icerigini DEGISTIRMEZ.
     simulation_run_id: uuid.UUID
+    ai_report_requested: bool = False
     title: str
     created_at: datetime
     project_id: uuid.UUID
@@ -1059,6 +1060,7 @@ async def _build_detail_response(
     return ReportDetailResponse(
         id=ctx.report.id,
         simulation_run_id=ctx.run.id,
+        ai_report_requested="ai_report" in (input_snapshot.get("modules") or []),
         title=ctx.report.title,
         created_at=ctx.report.created_at,
         project_id=ctx.project.id,
@@ -1086,6 +1088,7 @@ async def _build_detail_response(
                 "wizard_test_type": input_snapshot.get("wizard_test_type"),
                 "persona_count": input_snapshot.get("persona_count"),
                 "target_audience": input_snapshot.get("target_audience"),
+                "target_task": input_snapshot.get("target_task"),
             },
         ),
         metrics=metrics,

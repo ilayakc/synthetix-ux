@@ -135,8 +135,18 @@ _FEATURE_EXTRACTION_JS = """
     const imageAlt = Array.from(el.querySelectorAll ? el.querySelectorAll('img[alt]') : [])
       .map((img) => img.getAttribute('alt') || '').join(' ');
     const controlValue = tag === 'input' && ['submit', 'button'].includes(type) ? el.value : '';
-    return [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), controlValue, imageAlt]
-      .filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 120) || null;
+    const parts = [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), controlValue, imageAlt]
+      .filter(Boolean).map((value) => String(value).replace(/\\s+/g, ' ').trim()).filter(Boolean);
+    const unique = [];
+    const seen = new Set();
+    parts.forEach((part) => {
+      const key = part.toLocaleLowerCase('tr-TR');
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(part);
+      }
+    });
+    return unique.join(' ').trim().slice(0, 120) || null;
   }
 
   function isCtaLikeLink(el) {
@@ -182,6 +192,7 @@ _FEATURE_EXTRACTION_JS = """
       return 'button';
     }
     if (inNavigation) return 'navigation_link';
+    if ((hasImage || tag === 'a' && el.children.length > 2) && rect.height >= 80) return 'image_link';
     if (isCtaLikeLink(el)) return 'cta_link';
     if (hasImage || tag === 'a' && el.children.length > 2) return 'image_link';
     return 'content_link';
@@ -283,10 +294,14 @@ _FEATURE_EXTRACTION_JS = """
 
   const boxCandidates = [];
   headingEls.slice(0, 5).forEach((el) => boxCandidates.push(['heading', el]));
-  interactiveCandidates.slice(0, 12).forEach(([role, el]) => boxCandidates.push([role, el]));
+  // Hedef gorev analyzer tarafindan bilinmez. Yalnizca ilk 12 adayi saklamak,
+  // uzun e-ticaret sayfalarinda gorevle ilgili hesap/kayit CTA'sini veri
+  // disinda birakabiliyordu. Hala bounded, fakat rapor katmaninin hedef gorev
+  // metniyle eslestirebilmesi icin daha genis bir aday havuzu korunur.
+  interactiveCandidates.slice(0, 40).forEach(([role, el]) => boxCandidates.push([role, el]));
   forms.filter(isInsideCapture).slice(0, 3).forEach((el) => boxCandidates.push(['form', el]));
 
-  const elementBoxes = boxCandidates.slice(0, 20).map(([role, el]) => {
+  const elementBoxes = boxCandidates.slice(0, 50).map(([role, el]) => {
     const rect = el.getBoundingClientRect();
     return {
       role,
