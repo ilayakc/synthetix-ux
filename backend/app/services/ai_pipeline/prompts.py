@@ -78,7 +78,9 @@ _UX_REPORT_INSTRUCTIONS = (
     "'istatistiksel olarak anlamli', 'gercek donusum', 'goz takibi' veya "
     "'eye tracking'. Bunlar olumsuzlama ya da sinirlilik aciklamasi icinde de "
     "gecmemelidir. Bunun yerine 'sentetik tahmin', 'kalibre edilmemis' ve "
-    "'gercek kullanici verisi degildir' ifadelerini kullan."
+    "'gercek kullanici verisi degildir' ifadelerini kullan. Her "
+    "evidence_reference degerini girdideki evidence_id alanlarindan karakteri "
+    "karakterine kopyala; yeni bir kanit kimligi uretme."
 )
 
 
