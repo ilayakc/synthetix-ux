@@ -72,8 +72,13 @@ _UX_REPORT_INSTRUCTIONS = (
     "Sana verilen deterministik agregasyon sonucundan ve sayfa evidence'inden, "
     "onceliklendirilmis UX bulgulari (UXFinding) iceren bir rapor uret. Sayisal "
     "degerler yalnizca verilen agregasyondan gelmelidir; yeni sayi uretme. Cikti "
-    "`UXReport` semasina uymalidir ve sentetik/dogrulanmamis oldugunu acikca "
-    "belirtmelidir."
+    "`UXReport` semasina uymalidir ve sonuclarin sentetik tahmin oldugunu acikca "
+    "belirtmelidir. Ciktinin hicbir alaninda su ifadeleri kullanma: 'gercek pazar "
+    "talebi', 'pazar temsili', 'dogrulanmis', 'bilimsel olarak kanitlanmis', "
+    "'istatistiksel olarak anlamli', 'gercek donusum', 'goz takibi' veya "
+    "'eye tracking'. Bunlar olumsuzlama ya da sinirlilik aciklamasi icinde de "
+    "gecmemelidir. Bunun yerine 'sentetik tahmin', 'kalibre edilmemis' ve "
+    "'gercek kullanici verisi degildir' ifadelerini kullan."
 )
 
 
@@ -121,7 +126,7 @@ _PERSONA_BEHAVIOR_DESCRIPTOR = _build_descriptor(
 
 _UX_REPORT_DESCRIPTOR = _build_descriptor(
     prompt_key="ux_report",
-    prompt_version="v1",
+    prompt_version="v2",
     specific_instructions=_UX_REPORT_INSTRUCTIONS,
     input_schema_model=UXReportInput,
     output_schema_model=UXReport,

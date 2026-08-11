@@ -24,6 +24,7 @@ bozuk persisted output. Bu hatalar deneme sayisindan BAGIMSIZ terminaldir.
 
 from __future__ import annotations
 
+from app.services.ai_pipeline.errors import ERROR_BANNED_CLAIM, AIPipelineError
 from app.services.ai_pipeline.provider_errors import AIProviderError
 
 # --- Retry/stale sabitleri (TEK kaynak) ------------------------------------------
@@ -52,6 +53,11 @@ def is_retryable_error(exc: BaseException) -> bool:
     daima non-retryable'dir.
     """
 
+    # A provider can satisfy the strict schema while accidentally repeating a
+    # prohibited claim in a limitation sentence. A fresh generation can repair
+    # that bounded content error; all other validation errors remain terminal.
+    if isinstance(exc, AIPipelineError) and exc.code == ERROR_BANNED_CLAIM:
+        return True
     if isinstance(exc, AIProviderError):
         return exc.retryable
     return False
