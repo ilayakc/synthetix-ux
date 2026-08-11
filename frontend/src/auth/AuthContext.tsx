@@ -12,6 +12,7 @@ import {
   type LoginRequest,
   type RegisterRequest,
   type SessionResponse,
+  demoLogin as apiDemoLogin,
   getMe,
   login as apiLogin,
   logout as apiLogout,
@@ -28,6 +29,7 @@ interface AuthContextValue {
   // olur; giris ekrani "oturumunuzun suresi doldu" mesajini gosterebilir.
   sessionExpired: boolean;
   login: (body: LoginRequest) => Promise<SessionResponse>;
+  demoLogin: () => Promise<SessionResponse>;
   register: (body: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
   clearSessionExpired: () => void;
@@ -80,6 +82,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return data;
   }, []);
 
+  const demoLogin = useCallback(async () => {
+    const data = await apiDemoLogin();
+    setSession(data);
+    setStatus("authenticated");
+    setSessionExpired(false);
+    return data;
+  }, []);
+
   const register = useCallback(async (body: RegisterRequest) => {
     const data = await apiRegister(body);
     setSession(data);
@@ -101,8 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const clearSessionExpired = useCallback(() => setSessionExpired(false), []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ status, session, sessionExpired, login, register, logout, clearSessionExpired }),
-    [status, session, sessionExpired, login, register, logout, clearSessionExpired],
+    () => ({ status, session, sessionExpired, login, demoLogin, register, logout, clearSessionExpired }),
+    [status, session, sessionExpired, login, demoLogin, register, logout, clearSessionExpired],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

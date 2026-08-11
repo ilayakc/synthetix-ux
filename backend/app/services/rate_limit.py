@@ -41,3 +41,23 @@ async def register_failed_attempt(redis: Redis, identifier: str) -> None:
 async def clear_attempts(redis: Redis, identifier: str) -> None:
     await redis.delete(_attempts_key(identifier))
     await redis.delete(_lockout_key(identifier))
+
+
+def _demo_login_key(identifier: str) -> str:
+    return f"auth:demo-login:{identifier}"
+
+
+async def is_demo_login_rate_limited(redis: Redis, identifier: str) -> bool:
+    """Demo girisini IP basina sabit-pencere ile sinirlar.
+
+    Parola dogrulamasi olmadan oturum acan `/api/auth/demo-login` ucunun tek
+    bir IP'den asiri cok oturum (refresh token satiri) uretmesini engeller.
+    Pencere basi ilk istek sayaci baslatir ve TTL koyar; sayac limiti asarsa
+    True doner (giris reddedilir).
+    """
+
+    key = _demo_login_key(identifier)
+    count = await redis.incr(key)
+    if count == 1:
+        await redis.expire(key, settings.demo_login_rate_limit_window_seconds)
+    return count > settings.demo_login_rate_limit_max_attempts

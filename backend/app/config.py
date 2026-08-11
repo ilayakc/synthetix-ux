@@ -111,6 +111,29 @@ class Settings(BaseSettings):
     bootstrap_user_email: str | None = None
     bootstrap_user_password: SecretStr | None = None
 
+    # Internete acik sunum kurulumunda, ziyaretcilerin PAROLA GIRMEDEN tek
+    # tikla demo hesabina (yukaridaki `bootstrap_user_email`) girebilmesini
+    # saglayan, VARSAYILAN OLARAK KAPALI bir kapi. Yalnizca `true` iken
+    # `POST /api/auth/demo-login` calisir ve HICBIR ZAMAN rastgele bir hesaba
+    # degil, YALNIZCA yapilandirilmis (yonetici OLMAYAN) demo kullanicisina
+    # oturum acar; kapaliyken uc nokta 404 doner (bkz. app.routers.auth).
+    # Demo hesabinin parolasi bu akista hic kullanilmaz - o yuzden bilinen/
+    # sabit bir parola yayinlamaya gerek yoktur.
+    demo_login_enabled: bool = False
+    # Demo girisinin IP basina sabit-pencere hiz siniri (oturum tablosunu
+    # sel etmeye karsi; bkz. app.services.rate_limit.is_demo_login_rate_limited).
+    demo_login_rate_limit_max_attempts: int = 20
+    demo_login_rate_limit_window_seconds: int = 5 * 60
+
+    # Herkese acik "Canli demo" hesabi: `bootstrap_user_email`den (gelistiricinin
+    # kendi, dolu demo hesabi) TAMAMEN AYRI, TAZE bir hesaptir. Amaci yalnizca
+    # 1 ornek rapor gostermek ve aray uzde gezinmeye izin vermektir. `demo-login`
+    # ucu YALNIZCA bu hesaba oturum acar. Parola bu akista hic kullanilmaz;
+    # yalnizca hesabin bootstrap'ta olusturulabilmesi (password_hash zorunlulugu)
+    # icin gereklidir - o yuzden rastgele/uretilmis bir parola yeterlidir.
+    demo_account_email: str | None = None
+    demo_account_password: SecretStr | None = None
+
     # --- URL analiz servisi (analyzer) ---
     # analyzer, ayri bir container'da calisan, Playwright tabanli, SSRF'e
     # karsi korumali bir sayfa analiz servisidir (bkz. docs/security.md).

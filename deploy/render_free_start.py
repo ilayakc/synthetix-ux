@@ -40,11 +40,21 @@ def _bootstrap_user() -> None:
     subprocess.run([sys.executable, "-m", "app.bootstrap_user"], check=True)
 
 
+def _bootstrap_public_demo() -> None:
+    # Herkese acik "Canli demo" hesabi yalnizca ortam degiskeni verildiginde
+    # hazirlanir; verilmeyen kurulumlari kirmamak icin kosula baglidir.
+    if not os.environ.get("DEMO_ACCOUNT_EMAIL"):
+        return
+    print("render-free: canli demo hesabi hazirlaniyor", flush=True)
+    subprocess.run([sys.executable, "-m", "app.bootstrap_public_demo"], check=True)
+
+
 def main() -> int:
     _configure_render_origin()
     _run_migrations()
     _bootstrap_admin()
     _bootstrap_user()
+    _bootstrap_public_demo()
 
     commands = {
         "backend": ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],

@@ -17,6 +17,7 @@ from app.config import settings
 from app.db import async_session_maker
 from app.models import Membership, Organization, User
 from app.security import hash_password
+from app.services import chip_ledger
 from app.services.entitlements import list_free_entitlements
 
 logger = logging.getLogger("synthetix.seed")
@@ -29,6 +30,13 @@ DEV_USER_EMAIL = "dev@synthetix.local"
 DEV_USER_PASSWORD = "DevPassword123!"
 
 DEMO_PASSWORD = "DemoSynthetix123!"
+
+# Canli demo hesabina acilista verilen Chip kredisi. Amac: demo yalnizca
+# gezinme icin oldugundan, ziyaretcilerin UCRETLI modullerin (ag/cihaz, CTA,
+# sentetik dikkat, AI raporu) ciktilarini da gorebilmesi. Kotuye kullanim/
+# maliyeti sinirli tutmak icin makul bir ust sinir; idempotency ile ayni DB'de
+# yalnizca BIR kez uygulanir (bkz. seed_public_demo).
+DEMO_PUBLIC_CHIP_GRANT = 500
 
 
 class DemoAccount(TypedDict):
@@ -131,6 +139,43 @@ async def seed_demo_user(*, email: str, password: str) -> None:
     }
     async with async_session_maker() as session:
         await _seed_demo_account(session, account, password=password)
+        await session.commit()
+
+
+async def seed_public_demo(*, email: str, password: str) -> None:
+    """Herkese acik "Canli demo" hesabini idempotent hazirlar.
+
+    Bu hesap, `seed_demo_user`in olusturdugu gelistirici demo hesabindan
+    (`synthetix.demo.user...`) TAMAMEN AYRI, TAZE bir organizasyondur;
+    `POST /api/auth/demo-login` yalnizca buna oturum acar. Amaci sadece 1
+    ornek raporu gostermek ve aray uzde gezinme saglamaktir - yonetici
+    DEGILDIR ve 0 Chip ile baslar (yalnizca iki ucretsiz hak taninir)."""
+
+    account: DemoAccount = {
+        "email": email.strip().lower(),
+        "display_name": "Canli Demo",
+        "organization_name": "Synthetix UX Canli Demo",
+        "organization_slug": "synthetix-ux-canli-demo",
+        "is_platform_admin": False,
+    }
+    async with async_session_maker() as session:
+        await _seed_demo_account(session, account, password=password)
+        organization = (
+            await session.execute(
+                select(Organization).where(Organization.slug == account["organization_slug"])
+            )
+        ).scalar_one()
+        # Ucretli modul ciktilarini da uretebilmek icin sabit bir Chip kredisi.
+        # `idempotency_key` sayesinde ayni DB'de deploy tekrarlansa bile ust uste
+        # yuklenmez; DB sifirlanirsa (Render ucretsiz plan) taze DB'de yeniden
+        # uygulanir.
+        await chip_ledger.credit(
+            session,
+            organization.id,
+            DEMO_PUBLIC_CHIP_GRANT,
+            reason="Canli demo acilis kredisi (ucretli modul ciktilarini gostermek icin)",
+            idempotency_key="demo_public_seed_credit",
+        )
         await session.commit()
 
 

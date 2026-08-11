@@ -1639,6 +1639,12 @@ export function login(body: LoginRequest): Promise<SessionResponse> {
   });
 }
 
+// Parola gerektirmeden herkese acik "Canli demo" hesabina tek-tik giris.
+// Yalnizca sunucuda DEMO_LOGIN_ENABLED acikken calisir; aksi halde 404 doner.
+export function demoLogin(): Promise<SessionResponse> {
+  return apiFetch<SessionResponse>("/api/auth/demo-login", { method: "POST" });
+}
+
 export function refreshSession(): Promise<SessionResponse> {
   return rawFetch<SessionResponse>("/api/auth/refresh", { method: "POST" });
 }
