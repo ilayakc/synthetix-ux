@@ -415,6 +415,7 @@ def _build_snapshot(
     screenshot_height: int,
 ) -> PageFeatureSnapshotV1:
     accessibility = {
+        "scan_status": axe_response.get("scan_status", "completed"),
         "violations": [
             {
                 "rule_id": v["id"],
@@ -449,6 +450,48 @@ def _build_snapshot(
         "warnings": warnings,
     }
     return PageFeatureSnapshotV1.model_validate(payload)
+
+
+async def _run_accessibility_precheck(page, warnings: list[str]) -> dict:
+    """axe-core'u sinirli ve best-effort calistirir.
+
+    Erisilebilirlik on kontrolu, ozellikle buyuk e-ticaret DOM'larinda CPU
+    sinirli ortamlarda uzun surebilir. Tarama tek basina tum URL snapshot'ini
+    dusurmez; eksik sonuc `scan_status=skipped` ve uyariyla acikca belirtilir.
+    """
+
+    axe = Axe()
+    try:
+        axe_results = await asyncio.wait_for(
+            axe.run(page, options={"resultTypes": ["violations", "passes", "incomplete"]}),
+            timeout=settings.accessibility_scan_timeout_seconds,
+        )
+    except (TimeoutError, PlaywrightError) as exc:
+        warnings.append(
+            "Erisilebilirlik on kontrolu sure/kaynak sinirina ulasti; "
+            "temel sayfa analizi mevcut verilerle tamamlandi"
+        )
+        logger.warning("axe-core on kontrolu atlandi: %s", exc)
+        return {
+            "scan_status": "skipped",
+            "violations": [],
+            "passes": [],
+            "incomplete": [],
+        }
+    except Exception as exc:  # axe wrapper/runtime hatasi temel snapshot'i dusurmemeli
+        warnings.append(
+            "Erisilebilirlik on kontrolu tamamlanamadi; "
+            "temel sayfa analizi mevcut verilerle tamamlandi"
+        )
+        logger.exception("axe-core on kontrolu beklenmeyen hatayla atlandi: %s", exc)
+        return {
+            "scan_status": "skipped",
+            "violations": [],
+            "passes": [],
+            "incomplete": [],
+        }
+
+    return {"scan_status": "completed", **axe_results.response}
 
 
 async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
@@ -544,8 +587,7 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
     )
     features = await page.evaluate(_FEATURE_EXTRACTION_JS, capture_height)
 
-    axe = Axe()
-    axe_results = await axe.run(page, options={"resultTypes": ["violations", "passes", "incomplete"]})
+    axe_response = await _run_accessibility_precheck(page, warnings)
 
     await context.close()
 
@@ -555,7 +597,7 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
         redirect_count=redirect_state["count"],
         features=features,
         screenshot_bytes=screenshot_bytes,
-        axe_response=axe_results.response,
+        axe_response=axe_response,
         warnings=warnings,
         screenshot_width=settings.viewport_width,
         screenshot_height=capture_height,

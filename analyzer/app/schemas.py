@@ -10,6 +10,8 @@ hazirlanir.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 ANALYZER_VERSION = "analyzer-2026.1"
@@ -64,6 +66,7 @@ class AccessibilityViolation(BaseModel):
 
 class AccessibilityPrecheck(BaseModel):
     disclaimer: str = ACCESSIBILITY_PRECHECK_DISCLAIMER
+    scan_status: Literal["completed", "skipped"] = "completed"
     violations: list[AccessibilityViolation]
     passes_count: int
     incomplete_count: int

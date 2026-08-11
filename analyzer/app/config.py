@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # boyut guvenlik sinirini asmamak icin ekran goruntusunu sinirla.
     screenshot_max_height: int = 4000
     dynamic_content_settle_ms: int = 750
+    # axe-core buyuk/karmasik DOM'larda sayfanin geri kalan analizini
+    # engellememeli. Bu sure asilinca temel snapshot korunur ve on kontrol
+    # acik bir "skipped" durumu + uyariyla raporlanir.
+    accessibility_scan_timeout_seconds: int = 20
 
     # --- Eszamanlilik ve kaynak sinirlari ---
     max_concurrent_analyses: int = 2

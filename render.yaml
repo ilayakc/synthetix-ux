@@ -60,7 +60,9 @@ services:
       - key: ANALYZER_BASE_URL
         value: https://synthetix-ux-ily-analyzer.onrender.com
       - key: ANALYZER_REQUEST_TIMEOUT_SECONDS
-        value: "90"
+        value: "180"
+      - key: PAGE_ANALYSIS_STALE_TIMEOUT_SECONDS
+        value: "240"
       - key: ANALYZER_DEVICE_NETWORK_TIMEOUT_SECONDS
         value: "180"
       - key: PAGE_ANALYSIS_SCREENSHOT_RETENTION_SECONDS
@@ -103,6 +105,8 @@ services:
         value: "1"
       - key: NAVIGATION_TIMEOUT_SECONDS
         value: "45"
+      - key: ACCESSIBILITY_SCAN_TIMEOUT_SECONDS
+        value: "20"
       - key: ANALYZER_SHARED_TOKEN
         fromService:
           type: web
