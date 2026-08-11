@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, EmailStr, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -30,6 +31,7 @@ LOCKED_OUT_ERROR = "Cok fazla basarisiz deneme yapildi. Lutfen daha sonra tekrar
 PASSWORD_RESET_REQUESTED_MESSAGE = (
     "E-posta adresi sistemde kayitliysa parola sifirlama talimatlari gonderildi."
 )
+DEMO_LOGIN_RATE_LIMITED = "Cok fazla demo girisi denendi. Lutfen biraz sonra tekrar deneyin."
 
 
 class RegisterRequest(BaseModel):
@@ -204,6 +206,68 @@ async def login(
         role=membership.role,
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
+    )
+    await session.commit()
+
+    return SessionResponse(
+        user_id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        organization_id=organization.id,
+        organization_name=organization.name,
+        role=membership.role,
+        is_platform_admin=user.is_platform_admin,
+    )
+
+
+@router.post("/demo-login", response_model=SessionResponse)
+async def demo_login(
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(get_session),
+) -> SessionResponse:
+    """Parola gerektirmeden, herkese acik 'Canli demo' hesabina tek-tik oturum acar.
+
+    GUVENLIK:
+    - Yalnizca `settings.demo_login_enabled` acikken calisir; aksi halde
+      ozelligi sizdirmamak icin 404 doner.
+    - HICBIR ZAMAN rastgele bir hesaba degil, YALNIZCA `settings.demo_account_
+      email` ile tanimli, gelistiricinin kendi demo hesabindan AYRI, taze demo
+      hesabina oturum acar. Hesap bir sekilde platform yoneticisiyse istek
+      reddedilir - demo-login hicbir kosulda yonetici oturumu ACMAZ.
+    - IP basina hiz-sinirlidir (oturum/refresh-token tablosunu sel etmeye karsi).
+    """
+
+    if not settings.demo_login_enabled or not settings.demo_account_email:
+        raise HTTPException(status_code=404, detail="Bulunamadi")
+
+    client_host = request.client.host if request.client else None
+    if await rate_limit.is_demo_login_rate_limited(redis_client, client_host or "unknown"):
+        raise HTTPException(status_code=429, detail=DEMO_LOGIN_RATE_LIMITED)
+
+    demo_email = auth_service.normalize_email(settings.demo_account_email)
+    user = (
+        await session.execute(select(User).where(User.email_normalized == demo_email))
+    ).scalar_one_or_none()
+    # Demo hesabi yoksa (yanlis yapilandirma) veya bir sekilde platform
+    # yoneticisiyse: 500 yerine 404 - demo-login HICBIR kosulda yonetici
+    # oturumu ACMAZ.
+    if user is None or user.is_platform_admin:
+        raise HTTPException(status_code=404, detail="Bulunamadi")
+
+    membership = await auth_service.get_active_membership(session, user.id)
+    organization = await session.get(Organization, membership.organization_id)
+    if organization is None:
+        raise HTTPException(status_code=404, detail="Bulunamadi")
+
+    await _issue_session_cookies(
+        response,
+        session,
+        user_id=user.id,
+        organization_id=organization.id,
+        role=membership.role,
+        user_agent=request.headers.get("user-agent"),
+        ip_address=client_host,
     )
     await session.commit()
 

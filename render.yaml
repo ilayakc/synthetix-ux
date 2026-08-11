@@ -35,6 +35,15 @@ services:
         value: synthetix.demo.user@example.com
       - key: BOOTSTRAP_USER_PASSWORD
         generateValue: true
+      # Herkese acik tek-tik "Canli demoyu incele" (parola gerektirmez).
+      # Ayri, taze bir demo hesabi olusturulur; demo-login yalnizca buna
+      # oturum acar (bkz. app.routers.auth.demo_login).
+      - key: DEMO_LOGIN_ENABLED
+        value: "true"
+      - key: DEMO_ACCOUNT_EMAIL
+        value: synthetix.demo.public@example.com
+      - key: DEMO_ACCOUNT_PASSWORD
+        generateValue: true
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: ANALYZER_SHARED_TOKEN

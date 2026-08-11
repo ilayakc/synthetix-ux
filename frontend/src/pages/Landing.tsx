@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { applyPublicTheme, getPublicTheme, type PublicTheme } from "../theme/publicTheme";
+import { useAuth } from "../auth/AuthContext";
 import BrandLogo from "../components/BrandLogo";
 import SimulationBackdrop from "./landing/SimulationBackdrop";
+
+// "Nasil calisir?" baglantisi, ayri olarak hazirlanan tanitim sayfasini acar.
+// NOT: Su an bu bir on-izleme sayfasidir; ileride uygulama ici bir rota
+// (or. /nasil-calisiyor) haline getirilebilir.
+const HOW_IT_WORKS_URL = "https://claude.ai/code/artifact/073b8d6b-a02a-4b91-95bc-054baea2bdd8";
 
 const FEATURES = [
   {
@@ -24,10 +30,29 @@ const FEATURES = [
 
 export default function Landing() {
   const [theme, setTheme] = useState<PublicTheme>(getPublicTheme);
+  const { demoLogin } = useAuth();
+  const navigate = useNavigate();
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
 
   useEffect(() => {
     applyPublicTheme(theme);
   }, [theme]);
+
+  async function handleDemo() {
+    setDemoError(null);
+    setDemoLoading(true);
+    try {
+      await demoLogin();
+      // Giris basarili olunca oturum durumu "authenticated" olur ve "/"
+      // rotasi Genel Bakis'i gosterir.
+      navigate("/", { replace: true });
+    } catch {
+      setDemoError("Canlı demo şu anda kullanılamıyor. Lütfen daha sonra tekrar deneyin.");
+    } finally {
+      setDemoLoading(false);
+    }
+  }
 
   return (
     <div className="landing-page">
@@ -71,11 +96,35 @@ export default function Landing() {
               <Link to="/kayit" className="landing-primary-button landing-primary-button--large">
                 Ücretsiz hesap oluştur
               </Link>
+              <button
+                type="button"
+                className="landing-secondary-button"
+                onClick={handleDemo}
+                disabled={demoLoading}
+                style={{ fontFamily: "inherit", cursor: demoLoading ? "default" : "pointer" }}
+              >
+                {demoLoading ? "Demo açılıyor…" : "Canlı demoyu incele"}
+              </button>
               <Link to="/giris" className="landing-secondary-button">
                 Zaten hesabım var
               </Link>
             </div>
+            {demoError && (
+              <p className="landing-hero__note" role="alert" style={{ color: "var(--color-danger-text)" }}>
+                {demoError}
+              </p>
+            )}
             <p className="landing-hero__note">Kredi kartı gerekmez · 2 ücretsiz kullanım hakkı</p>
+            <p className="landing-hero__howitworks">
+              <a
+                href={HOW_IT_WORKS_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: "var(--color-accent)", fontWeight: 600, textDecoration: "none" }}
+              >
+                Nasıl çalışır?
+              </a>
+            </p>
           </div>
 
           <div className="landing-preview" aria-label="Ürün akışı özeti">
