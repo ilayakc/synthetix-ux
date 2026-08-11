@@ -73,6 +73,9 @@ const reportResponse: AIReportResponse = {
   generated_at: "2026-08-06T12:00:00Z",
   content_format: "structured_json",
   synthetic_disclaimer: "Sunucu sabiti: bu rapor gerçek kullanıcı araştırması değildir.",
+  provider: "openai",
+  model_name: "gpt-5.6-terra",
+  instruction_version: "v3",
   report: {
     report_version: "ux-report-v1",
     summary: "1 sentetik bulgu üretildi.",
@@ -119,14 +122,18 @@ describe("AiReportTab", () => {
     await waitFor(() => expect(getAiReport).toHaveBeenCalledWith("r1"));
 
     expect(await screen.findByText("1 sentetik bulgu üretildi.")).toBeInTheDocument();
-    expect(screen.getByText(/görevi tamamlamadan sayfadan ayrılma riski/)).toBeInTheDocument();
+    expect(screen.getByText(/Olası bir sürtünme noktası/)).toBeInTheDocument();
     // Öncelik metinle gösterilir (yalnızca renk değil).
     expect(screen.getByText("Orta öncelik")).toBeInTheDocument();
     expect(screen.getByText(/Güven düzeyi: Düşük/)).toBeInTheDocument();
-    expect(screen.getByText(/Akıştaki gereksiz adımları azaltın/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Bu sürtünme noktasını gerçek kullanıcı testiyle doğrulayın/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/220/)).toBeInTheDocument();
     expect(screen.queryByText(/metric:abandonment_probability/)).not.toBeInTheDocument();
     expect(screen.getByText(/ux-report-v1/)).toBeInTheDocument();
+    expect(screen.getByText(/gpt-5.6-terra/)).toBeInTheDocument();
+    expect(screen.getByText(/AI sağlayıcısı: openai/)).toBeInTheDocument();
     // Sınırlamalar görünür; yinelenen rapor-içi uyarı gösterilmez. Genel
     // sentetik-veri uyarısı uygulama kabuğundaki IntegrityBanner'dadır.
     expect(screen.getByText("Bu rapor Mock/şablon tarafından üretilmiştir.")).toBeInTheDocument();
@@ -159,8 +166,10 @@ describe("AiReportTab", () => {
     render(<AiReportTab runId="r1" initialStatus={succeededStatus} />);
 
     expect(await screen.findByText("1 sentetik bulgu üretildi.")).toBeInTheDocument();
-    expect(screen.getByText(/görevi tamamlamadan sayfadan ayrılma riski/)).toBeInTheDocument();
-    expect(screen.getByText(/Akıştaki gereksiz adımları azaltın/)).toBeInTheDocument();
+    expect(screen.getByText(/Kanıt ile ilişkili olası bir sürtünme noktası/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Bu sürtünme noktasını gerçek kullanıcı testiyle doğrulamayı düşünün/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/bağlamsal çeşitlilik/)).toBeInTheDocument();
     expect(screen.queryByText(/gercek kullanici olcumu degildir/)).not.toBeInTheDocument();
   });

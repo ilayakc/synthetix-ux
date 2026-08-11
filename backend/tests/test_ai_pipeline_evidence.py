@@ -128,6 +128,42 @@ def test_module_presence_is_recorded_only_for_selected_modules():
     assert "module:network_device_test" not in ids
 
 
+def test_allowlisted_module_summaries_include_cta_labels_and_operational_metrics():
+    evidence = prepare_page_evidence(
+        source_type="url",
+        metrics=_metrics(),
+        selected_modules=[
+            "campaign_cta_test",
+            "network_device_test",
+            "synthetic_attention_estimate",
+        ],
+        module_results={
+            "campaign_cta_test": {
+                "ctas": [{
+                    "label": "Ücretsiz hesap oluştur",
+                    "click_probability": {"point_estimate": 0.42},
+                }]
+            },
+            "network_device_test": {
+                "error_rate": 0.25,
+                "profiles": [{"succeeded": True}, {"succeeded": False}],
+            },
+            "synthetic_attention_estimate": {
+                "regions": [
+                    {"label": "Birincil CTA alanı", "attention_share": 0.38},
+                    {"label": "Hero / birincil başlık", "attention_share": 0.29},
+                ]
+            },
+        },
+    )
+
+    values = {item.evidence_id: item.value for item in evidence.items}
+    assert "Ücretsiz hesap oluştur" in values["module:campaign_cta_test:cta_1"]
+    assert values["module:network_device_test:error_rate"] == 0.25
+    assert values["module:network_device_test:profile_summary"] == "profiles=2; failed=1"
+    assert "Birincil CTA alanı" in values["module:synthetic_attention_estimate:top_1"]
+
+
 def test_evidence_hash_field_itself_not_part_of_its_own_hash_input():
     """Ayni evidence icerigi + farkli hash alani ile manuel olusturulan iki
     nesne PYDANTIC dogrulamasi sonrasi ayni `evidence_hash`a sahip olmali -

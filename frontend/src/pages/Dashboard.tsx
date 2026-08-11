@@ -16,6 +16,7 @@ import {
   listWizardDrafts,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { selectPublicDemoItems } from "../lib/publicDemo";
 import { normalizeTurkishSystemCopy } from "../lib/turkishCopy";
 import {
   ActivityIcon,
@@ -61,8 +62,8 @@ function SummaryCard({
       <h3 className="summary-card__title">{title}</h3>
       <p className="summary-card__value">{value}</p>
       {helper && <p className="summary-card__helper">{helper}</p>}
-      {to && (
-        to.includes("#") ? (
+      {to &&
+        (to.includes("#") ? (
           <a href={to} className="summary-card__link">
             {linkLabel ?? "Görüntüle"}
           </a>
@@ -70,8 +71,7 @@ function SummaryCard({
           <Link to={to} className="summary-card__link">
             {linkLabel ?? "Görüntüle"}
           </Link>
-        )
-      )}
+        ))}
     </div>
   );
 }
@@ -194,7 +194,16 @@ export default function Dashboard() {
         ) {
           throw new Error("Beklenmeyen veri biçimi");
         }
-        setData({ projects, runs, usage, reports, ledger, drafts });
+        setData({
+          projects,
+          runs: isDemo
+            ? selectPublicDemoItems(runs.filter((run) => run.status === "succeeded"))
+            : runs,
+          usage,
+          reports: isDemo ? selectPublicDemoItems(reports) : reports,
+          ledger,
+          drafts: isDemo ? [] : drafts,
+        });
       })
       .catch(() => {
         setHasError(true);
@@ -202,7 +211,7 @@ export default function Dashboard() {
       .finally(() => {
         setIsLoading(false);
       });
-  }, []);
+  }, [isDemo]);
 
   useEffect(() => {
     load();
@@ -218,9 +227,7 @@ export default function Dashboard() {
   const dashboardSummary = useMemo(() => {
     if (!data) return null;
 
-    const completedDefinitionIds = new Set(
-      data.reports.map((report) => report.test_definition_id),
-    );
+    const completedDefinitionIds = new Set(data.reports.map((report) => report.test_definition_id));
     const activeRuns = data.runs.filter(
       (run) => run.status === "queued" || run.status === "running",
     ).length;
@@ -321,7 +328,11 @@ export default function Dashboard() {
       )}
 
       <div className="dashboard-columns">
-        <section id="project-tests-heading" className="dashboard-section" aria-labelledby="project-tests-title">
+        <section
+          id="project-tests-heading"
+          className="dashboard-section"
+          aria-labelledby="project-tests-title"
+        >
           <div className="dashboard-section__heading-row">
             <div>
               <h2 id="project-tests-title" className="dashboard-section__title">
@@ -362,8 +373,9 @@ export default function Dashboard() {
                     }
                   });
                 const completedTests = [...completedByDefinition.values()];
-                const processingCount = Math.max(project.test_count - completedTests.length, 0);
-                const totalCount = project.test_count + projectDrafts.length;
+                const visibleTestCount = isDemo ? completedTests.length : project.test_count;
+                const processingCount = Math.max(visibleTestCount - completedTests.length, 0);
+                const totalCount = visibleTestCount + projectDrafts.length;
 
                 return (
                   <details key={project.id} className="project-test-group">
@@ -371,7 +383,7 @@ export default function Dashboard() {
                       <span>
                         <strong>{project.name}</strong>
                         <small>
-                          {project.test_count} başlatılmış test · {projectDrafts.length} taslak ·{" "}
+                          {visibleTestCount} başlatılmış test · {projectDrafts.length} taslak ·{" "}
                           {completedTests.length} tamamlandı
                         </small>
                       </span>

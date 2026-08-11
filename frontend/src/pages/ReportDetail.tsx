@@ -21,6 +21,7 @@ import {
 } from "../api/client";
 import { calibrationStatusLabel, normalizeTurkishSystemCopy } from "../lib/turkishCopy";
 import AiReportTab from "./AiReportTab";
+import { useOptionalAuth } from "../auth/AuthContext";
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   url: "URL",
@@ -309,16 +310,18 @@ function collectFindings(report: ReportDetailResponse): CombinedFinding[] {
     ...(report.campaign_cta?.message_clarity_findings ?? []),
   ];
   const seen = new Set<string>();
-  return combined.map((finding) => ({
-    ...finding,
-    text: normalizeTurkishSystemCopy(finding.text),
-  })).filter((finding) => {
-    if (finding.key === "no_threshold_triggered") return false;
-    const identity = finding.key;
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
+  return combined
+    .map((finding) => ({
+      ...finding,
+      text: normalizeTurkishSystemCopy(finding.text),
+    }))
+    .filter((finding) => {
+      if (finding.key === "no_threshold_triggered") return false;
+      const identity = finding.key;
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    });
 }
 
 function TopFindingsSection({ report }: { report: ReportDetailResponse }) {
@@ -785,28 +788,22 @@ function deriveInteractiveClickRegions(
             : box.y < 0.14
               ? "navigation_link"
               : "content_link");
+      const effectiveKind =
+        inferredKind === "content_link" && box.w >= 0.1 && box.h >= 0.025 && box.y >= 0.14
+          ? "cta_link"
+          : inferredKind;
       const kindBias =
         {
           form_action: 4.2,
           button: 3.2,
+          cta_link: 3.2,
           content_link: 1.7,
           image_link: 1.25,
           navigation_action: 1.15,
           navigation_link: 0.55,
           pagination_control: 0.18,
           container_link: 0,
-        }[inferredKind] ?? 1;
-      const confidence =
-        {
-          form_action: 1,
-          button: 0.9,
-          content_link: 0.7,
-          image_link: 0.55,
-          navigation_action: 0.45,
-          navigation_link: 0.3,
-          pagination_control: 0.12,
-          container_link: 0,
-        }[inferredKind] ?? 0.5;
+        }[effectiveKind] ?? 1;
       const centerX = box.x + box.w / 2;
       const centerDistance = Math.min(1, Math.abs(centerX - 0.5) / 0.5);
       const centerBias = 1.15 - centerDistance * 0.35;
@@ -815,7 +812,6 @@ function deriveInteractiveClickRegions(
       const confirmedBias = box.classification === "user_confirmed_cta" ? 1.35 : 1;
       return {
         box,
-        confidence,
         weight:
           Math.min(0.08, Math.sqrt(area)) *
           kindBias *
@@ -839,13 +835,18 @@ function deriveInteractiveClickRegions(
       label:
         candidate.box.classification === "user_confirmed_cta"
           ? "Sizin seçtiğiniz CTA"
-          : index === 0
-            ? "Birincil etkileşim alanı"
-            : `Etkileşim alanı ${index + 1}`,
+          : candidate.box.classification === "dom_interactive_candidate" &&
+              candidate.box.label &&
+              candidate.box.label !== "DOM etkileşimli aday"
+            ? candidate.box.label
+            : index === 0
+              ? "Birincil etkileşim alanı"
+              : `Etkileşim alanı ${index + 1}`,
       score,
-      // Goreli pay tek basina guven gostergesi degildir: sayfada yalnizca iki
-      // carousel oku varsa her biri yuksek pay alabilir ama kirmizi CTA olmaz.
-      level: scoreToLevel(score * candidate.confidence),
+      // Etiket, ekranda gösterilen göreli pay ile aynı skordan türetilir.
+      // Düşük güvenli navigasyon/carousel adayları zaten ağırlık aşamasında
+      // aşağı çekildiği için ikinci kez cezalandırılmaz.
+      level: scoreToLevel(score),
       box: {
         x_pct: candidate.box.x * 100,
         y_pct: candidate.box.y * 100,
@@ -906,8 +907,8 @@ function HeatmapInsights({
           <span className="heatmap-insight-card__eyebrow">En güçlü sinyal</span>
           <strong>{strongest.label}</strong>
           <p>
-            Bu bölgenin göreli sentetik {metric} payı %{Math.round(strongest.score * 100)}.
-            Bu değer gerçek bir tıklanma veya bakış oranı değildir.
+            Bu bölgenin göreli sentetik {metric} payı %{Math.round(strongest.score * 100)}. Bu değer
+            gerçek bir tıklanma veya bakış oranı değildir.
           </p>
         </article>
         <article className="heatmap-insight-card">
@@ -1867,6 +1868,7 @@ type AiProbe =
   | { state: "error" };
 
 export default function ReportDetail() {
+  const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const { reportId } = useParams<{ reportId: string }>();
   const [report, setReport] = useState<ReportDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1950,7 +1952,9 @@ export default function ReportDetail() {
   const isAbReport = Boolean(report.ab_comparison);
   // Kontrollu 404 (pipeline yok) DISINDAKI her sonuçta sekme gosterilir; boylece
   // gercek hata sessizce gizlenmez ("absent" -> gizli, "present"/"error" -> acik).
-  const showAiTab = aiProbe.state === "present" || aiProbe.state === "error";
+  const showAiTab =
+    aiProbe.state === "error" ||
+    (aiProbe.state === "present" && (!isDemo || aiProbe.status.status === "succeeded"));
   const tabs = showAiTab
     ? [...TOP_LEVEL_TABS, { id: AI_REPORT_TAB_ID, label: "AI Raporu" }]
     : TOP_LEVEL_TABS;

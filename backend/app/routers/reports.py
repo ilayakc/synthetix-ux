@@ -778,7 +778,11 @@ async def _build_cta_overlay(
                 boxes.append(
                     CtaOverlayBox(
                         classification="dom_interactive_candidate",
-                        label=CTA_CLASSIFICATION_LABELS["dom_interactive_candidate"],
+                        label=(
+                            element.get("label").strip()[:120]
+                            if isinstance(element.get("label"), str) and element.get("label").strip()
+                            else CTA_CLASSIFICATION_LABELS["dom_interactive_candidate"]
+                        ),
                         interaction_kind=interaction_kind,
                         x=x,
                         y=y,

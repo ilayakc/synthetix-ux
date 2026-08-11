@@ -192,11 +192,13 @@ def run_campaign_cta_analysis(
             ctas.append(
                 {
                     "key": f"cta_{index + 1}",
+                    "label": evidence.get("label") or f"CTA {index + 1}",
                     "rank": index + 1,
                     "above_fold": above_fold,
                     "classification": evidence["classification"],
                     "evidence": evidence["evidence"],
                     "role": evidence["role"],
+                    "interaction_kind": evidence.get("interaction_kind"),
                     "geometry": {
                         "x": evidence["x"],
                         "y": evidence["y"],

@@ -13,7 +13,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 ANALYZER_VERSION = "analyzer-2026.1"
-SNAPSHOT_VERSION = "page-feature-snapshot-live-2026.2"
+SNAPSHOT_VERSION = "page-feature-snapshot-live-2026.3"
 SNAPSHOT_SOURCE = "analyzer_live"
 
 ACCESSIBILITY_PRECHECK_DISCLAIMER = (
@@ -40,6 +40,7 @@ class HeadingInfo(BaseModel):
 class ElementBox(BaseModel):
     role: str
     interaction_kind: str | None = None
+    label: str | None = Field(default=None, max_length=120)
     x: float
     y: float
     width: float

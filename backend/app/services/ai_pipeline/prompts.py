@@ -73,6 +73,13 @@ _UX_REPORT_INSTRUCTIONS = (
     "onceliklendirilmis UX bulgulari (UXFinding) iceren bir rapor uret. Sayisal "
     "degerler yalnizca verilen agregasyondan gelmelidir; yeni sayi uretme. Cikti "
     "`UXReport` semasina uymalidir ve sonuclarin sentetik tahmin oldugunu acikca "
+    "belirtmelidir. Kanit destekliyorsa birbirini tekrar etmeyen 3-6 bulgu uret; "
+    "her bulguda hangi UX sorununun goruldugunu, kullaniciya etkisini ve tasarim/urun "
+    "ekibinin uygulayabilecegi somut sonraki adimi acikla. CTA etiketi, cihaz/ag sonucu "
+    "veya dikkat bolgesi gibi modul kanitlari verildiyse ilgili bulguda bunlari adiyla "
+    "kullan. Kanit yetersizse bulgu sayisini zorla artirma ve veri icat etme. Ozet, en "
+    "yuksek oncelikli riskleri ve beklenen urun etkisini karar vericinin anlayacagi "
+    "ayrintida birlestirmelidir. "
     "belirtmelidir. Ciktinin hicbir alaninda su ifadeleri kullanma: 'gercek pazar "
     "talebi', 'pazar temsili', 'dogrulanmis', 'bilimsel olarak kanitlanmis', "
     "'istatistiksel olarak anlamli', 'gercek donusum', 'goz takibi' veya "
@@ -128,7 +135,7 @@ _PERSONA_BEHAVIOR_DESCRIPTOR = _build_descriptor(
 
 _UX_REPORT_DESCRIPTOR = _build_descriptor(
     prompt_key="ux_report",
-    prompt_version="v2",
+    prompt_version="v3",
     specific_instructions=_UX_REPORT_INSTRUCTIONS,
     input_schema_model=UXReportInput,
     output_schema_model=UXReport,

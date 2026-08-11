@@ -129,6 +129,31 @@ _FEATURE_EXTRACTION_JS = """
       .filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim();
   }
 
+  function safeInteractiveLabel(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+    const imageAlt = Array.from(el.querySelectorAll ? el.querySelectorAll('img[alt]') : [])
+      .map((img) => img.getAttribute('alt') || '').join(' ');
+    const controlValue = tag === 'input' && ['submit', 'button'].includes(type) ? el.value : '';
+    return [el.innerText, el.getAttribute('aria-label'), el.getAttribute('title'), controlValue, imageAlt]
+      .filter(Boolean).join(' ').replace(/\\s+/g, ' ').trim().slice(0, 120) || null;
+  }
+
+  function isCtaLikeLink(el) {
+    if ((el.tagName || '').toLowerCase() !== 'a') return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 30) return false;
+    const style = window.getComputedStyle(el);
+    const background = parseColor(style.backgroundColor);
+    const hasBackground = Boolean(background && background.a > 0.08);
+    const borderWidth = ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth']
+      .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
+    const padding = ['paddingLeft', 'paddingRight', 'paddingTop', 'paddingBottom']
+      .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
+    const hint = [el.className, el.id].filter((value) => typeof value === 'string').join(' ').toLowerCase();
+    return hasBackground || borderWidth > 0 || padding >= 18 || /(btn|button|cta|primary|secondary)/.test(hint);
+  }
+
   function isMeaningfulInteractive(el) {
     return isInsideCapture(el) && accessibleName(el).length >= 2;
   }
@@ -145,7 +170,6 @@ _FEATURE_EXTRACTION_JS = """
       .filter((value) => typeof value === 'string').join(' ').toLowerCase();
     const aspect = rect.height > 0 ? rect.width / rect.height : Number.POSITIVE_INFINITY;
 
-    // Yalnizca tur saklanir; gorunen metin/accessible name kalici veriye yazilmaz.
     if (rect.width > window.innerWidth * 0.55 || aspect > 16) return 'container_link';
     if (
       rect.width <= 14 && rect.height <= 14 ||
@@ -158,6 +182,7 @@ _FEATURE_EXTRACTION_JS = """
       return 'button';
     }
     if (inNavigation) return 'navigation_link';
+    if (isCtaLikeLink(el)) return 'cta_link';
     if (hasImage || tag === 'a' && el.children.length > 2) return 'image_link';
     return 'content_link';
   }
@@ -168,6 +193,7 @@ _FEATURE_EXTRACTION_JS = """
     const kindWeight = {
       form_action: 10,
       button: 7,
+      cta_link: 7,
       content_link: 4.5,
       image_link: 3.5,
       navigation_action: 3,
@@ -265,6 +291,7 @@ _FEATURE_EXTRACTION_JS = """
     return {
       role,
       interaction_kind: role === 'button' || role === 'link' ? interactionKind(el, role) : null,
+      label: role === 'button' || role === 'link' ? safeInteractiveLabel(el) : null,
       x: rect.x,
       y: rect.y,
       width: rect.width,

@@ -1087,6 +1087,7 @@ export interface ReportCtaOverlayBox {
   interaction_kind?:
     | "form_action"
     | "button"
+    | "cta_link"
     | "content_link"
     | "image_link"
     | "navigation_action"
@@ -1296,6 +1297,9 @@ export interface AIReportResponse {
   generated_at: string | null;
   content_format: string;
   synthetic_disclaimer: string;
+  provider: string | null;
+  model_name: string | null;
+  instruction_version: string | null;
   report: UXReport;
 }
 

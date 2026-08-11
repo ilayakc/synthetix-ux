@@ -14,6 +14,7 @@ import {
   updateProject,
 } from "../api/client";
 import { useOptionalAuth } from "../auth/AuthContext";
+import { selectPublicDemoItems } from "../lib/publicDemo";
 
 const STATUS_LABELS: Record<ProjectResponse["status"], string> = {
   active: "Aktif",
@@ -48,8 +49,10 @@ export default function ProjectDetail() {
     Promise.all([getProject(projectId), listReports({ projectId }), listWizardDrafts()])
       .then(([projectData, reportData, draftData]) => {
         setProject(projectData);
-        setReports(reportData);
-        setDrafts(draftData.filter((draft) => draft.payload.project_id === projectId));
+        setReports(isDemo ? selectPublicDemoItems(reportData) : reportData);
+        setDrafts(
+          isDemo ? [] : draftData.filter((draft) => draft.payload.project_id === projectId),
+        );
         setName(projectData.name);
         setDescription(projectData.description ?? "");
       })
@@ -60,7 +63,7 @@ export default function ProjectDetail() {
           setError("Proje yüklenemedi.");
         }
       });
-  }, [projectId]);
+  }, [isDemo, projectId]);
 
   useEffect(() => {
     load();
@@ -103,8 +106,9 @@ export default function ProjectDetail() {
   }
 
   const isArchived = project.status === "archived";
-  const processingCount = Math.max(project.test_count - completedTests.length, 0);
-  const totalWorkCount = project.test_count + drafts.length;
+  const visibleTestCount = isDemo ? completedTests.length : project.test_count;
+  const processingCount = Math.max(visibleTestCount - completedTests.length, 0);
+  const totalWorkCount = visibleTestCount + drafts.length;
 
   const handleSave = async (event: FormEvent) => {
     event.preventDefault();
@@ -181,7 +185,9 @@ export default function ProjectDetail() {
         <div className="dashboard-card">
           <h3>Toplam Çalışma</h3>
           <p>{totalWorkCount}</p>
-          <small>{project.test_count} başlatılmış test · {drafts.length} taslak</small>
+          <small>
+            {visibleTestCount} başlatılmış test · {drafts.length} taslak
+          </small>
         </div>
         <div className="dashboard-card">
           <h3>Tamamlanan Test</h3>
@@ -191,7 +197,9 @@ export default function ProjectDetail() {
         <div className="dashboard-card">
           <h3>Devam Eden</h3>
           <p>{processingCount + drafts.length}</p>
-          <small>{processingCount} sonuç bekliyor · {drafts.length} yarım kaldı</small>
+          <small>
+            {processingCount} sonuç bekliyor · {drafts.length} yarım kaldı
+          </small>
         </div>
       </div>
 
@@ -283,7 +291,9 @@ export default function ProjectDetail() {
                       <Link to={`/raporlar/${report.id}`}>
                         <span>
                           <strong>{report.test_definition_name}</strong>
-                          <small>Rapor hazır · {new Date(report.created_at).toLocaleString("tr-TR")}</small>
+                          <small>
+                            Rapor hazır · {new Date(report.created_at).toLocaleString("tr-TR")}
+                          </small>
                         </span>
                         <span>Raporu aç →</span>
                       </Link>

@@ -10,6 +10,8 @@ import {
   listWizardDrafts,
 } from "../api/client";
 import { calibrationStatusLabel } from "../lib/turkishCopy";
+import { useOptionalAuth } from "../auth/AuthContext";
+import { selectPublicDemoItems } from "../lib/publicDemo";
 
 type ReportGroup = ReportListItemResponse[];
 type ReportsView = "completed" | "drafts";
@@ -31,6 +33,7 @@ interface ProjectDraftGroup {
 const UNASSIGNED_PROJECT_ID = "unassigned";
 
 export default function Reports() {
+  const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const [reports, setReports] = useState<ReportListItemResponse[] | null>(null);
   const [drafts, setDrafts] = useState<WizardDraftResponse[] | null>(null);
   const [projects, setProjects] = useState<ProjectResponse[] | null>(null);
@@ -46,12 +49,12 @@ export default function Reports() {
     setError(null);
     return Promise.all([listReports(), listWizardDrafts(), listProjects()])
       .then(([reportItems, draftItems, projectItems]) => {
-        setReports(reportItems);
-        setDrafts(draftItems.filter((draft) => draft.status === "draft"));
+        setReports(isDemo ? selectPublicDemoItems(reportItems) : reportItems);
+        setDrafts(isDemo ? [] : draftItems.filter((draft) => draft.status === "draft"));
         setProjects(projectItems);
       })
       .catch(() => setError("Raporlar yüklenemedi."));
-  }, []);
+  }, [isDemo]);
 
   useEffect(() => {
     void load();
@@ -118,9 +121,13 @@ export default function Reports() {
       projectName:
         projectId === UNASSIGNED_PROJECT_ID
           ? "Henüz proje seçilmedi"
-          : projectsById.get(projectId)?.name ?? "Seçili proje",
+          : (projectsById.get(projectId)?.name ?? "Seçili proje"),
       drafts: groupedDrafts,
-    })).sort((a, b) => Number(a.projectId === UNASSIGNED_PROJECT_ID) - Number(b.projectId === UNASSIGNED_PROJECT_ID));
+    })).sort(
+      (a, b) =>
+        Number(a.projectId === UNASSIGNED_PROJECT_ID) -
+        Number(b.projectId === UNASSIGNED_PROJECT_ID),
+    );
   }, [drafts, projectsById]);
 
   const completedCount = reportGroups?.length ?? 0;
@@ -270,7 +277,9 @@ export default function Reports() {
               <div className="reports-group__heading">
                 <div>
                   <h2 id="draft-reports-heading">Devam edilecek testler</h2>
-                  <p>Testler proje durumuna göre gruplandı; kaldığınız adımdan devam edebilirsiniz.</p>
+                  <p>
+                    Testler proje durumuna göre gruplandı; kaldığınız adımdan devam edebilirsiniz.
+                  </p>
                 </div>
               </div>
               {deleteError && <p className="auth-error">{deleteError}</p>}
@@ -286,7 +295,9 @@ export default function Reports() {
                       <header className="reports-project-card__header">
                         <div>
                           <span className="reports-project-card__eyebrow">
-                            {projectGroup.projectId === UNASSIGNED_PROJECT_ID ? "Taslaklar" : "Proje"}
+                            {projectGroup.projectId === UNASSIGNED_PROJECT_ID
+                              ? "Taslaklar"
+                              : "Proje"}
                           </span>
                           <h3>{projectGroup.projectName}</h3>
                         </div>

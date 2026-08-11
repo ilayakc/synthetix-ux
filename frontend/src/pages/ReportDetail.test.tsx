@@ -562,9 +562,7 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     expect(
       screen.getByRole("button", { name: /Birincil etkileşim alanı: beklenen tıklama payı/i }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText("Ekran görüntüsündeki görsel etkileşim adayları"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Ekran görüntüsündeki görsel etkileşim adayları")).toBeInTheDocument();
     expect(screen.getByText(/DOM ve gerçek olay verisi yok/i)).toBeInTheDocument();
     expect(ctaToggle.checked).toBe(false);
     fireEvent.click(ctaToggle);
@@ -768,6 +766,59 @@ describe("ReportDetail — Gorsel Karsilastirma sekmesi", () => {
     expect(clickMarkers[0]).toHaveStyle({ left: "66%" });
     expect((clickMarkers[0] as HTMLElement).style.background).toContain("220, 38, 38");
     expect((clickMarkers[1] as HTMLElement).style.background).toContain("34, 197, 94");
+  });
+
+  it("buton gorunumlu CTA linklerini HTML etiketinden dolayi dusuk siniflandirmaz", async () => {
+    const report = baseReport({
+      cta_overlay: {
+        available: true,
+        feature_source: "dom",
+        boxes: [
+          {
+            classification: "dom_interactive_candidate",
+            label: "Ücretsiz hesap oluştur",
+            interaction_kind: "content_link",
+            x: 0.16,
+            y: 0.3,
+            w: 0.18,
+            h: 0.05,
+          },
+          {
+            classification: "dom_interactive_candidate",
+            label: "Zaten hesabım var",
+            interaction_kind: "content_link",
+            x: 0.4,
+            y: 0.3,
+            w: 0.18,
+            h: 0.05,
+          },
+          {
+            classification: "dom_interactive_candidate",
+            label: "Canlı demoyu incele",
+            interaction_kind: "button",
+            x: 0.64,
+            y: 0.3,
+            w: 0.18,
+            h: 0.05,
+          },
+        ],
+        screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+        coordinates_available: true,
+        coordinates_unavailable_reason: null,
+        disclaimer: "test",
+      },
+    });
+    renderReportDetail(report);
+    await waitFor(() => expect(screen.getByRole("tab", { name: /zet$/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("tab", { name: /Haritas/i }));
+
+    expect(
+      screen.getByRole("button", { name: /Ücretsiz hesap oluştur.*Yüksek/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Zaten hesabım var.*Yüksek/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Canlı demoyu incele.*Yüksek/i }),
+    ).toBeInTheDocument();
   });
 
   it("ilk 3 CTA adayi + kullanicinin onayladigi CTA varsayilan gorunur, digerleri 'Tum adaylari goster' ile acilir", async () => {

@@ -16,6 +16,7 @@ import { logger } from "../lib/logger";
 import { personaIntegrityStatus } from "../lib/personaIntegrity";
 import { normalizeTurkishSystemCopy } from "../lib/turkishCopy";
 import { useOptionalAuth } from "../auth/AuthContext";
+import { selectPublicDemoItems } from "../lib/publicDemo";
 
 const NON_RETRYABLE_ERROR_MESSAGE =
   "Bu çalışma, seçili tasarım kaynağıyla uyumsuz bir analiz modülü nedeniyle tamamlanamadı ve yeniden denenemez.";
@@ -123,9 +124,7 @@ function SimulationResultCard({ run }: { run: SimulationRunResponse }) {
       <span className="not-real-data-tag">
         {normalizeTurkishSystemCopy(run.not_real_user_data_label)}
       </span>
-      <p className="methodology-note">
-        {normalizeTurkishSystemCopy(result.disclaimer)}
-      </p>
+      <p className="methodology-note">{normalizeTurkishSystemCopy(result.disclaimer)}</p>
     </div>
   );
 }
@@ -374,8 +373,8 @@ function SimulationCard({
   const normalizedError = run.error ? normalizeTurkishSystemCopy(run.error) : null;
   const shouldShowProgressMessage = Boolean(
     normalizedProgressMessage &&
-      normalizedProgressMessage !== STATUS_LABELS[run.status] &&
-      normalizedProgressMessage !== normalizedError,
+    normalizedProgressMessage !== STATUS_LABELS[run.status] &&
+    normalizedProgressMessage !== normalizedError,
   );
 
   return (
@@ -425,9 +424,7 @@ function SimulationCard({
         (isNonRetryableFailure ? (
           <p className="simulation-card__error">{NON_RETRYABLE_ERROR_MESSAGE}</p>
         ) : (
-          <p className="simulation-card__error">
-            Hata: {normalizedError}
-          </p>
+          <p className="simulation-card__error">Hata: {normalizedError}</p>
         ))}
 
       {run.status === "succeeded" && (
@@ -491,7 +488,9 @@ export default function Simulations() {
     }
   };
 
-  const displayedRuns = isDemo ? runs?.filter((run) => run.status !== "failed") : runs;
+  const displayedRuns = isDemo
+    ? selectPublicDemoItems(runs?.filter((run) => run.status === "succeeded") ?? [])
+    : runs;
   const visibleRuns =
     displayedRuns?.filter((run) => {
       if (statusFilter === "all") return true;
@@ -501,7 +500,8 @@ export default function Simulations() {
   const counts = {
     all: displayedRuns?.length ?? 0,
     active:
-      displayedRuns?.filter((run) => run.status === "queued" || run.status === "running").length ?? 0,
+      displayedRuns?.filter((run) => run.status === "queued" || run.status === "running").length ??
+      0,
     succeeded: displayedRuns?.filter((run) => run.status === "succeeded").length ?? 0,
     failed: displayedRuns?.filter((run) => run.status === "failed").length ?? 0,
   };
@@ -527,7 +527,7 @@ export default function Simulations() {
               ["all", "Tümü"],
               ["active", "Devam eden"],
               ["succeeded", "Tamamlanan"],
-              ...(!isDemo ? [["failed", "Başarısız"]] as const : []),
+              ...(!isDemo ? ([["failed", "Başarısız"]] as const) : []),
             ] as const
           ).map(([value, label]) => (
             <button

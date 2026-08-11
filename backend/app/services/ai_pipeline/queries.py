@@ -178,6 +178,9 @@ class AIReportResponse(BaseModel):
     generated_at: datetime | None
     content_format: str
     synthetic_disclaimer: str
+    provider: str | None
+    model_name: str | None
+    instruction_version: str | None
     report: UXReport
 
 
@@ -482,6 +485,7 @@ async def get_ai_pipeline_report(
         )
 
     report = _get_validated_final_report(pipeline)
+    ux_stage = _succeeded_ux_report_stage(list(pipeline.stages))
 
     return AIReportResponse(
         pipeline_id=pipeline.id,
@@ -489,6 +493,9 @@ async def get_ai_pipeline_report(
         generated_at=pipeline.finished_at,
         content_format=CONTENT_FORMAT_STRUCTURED_JSON,
         synthetic_disclaimer=SYNTHETIC_ESTIMATE_DISCLAIMER,
+        provider=ux_stage.provider if ux_stage is not None else None,
+        model_name=ux_stage.model_name if ux_stage is not None else None,
+        instruction_version=ux_stage.prompt_version if ux_stage is not None else None,
         report=report,
     )
 

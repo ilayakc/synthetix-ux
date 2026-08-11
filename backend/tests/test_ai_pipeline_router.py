@@ -1044,6 +1044,7 @@ def test_report_success_returns_structured_report(client: TestClient):
     assert body["simulation_run_id"] == run_id
     assert body["report"]["report_version"] == "ux-report-v1"
     assert body["report"]["findings"][0]["finding_id"] == "finding_1"
+    assert {"provider", "model_name", "instruction_version"} <= body.keys()
 
 
 def test_report_always_includes_synthetic_disclaimer(client: TestClient):

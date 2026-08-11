@@ -137,7 +137,14 @@ def _valid_pixel_box(box: object) -> dict | None:
         return None
     if width > _MAX_PIXEL_COORDINATE or height > _MAX_PIXEL_COORDINATE:
         return None
-    return {"role": role, "x": x, "y": y, "width": width, "height": height}
+    result = {"role": role, "x": x, "y": y, "width": width, "height": height}
+    interaction_kind = box.get("interaction_kind")
+    if isinstance(interaction_kind, str):
+        result["interaction_kind"] = interaction_kind[:50]
+    label = box.get("label")
+    if isinstance(label, str) and label.strip():
+        result["label"] = label.strip()[:120]
+    return result
 
 
 def _valid_layout_region_box(box: object) -> dict | None:
@@ -256,6 +263,8 @@ def adapt_page_analysis(analysis: PageAnalysis, *, role: str) -> DomAdaptedInput
             "classification": "dom_interactive_candidate",
             "evidence": "dom_element_role",
             "role": box["role"],
+            "interaction_kind": box.get("interaction_kind"),
+            "label": box.get("label"),
             "x": box["x"],
             "y": box["y"],
             "width": box["width"],

@@ -233,8 +233,7 @@ export default function AiReportTab({
         AI Raporu
       </h2>
       <p className="report-section__intro">
-        En önemli riski, bunun kullanıcı için anlamını ve atılabilecek sonraki adımı kısa biçimde
-        gösterir.
+        Öncelikli riskleri, dayandıkları kanıtları ve uygulanabilir iyileştirme adımlarını gösterir.
       </p>
 
       {isAbComparison && (
@@ -402,7 +401,7 @@ function AiReportContent({ report }: { report: AIReportResponse }) {
   return (
     <div className="ai-report-content">
       <div className="ai-summary-card">
-        <span className="ai-summary-card__label">Kısa özet</span>
+        <span className="ai-summary-card__label">Yönetici özeti</span>
         <p>{polishLegacyMockCopy(ux.summary)}</p>
       </div>
 
@@ -423,53 +422,18 @@ function AiReportContent({ report }: { report: AIReportResponse }) {
         <p className="methodology-note">
           Üretim tarihi: {formatDateTime(report.generated_at)} · Rapor sürümü: {ux.report_version}
         </p>
+        <p className="methodology-note">
+          AI sağlayıcısı: {report.provider ?? "—"} · Model: {report.model_name ?? "—"} · İstem
+          sürümü: {report.instruction_version ?? "—"}
+        </p>
       </details>
     </div>
   );
 }
 
-function readableFindingCopy(finding: AIReportFinding): {
-  finding: string;
-  recommendation: string;
-} {
-  const evidence = finding.evidence_references.join(" ");
-  if (evidence.includes("abandonment_probability")) {
-    return {
-      finding: "Bazı kullanıcıların hedef görevi tamamlamadan sayfadan ayrılma riski bulunuyor.",
-      recommendation:
-        "Akıştaki gereksiz adımları azaltın, birincil eylemi daha görünür yapın ve bu değişikliği gerçek kullanıcılarla doğrulayın.",
-    };
-  }
-  if (evidence.includes("misclick_probability")) {
-    return {
-      finding: "Kullanıcıların hedef dışındaki öğelere yönelme ihtimali dikkat gerektiriyor.",
-      recommendation:
-        "Birincil butonu çevresindeki ikincil bağlantıları sadeleştirin ve butonun görsel önceliğini artırın.",
-    };
-  }
-  if (evidence.includes("task_duration")) {
-    return {
-      finding: "Hedef görevi tamamlama süresi beklenenden uzun olabilir.",
-      recommendation:
-        "Adım sayısını azaltın ve kullanıcının bir sonraki hareketini daha açık gösterin.",
-    };
-  }
-  if (evidence.includes("task_completion")) {
-    return {
-      finding: "Hedef görevin tamamlanması bazı kullanıcılar için yeterince kolay görünmüyor.",
-      recommendation: "Ana yolu sadeleştirin ve en önemli eylemi ilk görünür alana taşıyın.",
-    };
-  }
-  return {
-    finding: polishLegacyMockCopy(finding.finding),
-    recommendation: polishLegacyMockCopy(finding.recommendation),
-  };
-}
-
 function AiFindingCard({ finding }: { finding: AIReportFinding }) {
   const priorityLabel = PRIORITY_LABELS[finding.priority] ?? finding.priority;
   const priorityColor = PRIORITY_COLORS[finding.priority] ?? "100, 116, 139";
-  const copy = readableFindingCopy(finding);
 
   return (
     <li className="finding-detail-card">
@@ -488,10 +452,10 @@ function AiFindingCard({ finding }: { finding: AIReportFinding }) {
         </span>
       </p>
       <p className="finding-detail-card__row">
-        <strong>Ne anlama geliyor?</strong> {copy.finding}
+        <strong>Ne anlama geliyor?</strong> {polishLegacyMockCopy(finding.finding)}
       </p>
       <p className="finding-detail-card__action">
-        <strong>Önerilen adım:</strong> {copy.recommendation}
+        <strong>Önerilen adım:</strong> {polishLegacyMockCopy(finding.recommendation)}
       </p>
       <p className="finding-detail-card__row">
         <strong>Tahmini etki alanı:</strong>{" "}

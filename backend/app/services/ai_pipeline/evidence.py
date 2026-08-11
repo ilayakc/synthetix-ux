@@ -121,25 +121,83 @@ def _page_feature_items(page_features: Mapping[str, object] | None) -> list[Page
 def _module_items(
     selected_modules: Sequence[str], module_results: Mapping[str, Mapping[str, object]] | None
 ) -> list[PageEvidenceItem]:
-    """Secili modullerin YALNIZCA "bu modul icin sonuc mevcut" bilgisini
-    tasir - her modulun kendi ic sema alanlarina (ornegin CTA listesi,
-    dikkat izgarasi) burada GIRILMEZ; bu, modullerin heterojen/degisken
-    ic yapisina bagli yanlis varsayim riskini ortadan kaldiran BILINCLI,
-    muhafazakar bir sinirlamadir (bkz. Faz 2A raporu)."""
+    """Secili modullerin sabit, allowlist edilmis ozetlerini kanita ekler.
+
+    Keyfi modul JSON'u tasinmaz. Yalnizca motorun surumlu cikti semasindaki
+    karar vermeye yarayan skalerler ve guvenli CTA etiketleri eklenir.
+    """
 
     if not selected_modules or not module_results:
         return []
     items: list[PageEvidenceItem] = []
     for module_key in selected_modules:
-        if module_key in module_results:
-            items.append(
-                PageEvidenceItem(
-                    evidence_id=f"module:{module_key}",
-                    category="module",
-                    label=module_key,
-                    value=True,
+        module = module_results.get(module_key)
+        if not isinstance(module, Mapping):
+            continue
+        items.append(PageEvidenceItem(
+            evidence_id=f"module:{module_key}", category="module", label=module_key, value=True
+        ))
+
+        if module_key == "network_device_test":
+            error_rate = module.get("error_rate")
+            if isinstance(error_rate, int | float) and not isinstance(error_rate, bool):
+                items.append(PageEvidenceItem(
+                    evidence_id="module:network_device_test:error_rate",
+                    category="module", label="network_device_error_rate", value=float(error_rate),
+                ))
+            profiles = module.get("profiles")
+            if isinstance(profiles, Sequence) and not isinstance(profiles, str | bytes):
+                failed = sum(
+                    1 for profile in profiles
+                    if isinstance(profile, Mapping) and profile.get("succeeded") is False
                 )
-            )
+                items.append(PageEvidenceItem(
+                    evidence_id="module:network_device_test:profile_summary",
+                    category="module", label="network_device_profile_summary",
+                    value=f"profiles={len(profiles)}; failed={failed}",
+                ))
+
+        elif module_key == "campaign_cta_test":
+            ctas = module.get("ctas")
+            if isinstance(ctas, Sequence) and not isinstance(ctas, str | bytes):
+                items.append(PageEvidenceItem(
+                    evidence_id="module:campaign_cta_test:cta_count",
+                    category="module", label="campaign_cta_count", value=len(ctas),
+                ))
+                for index, cta in enumerate(ctas[:5]):
+                    if not isinstance(cta, Mapping):
+                        continue
+                    probability = cta.get("click_probability")
+                    point = probability.get("point_estimate") if isinstance(probability, Mapping) else None
+                    label = cta.get("label")
+                    safe_label = label.strip()[:120] if isinstance(label, str) and label.strip() else f"CTA {index + 1}"
+                    value = f"label={safe_label}"
+                    if isinstance(point, int | float) and not isinstance(point, bool):
+                        value += f"; click_probability={float(point):.4f}"
+                    items.append(PageEvidenceItem(
+                        evidence_id=f"module:campaign_cta_test:cta_{index + 1}",
+                        category="module", label=f"campaign_cta_{index + 1}", value=value,
+                    ))
+
+        elif module_key == "synthetic_attention_estimate":
+            regions = module.get("regions")
+            if isinstance(regions, Sequence) and not isinstance(regions, str | bytes):
+                valid_regions = [region for region in regions if isinstance(region, Mapping)]
+                valid_regions.sort(
+                    key=lambda region: float(region.get("attention_share", 0))
+                    if isinstance(region.get("attention_share"), int | float) else 0,
+                    reverse=True,
+                )
+                for index, region in enumerate(valid_regions[:3]):
+                    label = region.get("label")
+                    share = region.get("attention_share")
+                    if not isinstance(label, str) or not isinstance(share, int | float):
+                        continue
+                    items.append(PageEvidenceItem(
+                        evidence_id=f"module:synthetic_attention_estimate:top_{index + 1}",
+                        category="module", label=f"attention_region_{index + 1}",
+                        value=f"region={label[:120]}; attention_share={float(share):.4f}",
+                    ))
     return items
 
 

@@ -125,11 +125,17 @@ export default function Projects() {
   const load = () => {
     setError(null);
     listProjects()
-      .then(setProjects)
+      .then((items) =>
+        setProjects(
+          isDemo
+            ? items.map((project) => ({ ...project, test_count: Math.min(2, project.test_count) }))
+            : items,
+        ),
+      )
       .catch(() => setError("Projeler yüklenemedi."));
   };
 
-  useEffect(load, []);
+  useEffect(load, [isDemo]);
 
   return (
     <section aria-labelledby="projects-heading">
