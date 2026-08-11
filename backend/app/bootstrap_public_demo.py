@@ -14,12 +14,17 @@ from app.config import settings
 from app.db import async_session_maker
 from app.models.page_analysis import PageAnalysis
 from app.models.projects import Project
+from app.models.simulations import SimulationRun, SimulationStatus
 from app.models.tenancy import Organization, User
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
-from app.models.tests import TestDefinition
+from app.models.tests import TestDefinition, TestVariant
 from app.seed import seed_public_demo
 from app.services import chip_ledger
 from app.services import test_wizard as wizard_service
+from app.services.pricing import (
+    AI_INTERACTION_HEATMAP_CHIP_COST,
+    AI_INTERACTION_HEATMAP_MODULE_KEY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +39,10 @@ COMBINED_MODULES = (
     "campaign_cta_test",
     "synthetic_attention_estimate",
     "ai_report",
+    AI_INTERACTION_HEATMAP_MODULE_KEY,
 )
+
+COMBINED_HEATMAP_RESERVATION_KEY = "demo_public_combined_v1_ai_heatmap"
 
 
 def _combined_demo_payload(project_id: uuid.UUID) -> dict:
@@ -113,6 +121,72 @@ async def _remove_old_public_demo_tests(session, organization_id: uuid.UUID) -> 
     await session.flush()
 
 
+async def _upgrade_existing_combined_demo_heatmap(
+    session, organization_id: uuid.UUID
+) -> bool:
+    """Mevcut tek demo raporunu yeni AI tiklama tahminiyle yerinde yukseltir.
+
+    Yeni proje/test/rapor olusturmaz. Basarili mevcut baseline run'ina modulu
+    ekler ve worker'in normal OpenAI + Chip yasam dongusunu kullanabilmesi icin
+    ayri, idempotent rezervasyonu baglar. Tekrar calistirmak ek ucret veya ikinci
+    is uretmez.
+    """
+
+    rows = (
+        await session.execute(
+            select(SimulationRun, TestVariant)
+            .join(TestVariant, TestVariant.id == SimulationRun.test_variant_id)
+            .join(TestDefinition, TestDefinition.id == TestVariant.test_definition_id)
+            .join(Project, Project.id == TestDefinition.project_id)
+            .where(
+                Project.organization_id == organization_id,
+                Project.name == COMBINED_PROJECT_NAME,
+                TestDefinition.name == COMBINED_TEST_NAME,
+                SimulationRun.status == SimulationStatus.SUCCEEDED,
+            )
+            .order_by(SimulationRun.id)
+        )
+    ).all()
+    if not rows:
+        return False
+
+    launch_run_id = rows[0][0].launch_run_id or rows[0][0].id
+    reservation = await chip_ledger.reserve_chips(
+        session,
+        organization_id,
+        AI_INTERACTION_HEATMAP_CHIP_COST,
+        "Canli demo mevcut rapor AI etkilesim isi haritasi rezervasyonu",
+        run_id=launch_run_id,
+        idempotency_key=COMBINED_HEATMAP_RESERVATION_KEY,
+        ttl_seconds=0,
+    )
+
+    changed = False
+    for run, variant in rows:
+        snapshot = dict(run.input_snapshot or {})
+        modules = list(snapshot.get("modules") or [])
+        if AI_INTERACTION_HEATMAP_MODULE_KEY not in modules:
+            modules.append(AI_INTERACTION_HEATMAP_MODULE_KEY)
+            snapshot["modules"] = modules
+            run.input_snapshot = snapshot
+            changed = True
+
+        config = dict(variant.config or {})
+        variant_modules = list(config.get("modules") or [])
+        if AI_INTERACTION_HEATMAP_MODULE_KEY not in variant_modules:
+            variant_modules.append(AI_INTERACTION_HEATMAP_MODULE_KEY)
+            config["modules"] = variant_modules
+            variant.config = config
+            changed = True
+
+        if run.heatmap_chip_reservation_id != reservation.id:
+            run.heatmap_chip_reservation_id = reservation.id
+            changed = True
+
+    await session.flush()
+    return changed
+
+
 async def ensure_single_combined_demo_test(*, email: str) -> None:
     """Tek proje/tek test durumunu idempotent olarak kurar ve testi kuyruga alir."""
 
@@ -127,7 +201,12 @@ async def ensure_single_combined_demo_test(*, email: str) -> None:
             raise RuntimeError("public demo organizasyonu veya kullanicisi bulunamadi")
 
         if await _combined_demo_already_ready(session, organization.id):
-            logger.info("public demo: tek birlesik test zaten mevcut")
+            upgraded = await _upgrade_existing_combined_demo_heatmap(session, organization.id)
+            await session.commit()
+            logger.info(
+                "public demo: tek birlesik test zaten mevcut (AI isi haritasi yukseltildi=%s)",
+                upgraded,
+            )
             return
 
         await _remove_old_public_demo_tests(session, organization.id)
