@@ -11,11 +11,14 @@ cache) bu yuzden HER test kendi `create_app(cfg)` cagrisini yapar; testler
 ne birbirini ne de tam paketi (`app.main.app`) kirletir.
 """
 
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.security import create_access_token
 
 pytestmark = pytest.mark.unit
 
@@ -121,6 +124,25 @@ def test_development_responses_have_no_production_security_headers():
 
     assert "content-security-policy" not in response.headers
     assert "x-frame-options" not in response.headers
+
+
+def test_demo_access_token_blocks_mutating_api_requests():
+    dev_app = create_app(_make_development_settings())
+    token = create_access_token(
+        user_id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
+        role="owner",
+        is_demo=True,
+    )
+
+    with TestClient(dev_app) as client:
+        client.cookies.set("access_token", token)
+        response = client.post("/api/projects", json={"name": "Degistirilemez"})
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "Canli demo salt okunurdur; bu hesapta degisiklik yapilamaz."
+    }
 
 
 def test_production_missing_allowed_hosts_fails_closed():

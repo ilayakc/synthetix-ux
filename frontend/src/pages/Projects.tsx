@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, type ProjectResponse, createProject, listProjects } from "../api/client";
+import { useOptionalAuth } from "../auth/AuthContext";
 
 const STATUS_LABELS: Record<ProjectResponse["status"], string> = {
   active: "Aktif",
@@ -116,6 +117,7 @@ function CreateProjectModal({ onClose, onCreated }: CreateProjectModalProps) {
 }
 
 export default function Projects() {
+  const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const [projects, setProjects] = useState<ProjectResponse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -143,9 +145,11 @@ export default function Projects() {
       {projects && projects.length === 0 && (
         <div className="empty-state">
           <p>Henüz bir projeniz yok.</p>
-          <button type="button" className="auth-submit" onClick={() => setIsModalOpen(true)}>
-            İlk projenizi oluşturun
-          </button>
+          {!isDemo && (
+            <button type="button" className="auth-submit" onClick={() => setIsModalOpen(true)}>
+              İlk projenizi oluşturun
+            </button>
+          )}
         </div>
       )}
 
@@ -154,11 +158,11 @@ export default function Projects() {
           {projects.map((project) => (
             <ProjectCard key={project.id} project={project} />
           ))}
-          <NewProjectCard onClick={() => setIsModalOpen(true)} />
+          {!isDemo && <NewProjectCard onClick={() => setIsModalOpen(true)} />}
         </div>
       )}
 
-      {isModalOpen && (
+      {isModalOpen && !isDemo && (
         <CreateProjectModal
           onClose={() => setIsModalOpen(false)}
           onCreated={(project) => {

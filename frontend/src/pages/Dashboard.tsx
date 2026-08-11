@@ -168,6 +168,7 @@ function buildActivity(data: DashboardData): ActivityItem[] {
 
 export default function Dashboard() {
   const { session } = useAuth();
+  const isDemo = Boolean(session?.is_demo);
   const [data, setData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
@@ -486,9 +487,11 @@ export default function Dashboard() {
           Hızlı İşlemler
         </h2>
         <div className="quick-actions">
-          <Link to="/tests/new" className="quick-action-card">
-            Yeni test oluştur
-          </Link>
+          {!isDemo && (
+            <Link to="/tests/new" className="quick-action-card">
+              Yeni test oluştur
+            </Link>
+          )}
           <Link to="/projeler" className="quick-action-card">
             Projeleri görüntüle
           </Link>

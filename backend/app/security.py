@@ -46,13 +46,16 @@ def hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-def create_access_token(*, user_id: uuid.UUID, organization_id: uuid.UUID, role: str) -> str:
+def create_access_token(
+    *, user_id: uuid.UUID, organization_id: uuid.UUID, role: str, is_demo: bool = False
+) -> str:
     now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "type": ACCESS_TOKEN_TYPE,
         "sub": str(user_id),
         "org": str(organization_id),
         "role": role,
+        "demo": is_demo,
         "iat": now,
         "exp": now + timedelta(seconds=settings.access_token_ttl_seconds),
     }

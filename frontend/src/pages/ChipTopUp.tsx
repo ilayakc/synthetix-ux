@@ -8,6 +8,7 @@ import {
   getUsageSummary,
   listTopUpRequests,
 } from "../api/client";
+import { useOptionalAuth } from "../auth/AuthContext";
 
 const STATUS_LABELS: Record<TopUpRequestResponse["status"], string> = {
   pending: "Beklemede",
@@ -24,6 +25,7 @@ const REQUEST_STATUS_ORDER: TopUpRequestResponse["status"][] = [
 const formatTry = (amount: number) => `${amount.toLocaleString("tr-TR")} TL`;
 
 export default function ChipTopUp() {
+  const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const [chipBalance, setChipBalance] = useState<number | null>(null);
   const [packages, setPackages] = useState<ChipPackage[]>([]);
   const [requests, setRequests] = useState<TopUpRequestResponse[]>([]);
@@ -106,7 +108,7 @@ export default function ChipTopUp() {
             </div>
           </div>
 
-          <div className="wizard-field chip-package-section" style={{ marginTop: 24 }}>
+          {!isDemo && <div className="wizard-field chip-package-section" style={{ marginTop: 24 }}>
             <h2 className="page-heading" style={{ fontSize: "1.125rem", marginBottom: 4 }}>
               Chip Paketleri
             </h2>
@@ -138,9 +140,9 @@ export default function ChipTopUp() {
                 </label>
               ))}
             </div>
-          </div>
+          </div>}
 
-          <div className="wizard-actions">
+          {!isDemo && <div className="wizard-actions">
             <button
               type="button"
               className="auth-submit"
@@ -149,7 +151,7 @@ export default function ChipTopUp() {
             >
               {isSubmitting ? "Gönderiliyor…" : "Yükleme talebi gönder"}
             </button>
-          </div>
+          </div>}
 
           <h2 className="page-heading" style={{ marginTop: 32, fontSize: "1.125rem" }}>
             Geçmiş talepler

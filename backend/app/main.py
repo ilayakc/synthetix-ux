@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.config import settings as default_settings
 from app.config_security import validate_production_secrets
+from app.cookies import ACCESS_TOKEN_COOKIE
 from app.db import engine, get_session
 from app.logging_config import configure_logging
 from app.logging_middleware import install_request_logging
 from app.redis_client import check_redis_connection
+from app.security import InvalidAccessTokenError, decode_access_token
 from app.routers.admin import router as admin_router
 from app.routers.ai_explanations import router as ai_explanations_router
 from app.routers.analysis_modules import router as analysis_modules_router
@@ -98,6 +100,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None if is_production else "/redoc",
         openapi_url=None if is_production else "/openapi.json",
     )
+
+    @app.middleware("http")
+    async def _demo_read_only_middleware(request: Request, call_next) -> Response:
+        """Public demo oturumlarinda kalici veri degisikliklerini engelle."""
+
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path not in {
+            "/api/auth/demo-login",
+            "/api/auth/refresh",
+            "/api/auth/logout",
+        }:
+            token = request.cookies.get(ACCESS_TOKEN_COOKIE)
+            if token:
+                try:
+                    payload = decode_access_token(token)
+                except InvalidAccessTokenError:
+                    payload = {}
+                if payload.get("demo") is True:
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "detail": "Canli demo salt okunurdur; bu hesapta degisiklik yapilamaz."
+                        },
+                    )
+
+        return await call_next(request)
 
     # Yalnizca yapilandirilmis frontend origin'ine izin verilir; cookie tabanli
     # kimlik dogrulama kullanildigi icin `allow_credentials=True` zorunludur

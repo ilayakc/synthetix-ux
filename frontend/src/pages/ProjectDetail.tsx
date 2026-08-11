@@ -13,6 +13,7 @@ import {
   listWizardDrafts,
   updateProject,
 } from "../api/client";
+import { useOptionalAuth } from "../auth/AuthContext";
 
 const STATUS_LABELS: Record<ProjectResponse["status"], string> = {
   active: "Aktif",
@@ -20,6 +21,7 @@ const STATUS_LABELS: Record<ProjectResponse["status"], string> = {
 };
 
 export default function ProjectDetail() {
+  const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
 
@@ -199,7 +201,7 @@ export default function ProjectDetail() {
             <h2 id="project-tests-heading">Proje Testleri</h2>
             <p>Tamamlanan testlere, yarım kalan taslaklara ve süren çalışmalara buradan ulaşın.</p>
           </div>
-          {!isArchived && (
+          {!isArchived && !isDemo && (
             <button
               type="button"
               onClick={() => navigate(`/tests/new?project=${project.id}`)}
@@ -232,7 +234,7 @@ export default function ProjectDetail() {
                           </span>
                           <span>Devam et →</span>
                         </Link>
-                        {draftToDelete !== draft.id && (
+                        {!isDemo && draftToDelete !== draft.id && (
                           <button
                             type="button"
                             className="project-draft-row__delete"
@@ -306,7 +308,7 @@ export default function ProjectDetail() {
           id="project-detail-name"
           value={name}
           onChange={(event) => setName(event.target.value)}
-          disabled={isArchived}
+          disabled={isArchived || isDemo}
           required
           maxLength={255}
         />
@@ -316,7 +318,7 @@ export default function ProjectDetail() {
           id="project-detail-description"
           value={description}
           onChange={(event) => setDescription(event.target.value)}
-          disabled={isArchived}
+          disabled={isArchived || isDemo}
           maxLength={2000}
         />
 
@@ -324,7 +326,7 @@ export default function ProjectDetail() {
         {isArchived && <p className="page-placeholder">Arşivlenmiş projeler düzenlenemez.</p>}
 
         <div className="modal__actions">
-          {!isArchived && (
+          {!isArchived && !isDemo && (
             <button type="submit" className="auth-submit" disabled={isSaving || !name.trim()}>
               {isSaving ? "Kaydediliyor…" : "Kaydet"}
             </button>
@@ -332,7 +334,7 @@ export default function ProjectDetail() {
         </div>
       </form>
 
-      {!isArchived && (
+      {!isArchived && !isDemo && (
         <div className="project-detail__archive">
           {!isConfirmingArchive ? (
             <button
@@ -370,7 +372,7 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {!isArchived && (
+      {!isArchived && !isDemo && (
         <section className="project-detail__danger-zone" aria-labelledby="delete-project-heading">
           <h2 id="delete-project-heading">Projeyi sil</h2>
           {completedTests.length > 0 ? (

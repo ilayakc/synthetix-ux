@@ -15,6 +15,7 @@ import {
 import { logger } from "../lib/logger";
 import { personaIntegrityStatus } from "../lib/personaIntegrity";
 import { normalizeTurkishSystemCopy } from "../lib/turkishCopy";
+import { useOptionalAuth } from "../auth/AuthContext";
 
 const NON_RETRYABLE_ERROR_MESSAGE =
   "Bu çalışma, seçili tasarım kaynağıyla uyumsuz bir analiz modülü nedeniyle tamamlanamadı ve yeniden denenemez.";
@@ -352,10 +353,12 @@ function SimulationCard({
   run,
   onCancel,
   onRetry,
+  readOnly,
 }: {
   run: SimulationRunResponse;
   onCancel: (runId: string) => void;
   onRetry: (runId: string) => void;
+  readOnly: boolean;
 }) {
   const isActive = run.status === "queued" || run.status === "running";
   const isFailed = run.status === "failed";
@@ -386,17 +389,17 @@ function SimulationCard({
         </div>
         <div className="simulation-card__actions">
           <StatusBadge status={run.status} />
-          {isActive && (
+          {isActive && !readOnly && (
             <button type="button" className="btn-secondary" onClick={() => onCancel(run.id)}>
               İptal et
             </button>
           )}
-          {isFailed && run.retryable && (
+          {isFailed && run.retryable && !readOnly && (
             <button type="button" className="auth-submit" onClick={() => onRetry(run.id)}>
               Yeniden dene
             </button>
           )}
-          {isNonRetryableFailure && (
+          {isNonRetryableFailure && !readOnly && (
             <Link to="/tests/new" className="btn-secondary">
               Yeni test oluştur
             </Link>
@@ -445,6 +448,7 @@ function SimulationCard({
 }
 
 export default function Simulations() {
+  const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const [runs, setRuns] = useState<SimulationRunResponse[] | null>(null);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "succeeded" | "failed">(
     "all",
@@ -487,18 +491,19 @@ export default function Simulations() {
     }
   };
 
+  const displayedRuns = isDemo ? runs?.filter((run) => run.status !== "failed") : runs;
   const visibleRuns =
-    runs?.filter((run) => {
+    displayedRuns?.filter((run) => {
       if (statusFilter === "all") return true;
       if (statusFilter === "active") return run.status === "queued" || run.status === "running";
       return run.status === statusFilter;
     }) ?? [];
   const counts = {
-    all: runs?.length ?? 0,
+    all: displayedRuns?.length ?? 0,
     active:
-      runs?.filter((run) => run.status === "queued" || run.status === "running").length ?? 0,
-    succeeded: runs?.filter((run) => run.status === "succeeded").length ?? 0,
-    failed: runs?.filter((run) => run.status === "failed").length ?? 0,
+      displayedRuns?.filter((run) => run.status === "queued" || run.status === "running").length ?? 0,
+    succeeded: displayedRuns?.filter((run) => run.status === "succeeded").length ?? 0,
+    failed: displayedRuns?.filter((run) => run.status === "failed").length ?? 0,
   };
 
   return (
@@ -522,7 +527,7 @@ export default function Simulations() {
               ["all", "Tümü"],
               ["active", "Devam eden"],
               ["succeeded", "Tamamlanan"],
-              ["failed", "Başarısız"],
+              ...(!isDemo ? [["failed", "Başarısız"]] as const : []),
             ] as const
           ).map(([value, label]) => (
             <button
@@ -557,7 +562,13 @@ export default function Simulations() {
       {visibleRuns.length > 0 && (
         <div className="simulation-list">
           {visibleRuns.map((run) => (
-            <SimulationCard key={run.id} run={run} onCancel={handleCancel} onRetry={handleRetry} />
+            <SimulationCard
+              key={run.id}
+              run={run}
+              onCancel={handleCancel}
+              onRetry={handleRetry}
+              readOnly={isDemo}
+            />
           ))}
         </div>
       )}

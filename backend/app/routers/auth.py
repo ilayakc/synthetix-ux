@@ -68,6 +68,7 @@ class SessionResponse(BaseModel):
     # veritabanindan yapilir; bu alan hicbir backend yetki kararinin yerine
     # GECMEZ.
     is_platform_admin: bool
+    is_demo: bool
 
 
 class PasswordResetRequestBody(BaseModel):
@@ -103,6 +104,7 @@ async def _issue_session_cookies(
     user_id: uuid.UUID,
     organization_id: uuid.UUID,
     role: str,
+    is_demo: bool,
     user_agent: str | None,
     ip_address: str | None,
     existing_session_id: uuid.UUID | None = None,
@@ -114,7 +116,12 @@ async def _issue_session_cookies(
         user_agent=user_agent,
         ip_address=ip_address,
     )
-    access_token = create_access_token(user_id=user_id, organization_id=organization_id, role=role)
+    access_token = create_access_token(
+        user_id=user_id,
+        organization_id=organization_id,
+        role=role,
+        is_demo=is_demo,
+    )
 
     set_access_token_cookie(response, access_token)
     set_refresh_token_cookie(response, issued.raw_token, max_age_seconds=_refresh_max_age(issued))
@@ -157,6 +164,7 @@ async def register(
         user_id=result.user.id,
         organization_id=result.organization.id,
         role=result.membership.role,
+        is_demo=False,
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
@@ -170,6 +178,7 @@ async def register(
         organization_name=result.organization.name,
         role=result.membership.role,
         is_platform_admin=result.user.is_platform_admin,
+        is_demo=False,
     )
 
 
@@ -204,6 +213,10 @@ async def login(
         user_id=user.id,
         organization_id=organization.id,
         role=membership.role,
+        is_demo=(
+            bool(settings.demo_account_email)
+            and user.email_normalized == auth_service.normalize_email(settings.demo_account_email)
+        ),
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
@@ -217,6 +230,10 @@ async def login(
         organization_name=organization.name,
         role=membership.role,
         is_platform_admin=user.is_platform_admin,
+        is_demo=(
+            bool(settings.demo_account_email)
+            and user.email_normalized == auth_service.normalize_email(settings.demo_account_email)
+        ),
     )
 
 
@@ -266,6 +283,7 @@ async def demo_login(
         user_id=user.id,
         organization_id=organization.id,
         role=membership.role,
+        is_demo=True,
         user_agent=request.headers.get("user-agent"),
         ip_address=client_host,
     )
@@ -279,6 +297,7 @@ async def demo_login(
         organization_name=organization.name,
         role=membership.role,
         is_platform_admin=user.is_platform_admin,
+        is_demo=True,
     )
 
 
@@ -318,7 +337,15 @@ async def refresh(
     if organization is None:
         raise HTTPException(status_code=401, detail="Organizasyon bulunamadi")
 
-    access_token = create_access_token(user_id=user.id, organization_id=organization.id, role=membership.role)
+    is_demo = bool(settings.demo_account_email) and user.email_normalized == auth_service.normalize_email(
+        settings.demo_account_email
+    )
+    access_token = create_access_token(
+        user_id=user.id,
+        organization_id=organization.id,
+        role=membership.role,
+        is_demo=is_demo,
+    )
     set_access_token_cookie(response, access_token)
     set_refresh_token_cookie(response, issued.raw_token, max_age_seconds=_refresh_max_age(issued))
     set_csrf_token_cookie(response, generate_csrf_token())
@@ -333,6 +360,7 @@ async def refresh(
         organization_name=organization.name,
         role=membership.role,
         is_platform_admin=user.is_platform_admin,
+        is_demo=is_demo,
     )
 
 
@@ -371,6 +399,10 @@ async def me(
         organization_name=organization.name,
         role=principal.role,
         is_platform_admin=user.is_platform_admin,
+        is_demo=(
+            bool(settings.demo_account_email)
+            and user.email_normalized == auth_service.normalize_email(settings.demo_account_email)
+        ),
     )
 
 

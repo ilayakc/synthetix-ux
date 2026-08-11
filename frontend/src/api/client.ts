@@ -1611,6 +1611,8 @@ export interface SessionResponse {
   // Yalnizca UI amaclidir (ornegin bir yonetici menusunu gostermek icin) -
   // gercek yetkilendirme her zaman backend'de dogrudan veritabanindan yapilir.
   is_platform_admin: boolean;
+  // Herkese acik canli demo hesabi kalici veri degistiremez.
+  is_demo?: boolean;
 }
 
 export interface RegisterRequest {

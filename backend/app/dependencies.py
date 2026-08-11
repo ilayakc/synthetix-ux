@@ -23,6 +23,7 @@ class Principal:
     user_id: uuid.UUID
     organization_id: uuid.UUID
     role: str
+    is_demo: bool = False
 
 
 async def get_current_principal(request: Request) -> Principal:
@@ -62,6 +63,7 @@ async def get_current_principal(request: Request) -> Principal:
             user_id=uuid.UUID(payload["sub"]),
             organization_id=uuid.UUID(payload["org"]),
             role=payload["role"],
+            is_demo=bool(payload.get("demo", False)),
         )
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=401, detail="Oturum gecersiz") from exc
