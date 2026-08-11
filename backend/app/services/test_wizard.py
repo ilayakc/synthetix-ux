@@ -188,6 +188,33 @@ def validate_ai_report_readiness(payload: dict) -> None:
         raise DraftValidationError(AI_REPORT_NOT_READY_MESSAGE)
 
 
+# --- AI etkilesim isi haritasi (`ai_interaction_heatmap`) hazirlik sozlesmesi ---
+#
+# `ai_report` ile AYNI, BAGIMSIZ desen: modul yalnizca
+# `settings.interaction_heatmap_provider_ready` acikca `True` iken launch edilebilir.
+# Hazirlik `False` iken launch HICBIR yan etki (Chip rezervasyonu, SimulationRun,
+# PageAnalysis, heatmap job) uretilmeden reddedilir. `ai_report` persona
+# zorunlulugunun AKSINE, heatmap persona GEREKTIRMEZ (persona-basli davranis
+# uretmez; yalnizca hedef gorev + gercek etkilesim adaylarini kullanir).
+AI_INTERACTION_HEATMAP_NOT_READY_MESSAGE = (
+    "AI etkilesim isi haritasi modulu su anda kullanilamiyor (saglayici henuz "
+    "etkin degil); bu modulu kaldirip testi baslatabilirsiniz."
+)
+
+
+def validate_interaction_heatmap_readiness(payload: dict) -> None:
+    """`ai_interaction_heatmap` secili AMA hazirlik bayragi kapaliysa launch'i
+    reddeder (bkz. AI_INTERACTION_HEATMAP_NOT_READY_MESSAGE). `launch_draft` bunu
+    tum yan etkilerden ONCE cagirir."""
+
+    modules = payload.get("modules") or []
+    if (
+        module_catalog.AI_INTERACTION_HEATMAP_MODULE_KEY in modules
+        and not settings.interaction_heatmap_provider_ready
+    ):
+        raise DraftValidationError(AI_INTERACTION_HEATMAP_NOT_READY_MESSAGE)
+
+
 # --- AI raporu (`ai_report`) persona zorunlulugu sozlesmesi ------------------
 #
 # `ai_report` pipeline'i, tanim geregi TEMSILI personalar uzerinde calisir:
@@ -1041,6 +1068,12 @@ async def launch_draft(
     # guvenilmez - bu backend kontrolu ZORUNLUDUR.
     validate_ai_report_persona_requirement(draft.payload)
 
+    # AI etkilesim isi haritasi hazirlik kontrolu: `ai_interaction_heatmap`
+    # secili ama saglayici/bayrak etkin degilse launch BURADA, hicbir yan etki
+    # uretilmeden reddedilir (bkz. `validate_interaction_heatmap_readiness`).
+    # `ai_report`tan BAGIMSIZ bir kapidir.
+    validate_interaction_heatmap_readiness(draft.payload)
+
     # Paket 4 Final: her tarafin kaynagi (URL/screenshot/AI) launch aninda
     # BAGIMSIZ olarak yeniden dogrulanir - gecersiz bir taraf (silinmis/
     # expired/cross-tenant asset, kabul edilmemis AI isi) BU NOKTADAN SONRAKI
@@ -1120,6 +1153,26 @@ async def launch_draft(
             idempotency_key=f"ai-report-launch:{draft.id}",
         )
         ai_chip_reservation_id = ai_reservation.id
+
+    # AYRI, BAGIMSIZ heatmap Chip rezervasyonu (bkz. quote.interaction_heatmap_
+    # chips / pricing.AI_INTERACTION_HEATMAP_CHIP_COST). `ai_report` rezervasyonu
+    # ile AYNI atomik-bakiye/idempotency deseni (`ai-heatmap-launch:{draft.id}`),
+    # ama TAMAMEN AYRI bir yasam dongusu (bkz. app.services.ai_interaction_heatmap.
+    # worker settlement). Iki modul birlikte secilirse iki AYRI rezervasyon olusur;
+    # ayni kilitli organizasyon satiri uzerinde bakiye atomik dogrulanir - yetersiz
+    # bakiyede tum transaction geri alinir, yarim/cift rezervasyon kalmaz. Heatmap
+    # tamamlanana kadar RESERVED kalir; consume/release worker settlement'inda olur.
+    heatmap_chip_reservation_id: uuid.UUID | None = None
+    if quote.interaction_heatmap_chips > 0:
+        heatmap_reservation = await chip_ledger.reserve_chips(
+            session,
+            organization_id,
+            quote.interaction_heatmap_chips,
+            f"AI etkilesim isi haritasi rezervasyonu: {payload.get('name')}",
+            run_id=run_id,
+            idempotency_key=f"ai-heatmap-launch:{draft.id}",
+        )
+        heatmap_chip_reservation_id = heatmap_reservation.id
 
     # Launch aninda `SimulationRun.input_snapshot`a yazilacak, ALLOWLIST'li,
     # sunucu tarafinda normalize edilmis AUTHORITATIVE baglam alanlari (bkz.
@@ -1278,6 +1331,7 @@ async def launch_draft(
             free_entitlement_feature_key=free_entitlement_feature_key,
             chip_reservation_id=chip_reservation_id,
             ai_chip_reservation_id=ai_chip_reservation_id,
+            heatmap_chip_reservation_id=heatmap_chip_reservation_id,
             page_analysis_id=analysis.id,
         )
         session.add(run)
@@ -1326,6 +1380,7 @@ __all__ = [
     "AB_COMPARISON",
     "AI_GENERATION_ASSET_MISMATCH_MESSAGE",
     "AI_GENERATION_UNAVAILABLE_MESSAGE",
+    "AI_INTERACTION_HEATMAP_NOT_READY_MESSAGE",
     "ANALYSIS_MODULES",
     "CTA_ANNOTATION_ASSET_MISMATCH_MESSAGE",
     "CTA_ANNOTATION_FIELD_TO_ASSET_FIELD",
@@ -1364,6 +1419,7 @@ __all__ = [
     "resolve_cta_annotation_patch",
     "revalidate_cta_annotation",
     "validate_ai_generation_ownership",
+    "validate_interaction_heatmap_readiness",
     "validate_module_source_compatibility",
     "validate_patch_fields",
     "validate_screenshot_asset_ownership",

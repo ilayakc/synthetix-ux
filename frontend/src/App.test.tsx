@@ -45,7 +45,7 @@ describe("App", () => {
     expect(screen.getByRole("link", { name: "Genel Bakış" })).toBeInTheDocument();
   });
 
-  it("oturum yoksa korumali sayfa yerine giris ekranina yonlendirir", async () => {
+  it("oturum yoksa public ana sayfayı gösterir", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -64,7 +64,11 @@ describe("App", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Giriş yap" })).toBeInTheDocument(),
+      expect(
+        screen.getByRole("heading", {
+          name: "Tasarım risklerini geliştirmeye geçmeden önce görün.",
+        }),
+      ).toBeInTheDocument(),
     );
   });
 
@@ -87,7 +91,7 @@ describe("App", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Hesap oluştur" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Ücretsiz hesap oluştur" })).toBeInTheDocument(),
     );
   });
 

@@ -799,6 +799,8 @@ export interface QuoteResponse {
   free_entitlement_applicable: boolean;
   line_items: QuoteLineItemResponse[];
   required_chips: number;
+  ai_report_chips?: number;
+  interaction_heatmap_chips?: number;
   total_chips: number;
 }
 
@@ -1079,6 +1081,50 @@ export interface ReportHeatmapSection {
   coordinates_unavailable_reason?: string | null;
 }
 
+export type InteractionHeatmapStatus =
+  | "not_requested"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed";
+
+export interface ReportInteractionHeatmapHotspot {
+  candidate_id: string;
+  label: string;
+  interaction_kind: string;
+  role: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  above_fold: boolean;
+  score: number;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  task_relevance: "direct" | "related" | "weak" | "none";
+}
+
+export interface ReportInteractionHeatmapSection {
+  requested: boolean;
+  status: InteractionHeatmapStatus;
+  available: boolean;
+  title: string;
+  provider: string | null;
+  model_name: string | null;
+  method: string | null;
+  method_label: string | null;
+  summary: string | null;
+  hotspots: ReportInteractionHeatmapHotspot[];
+  unmatched_task_warning: string | null;
+  disclaimer: string;
+  error_code: string | null;
+  status_note: string | null;
+  screenshot_url: string | null;
+  image_width: number | null;
+  image_height: number | null;
+  coordinates_available: boolean;
+}
+
 export type CtaOverlayClassification =
   "dom_interactive_candidate" | "visual_cta_candidate" | "user_confirmed_cta";
 
@@ -1175,6 +1221,7 @@ export interface ReportAbComparison {
   this_source_type: "url" | "screenshot" | "ai_generated";
   sibling_source_type: "url" | "screenshot" | "ai_generated";
   sibling_heatmap: ReportHeatmapSection;
+  sibling_interaction_heatmap?: ReportInteractionHeatmapSection;
   sibling_cta_overlay: ReportCtaOverlaySection;
   same_snapshot_sha256: boolean;
 }
@@ -1186,6 +1233,7 @@ export interface ReportDetailResponse {
   // içeriğini değiştirmez (bkz. backend app.routers.reports.ReportDetailResponse).
   simulation_run_id: string;
   ai_report_requested?: boolean;
+  interaction_heatmap_requested?: boolean;
   title: string;
   created_at: string;
   project_id: string;
@@ -1203,6 +1251,7 @@ export interface ReportDetailResponse {
   persona_segment_note: string;
   critical_findings: ReportCriticalFinding[];
   heatmap: ReportHeatmapSection;
+  interaction_heatmap?: ReportInteractionHeatmapSection;
   cta_overlay: ReportCtaOverlaySection;
   campaign_cta: ReportCampaignCta | null;
   network_device: ReportNetworkDevice | null;

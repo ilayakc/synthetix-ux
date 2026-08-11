@@ -254,9 +254,9 @@ def test_single_alembic_head():
     cfg = Config(str(backend_root / "alembic.ini"))
     cfg.set_main_option("script_location", str(backend_root / "migrations"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    # Platform admin altyapisi: 'd68747f9e724' (users.is_platform_admin) tek
-    # head'i ilerletti (bkz. backend/migrations/versions/d68747f9e724_*).
-    assert list(heads) == ["d68747f9e724"], heads
+    # AI interaction heatmap tablosu ve ayri Chip rezervasyon baglantisi mevcut
+    # tek Alembic head'ini ilerletir.
+    assert list(heads) == ["f9b3c2e7a1d8"], heads
 
 
 def test_migration_down_revision_chain():

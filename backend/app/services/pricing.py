@@ -29,6 +29,18 @@ FREE_ENTITLEMENT_FEATURE_KEYS = (FEATURE_BASIC_UX_TEST, FEATURE_ACCESSIBILITY_PR
 AI_REPORT_MODULE_KEY = "ai_report"
 AI_REPORT_CHIP_COST = 50
 
+# --- AI etkilesim isi haritasi modulu (`ai_interaction_heatmap`) fiyat kaynagi -
+# `ai_report` ile AYNI desen: `advanced_module_chip_costs`e KONULMAZ, bedeli
+# launch grubu basina TEK bir AYRI Chip rezervasyonu olarak tutulur (bkz.
+# app.services.test_wizard.launch_draft) ve `ai_report`tan TAMAMEN BAGIMSIZ bir
+# yasam donguson (rezervasyon/consume/release) izler. Iki modul birlikte
+# secilirse iki AYRI rezervasyon olusur (kanit hazirligi paylasilsa da finansal
+# yasam donguleri ayridir). Fiyat burada TEK kaynaktan gelir; katalog metadata'si
+# (app.services.module_catalog) bu sabiti kullanir - deger iki yere hardcode
+# EDILMEZ.
+AI_INTERACTION_HEATMAP_MODULE_KEY = "ai_interaction_heatmap"
+AI_INTERACTION_HEATMAP_CHIP_COST = 30
+
 # docs/product-rules.md: "En fazla 1.000 persona icin 1 adet ucretsiz temel
 # UX testi hakki". Bu limitin ustundeki persona sayisi ucretsiz hakki
 # gecersiz kilar (test paralı hale gelir).
@@ -52,6 +64,10 @@ class PricingConfig:
     # yasam dongusu, per-grup tek ucret - bkz. AI_REPORT_CHIP_COST). Eski
     # surumlerde 0'dir (ai_report o surumlerde tanimli degildi).
     ai_report_chip_cost: int = 0
+    # `ai_interaction_heatmap` (AI etkilesim isi haritasi) modulunun launch grubu
+    # basina flat Chip bedeli - `ai_report_chip_cost` ile AYNI desen ama AYRI bir
+    # rezervasyon (bkz. AI_INTERACTION_HEATMAP_CHIP_COST). Eski surumlerde 0'dir.
+    interaction_heatmap_chip_cost: int = 0
 
     def module_cost(self, module_key: str) -> int:
         try:
@@ -105,9 +121,29 @@ PRICING_VERSIONS: dict[str, PricingConfig] = {
         },
         ai_report_chip_cost=AI_REPORT_CHIP_COST,
     ),
+    # "2026.3"un TUM alanlari degismeden korunur (eski quote/run/rapor kayitlari
+    # onceki surumleriyle pinlenmis kalir). "2026.4" yalnizca yeni
+    # `ai_interaction_heatmap` (AI etkilesim isi haritasi) modulunun launch grubu
+    # basina flat Chip bedelini (`interaction_heatmap_chip_cost`, bkz.
+    # AI_INTERACTION_HEATMAP_CHIP_COST) ekler; mevcut modul/AI raporu fiyatlari
+    # AYNEN korunur.
+    "2026.4": PricingConfig(
+        version="2026.4",
+        basic_ux_test_chip_per_persona=1,
+        accessibility_precheck_chip_cost=30,
+        advanced_module_chip_costs={
+            "advanced_simulation": 50,
+            "extended_reporting": 20,
+            "network_device_test": 40,
+            "campaign_cta_test": 35,
+            "synthetic_attention_estimate": 25,
+        },
+        ai_report_chip_cost=AI_REPORT_CHIP_COST,
+        interaction_heatmap_chip_cost=AI_INTERACTION_HEATMAP_CHIP_COST,
+    ),
 }
 
-CURRENT_PRICING_VERSION = "2026.3"
+CURRENT_PRICING_VERSION = "2026.4"
 
 
 def get_pricing_config(version: str | None = None) -> PricingConfig:

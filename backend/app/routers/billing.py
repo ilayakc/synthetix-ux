@@ -89,6 +89,9 @@ class QuoteResponse(BaseModel):
     # `ai_report` seciliyse 50, degilse 0 - baseline `required_chips`ten AYRI
     # tutulan AI raporu ucreti (bkz. app.services.quotes.QuoteResult).
     ai_report_chips: int = 0
+    # `ai_interaction_heatmap` seciliyse flat bedel, degilse 0 - `ai_report_chips`
+    # ile AYNI desende AYRI tutulur (bkz. app.services.quotes.QuoteResult).
+    interaction_heatmap_chips: int = 0
     total_chips: int
 
 
@@ -133,6 +136,7 @@ async def post_quote(
         ],
         required_chips=quote.required_chips,
         ai_report_chips=quote.ai_report_chips,
+        interaction_heatmap_chips=quote.interaction_heatmap_chips,
         total_chips=quote.total_chips,
     )
 

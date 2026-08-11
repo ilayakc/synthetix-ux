@@ -20,6 +20,7 @@ from app.models.billing import (
 )
 from app.models.design_assets import DesignAsset, DesignAssetContentType, DesignAssetStatus
 from app.models.design_generation import DesignGenerationJob, DesignGenerationStatus
+from app.models.interaction_heatmap import InteractionHeatmap, InteractionHeatmapStatus
 from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.personas import Persona
 from app.models.projects import Project, ProjectStatus
@@ -72,4 +73,6 @@ __all__ = [
     "AIPipelineStatus",
     "AIPipelineStageStatus",
     "AIPipelineStageType",
+    "InteractionHeatmap",
+    "InteractionHeatmapStatus",
 ]

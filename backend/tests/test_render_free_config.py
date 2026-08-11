@@ -38,7 +38,9 @@ def test_render_blueprint_declares_only_free_resources():
     assert env["OPENAI_API_KEY"] == {"key": "OPENAI_API_KEY", "sync": False}
     assert env["OPENAI_MODEL"]["value"] == "gpt-5.6-terra"
     assert env["OPENAI_REASONING_EFFORT"]["value"] == "medium"
-    assert env["OPENAI_MAX_OUTPUT_TOKENS"]["value"] == "2000"
+    assert env["OPENAI_MAX_OUTPUT_TOKENS"]["value"] == "4000"
+    assert env["AI_INTERACTION_HEATMAP_ENABLED"]["value"] == "true"
+    assert env["AI_INTERACTION_HEATMAP_PROVIDER"]["value"] == "openai"
     assert "ALLOW_MOCK_AI_PROVIDER" not in env
     assert env["BOOTSTRAP_ADMIN_EMAIL"]["value"] == "synthetix.demo.admin@example.com"
     assert env["BOOTSTRAP_ADMIN_PASSWORD"] == {

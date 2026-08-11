@@ -58,7 +58,10 @@ async def get_catalog(
     launch dogrulamasi da ayrica zorunludur (bkz. app.services.test_wizard).
     """
 
-    modules = module_catalog.get_wizard_visible_modules(ai_report_enabled=settings.ai_report_enabled)
+    modules = module_catalog.get_wizard_visible_modules(
+        ai_report_enabled=settings.ai_report_enabled,
+        ai_interaction_heatmap_enabled=settings.ai_interaction_heatmap_enabled,
+    )
 
     return AnalysisModuleCatalogResponse(
         catalog_version=module_catalog.CURRENT_MODULE_CATALOG_VERSION,

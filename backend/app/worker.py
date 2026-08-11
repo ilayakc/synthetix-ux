@@ -9,6 +9,16 @@ from app.logging_config import configure_logging
 from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import page_analysis as page_analysis_service
+from app.services.ai_interaction_heatmap.openai_selector import (
+    INTERACTION_HEATMAP_SELECTOR_CTX_KEY,
+    InteractionHeatmapOpenAISelector,
+    MockInteractionHeatmapSelector,
+)
+from app.services.ai_interaction_heatmap.worker import (
+    run_interaction_heatmap_queue_cycle,
+    run_interaction_heatmap_reap_cycle,
+    run_interaction_heatmap_settlement_cycle,
+)
 from app.services.ai_pipeline.mock_provider import MockAIProvider
 from app.services.ai_pipeline.ollama_provider import OllamaProvider
 from app.services.ai_pipeline.openai_provider import OpenAIProvider
@@ -123,6 +133,26 @@ async def settle_ai_reservations_job(ctx: dict) -> dict:
     return await run_ai_reservation_settlement_job(ctx)
 
 
+async def process_interaction_heatmap_jobs(ctx: dict) -> dict:
+    """AI etkilesim isi haritasi: en fazla BIR QUEUED job'i (baseline SUCCEEDED)
+    isler - gercek OpenAI (veya mock) secicisi ctx'e enjekte edilmisse (bkz.
+    on_startup / interaction_heatmap_provider_ready). Secici yoksa hicbir sey
+    claim edilmez, hicbir sey FAILED yapilmaz (job'lar QUEUED kalir)."""
+    return await run_interaction_heatmap_queue_cycle(ctx)
+
+
+async def reap_stale_interaction_heatmaps_job(ctx: dict) -> dict:
+    """AI etkilesim isi haritasi: RUNNING'de takili kalmis job'lari kurtarir
+    (secici GEREKTIRMEZ)."""
+    return await run_interaction_heatmap_reap_cycle()
+
+
+async def settle_interaction_heatmap_reservations_job(ctx: dict) -> dict:
+    """AI etkilesim isi haritasi: heatmap Chip rezervasyonunu job sonuclarina gore
+    CONSUMED/RELEASED yapar (secici/network GEREKTIRMEZ)."""
+    return await run_interaction_heatmap_settlement_cycle()
+
+
 async def on_startup(ctx: dict) -> None:
     # Fail-closed: backend ile ayni dogrulama (bkz. app.config_security) -
     # production'da eksik/zayif/placeholder secret'la worker gorev almaya baslamaz.
@@ -172,11 +202,39 @@ async def on_startup(ctx: dict) -> None:
         ctx.setdefault(AI_PIPELINE_PROVIDER_CTX_KEY, None)
         logger.info("worker basladi (redis_url=%s)", settings.redis_url)
 
+    # AI etkilesim isi haritasi secicisi (ai_report'tan TAMAMEN AYRI ikinci kapi):
+    # readiness FALSE ise (varsayilan) hicbir secici olusturulmaz, hicbir ag
+    # cagrisi YAPILMAZ (bkz. Settings.interaction_heatmap_provider_ready). readiness
+    # TRUE ise `ai_interaction_heatmap_provider`e gore TEK bir secici enjekte edilir;
+    # baska bir seciciye OTOMATIK DUSULMEZ.
+    if settings.interaction_heatmap_provider_ready:
+        if settings.ai_interaction_heatmap_provider == "openai" and settings.openai_api_key is not None:
+            ctx[INTERACTION_HEATMAP_SELECTOR_CTX_KEY] = InteractionHeatmapOpenAISelector(
+                api_key=settings.openai_api_key.get_secret_value(),
+                model=settings.openai_model,
+                reasoning_effort=settings.openai_reasoning_effort,
+                timeout_seconds=settings.openai_timeout_seconds,
+                max_output_tokens=settings.openai_max_output_tokens,
+            )
+            logger.info(
+                "worker: OpenAI etkilesim isi haritasi secicisi hazir (model=%s)", settings.openai_model
+            )
+        elif settings.ai_interaction_heatmap_provider == "mock":
+            ctx[INTERACTION_HEATMAP_SELECTOR_CTX_KEY] = MockInteractionHeatmapSelector()
+            logger.info("worker: Mock etkilesim isi haritasi secicisi hazir")
+        else:
+            ctx.setdefault(INTERACTION_HEATMAP_SELECTOR_CTX_KEY, None)
+    else:
+        ctx.setdefault(INTERACTION_HEATMAP_SELECTOR_CTX_KEY, None)
+
 
 async def on_shutdown(ctx: dict) -> None:
     provider = ctx.get(AI_PIPELINE_PROVIDER_CTX_KEY)
     if isinstance(provider, OpenAIProvider | OllamaProvider):
         await provider.aclose()
+    heatmap_selector = ctx.get(INTERACTION_HEATMAP_SELECTOR_CTX_KEY)
+    if isinstance(heatmap_selector, InteractionHeatmapOpenAISelector):
+        await heatmap_selector.aclose()
     logger.info("worker kapatiliyor")
 
 
@@ -203,6 +261,9 @@ class WorkerSettings:
         reap_stale_ai_pipeline_stages_job,
         initialize_ai_pipeline_groups_job,
         settle_ai_reservations_job,
+        process_interaction_heatmap_jobs,
+        reap_stale_interaction_heatmaps_job,
+        settle_interaction_heatmap_reservations_job,
     ]
     # AI pipeline zamanlama araliklari (Faz 3B.2D): mevcut simulation/design
     # polling deseniyle AYNI mantik. Processor tek invocation'da yalnizca BIR
@@ -263,6 +324,14 @@ class WorkerSettings:
         # dakikada iki kez calisan bagimsiz reconciliation cycle'lari.
         cron(initialize_ai_pipeline_groups_job, second=_AI_INIT_CYCLE_SECONDS),
         cron(settle_ai_reservations_job, second=_AI_SETTLEMENT_CYCLE_SECONDS),
+        # AI etkilesim isi haritasi (ai_report'tan BAGIMSIZ lifecycle): processor
+        # sik araliklarla yalnizca BIR job isler (secici yoksa guvenle no-op);
+        # reaper seyrek; settlement dakikada iki kez. Bagimsiz DB-kilitli cron'lar
+        # oldugu icin diger cron'larla ayni saniyede tetiklenmesi GUVENLIDIR (bkz.
+        # yukaridaki AI pipeline cron aciklamasi).
+        cron(process_interaction_heatmap_jobs, second=set(range(3, 60, 6))),
+        cron(reap_stale_interaction_heatmaps_job, second={45}, minute=set(range(0, 60, 5))),
+        cron(settle_interaction_heatmap_reservations_job, second={18, 48}),
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     on_startup = on_startup

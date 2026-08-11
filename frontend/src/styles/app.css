@@ -3759,6 +3759,86 @@
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.6);
 }
 
+.ai-interaction-base-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(34, 197, 94, 0.035);
+  box-shadow: inset 0 0 80px rgba(34, 197, 94, 0.08);
+}
+
+.ai-interaction-hotspot {
+  position: absolute;
+  min-width: 12px;
+  min-height: 12px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  cursor: default;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(239, 68, 68, 0.94) 0%,
+    rgba(249, 115, 22, 0.78) 43%,
+    rgba(250, 204, 21, 0.3) 72%,
+    rgba(250, 204, 21, 0) 100%
+  );
+  box-shadow:
+    0 0 12px rgba(239, 68, 68, 0.9),
+    0 0 28px rgba(249, 115, 22, 0.58);
+  mix-blend-mode: screen;
+}
+
+.ai-interaction-hotspot:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.ai-interaction-hotspot-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.ai-interaction-hotspot-card {
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.ai-interaction-hotspot-card h4 {
+  margin: 6px 0 8px;
+}
+
+.ai-interaction-hotspot-card p {
+  margin: 0 0 12px;
+  color: var(--color-text-muted);
+  line-height: 1.55;
+}
+
+.ai-interaction-hotspot-card dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.ai-interaction-hotspot-card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-interaction-hotspot-card dt {
+  color: var(--color-text-muted);
+}
+
+.ai-interaction-hotspot-card dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 600;
+}
+
 .heatmap-legend {
   list-style: none;
   margin: 0;

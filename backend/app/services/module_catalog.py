@@ -28,6 +28,8 @@ Chip gerektiren "gelismis modullerdir" (bkz. `pricing.advanced_module_chip_costs
 from dataclasses import dataclass
 
 from app.services.pricing import (
+    AI_INTERACTION_HEATMAP_CHIP_COST,
+    AI_INTERACTION_HEATMAP_MODULE_KEY,
     AI_REPORT_CHIP_COST,
     AI_REPORT_MODULE_KEY,
     FEATURE_ACCESSIBILITY_PRECHECK,
@@ -334,7 +336,49 @@ MODULE_CATALOG_VERSIONS["2026.3"] = (
     ),
 )
 
-CURRENT_MODULE_CATALOG_VERSION = "2026.3"
+# "2026.3"un TUM satirlari degismeden korunur; "2026.4" onlari AYNEN devralir ve
+# yalnizca yeni `ai_interaction_heatmap` (AI etkilesim isi haritasi) modulunu
+# EKLER. Bu modul, gorev-odakli bir AI TIKLAMA TAHMINI uretir: gercek OpenAI
+# provider'i worker icinde cagrilir, yalnizca dogrulanmis analyzer aday
+# kayitlarindan (`candidate_id`) secim yapar - koordinat URETMEZ (bkz.
+# app.services.ai_interaction_heatmap). `ai_report`tan TAMAMEN BAGIMSIZDIR:
+# yalnizca `ai_interaction_heatmap` secilirse Isı Haritası (AI tiklama tahmini)
+# olusur, AI Raporu OLUSMAZ; yalnizca `ai_report` secilirse AI Raporu olusur, AI
+# tiklama tahmini OLUSMAZ; ikisi birlikte secilirse kanit hazirligi paylasilabilir
+# ama durum ve Chip yasam dongulieri AYRIDIR. Fiyat TEK kaynaktan
+# (`AI_INTERACTION_HEATMAP_CHIP_COST`) gelir. `selectable_in_wizard=True` katalog-
+# seviyesi bir niyettir; GERCEK sihirbaz gorunurlugu ayrica calisma-zamani
+# hazirlik bayragiyla (`settings.ai_interaction_heatmap_enabled`) kapilanir (bkz.
+# `get_wizard_visible_modules`) - hazirlik `false` iken modul katalog yanitinda
+# GORUNMEZ ve launch reddedilir (bkz. app.services.test_wizard). Evidence tum
+# kaynak turlerinden (url/screenshot/ai_generated) turetilebilir.
+MODULE_CATALOG_VERSIONS["2026.4"] = (
+    *MODULE_CATALOG_VERSIONS["2026.3"],
+    AnalysisModuleDefinition(
+        key=AI_INTERACTION_HEATMAP_MODULE_KEY,
+        name="AI etkilesim isi haritasi",
+        description=(
+            "Hedef gorev, hedef kitle ve sayfadaki gercek etkilesim alanlari "
+            "kullanilarak gercek bir AI ile uretilen sentetik tiklama tahmini. AI "
+            "yalnizca dogrulanmis etkilesim adaylarindan secim yapar; koordinat "
+            "uretmez. Gercek kullanici tiklamasi veya goz takibi verisi degildir. "
+            "Launch grubu basina tek ucretlendirilir."
+        ),
+        outputs=(
+            "AI tiklama tahmini (hedef gorev icin daha olası etkilesim alanlari)",
+            "Gorsel dikkat tahmini",
+            "Hotspot aciklama kartlari",
+        ),
+        measurement_type=SYNTHETIC_ESTIMATE,
+        chip_cost=AI_INTERACTION_HEATMAP_CHIP_COST,
+        free_entitlement_feature_key=None,
+        estimated_duration_minutes=4,
+        selectable_in_wizard=True,
+        supported_source_types=ALL_SOURCE_TYPES,
+    ),
+)
+
+CURRENT_MODULE_CATALOG_VERSION = "2026.4"
 
 
 def get_module_catalog(version: str | None = None) -> tuple[AnalysisModuleDefinition, ...]:
@@ -366,23 +410,32 @@ def get_selectable_wizard_module_keys(version: str | None = None) -> tuple[str, 
 
 
 def get_wizard_visible_modules(
-    *, ai_report_enabled: bool, version: str | None = None
+    *,
+    ai_report_enabled: bool,
+    ai_interaction_heatmap_enabled: bool = False,
+    version: str | None = None,
 ) -> tuple[AnalysisModuleDefinition, ...]:
     """Sihirbaz/katalog yanitinda GORUNMESI gereken aktif modulleri, calisma-
-    zamani hazirlik bayragini uygulayarak dondurur.
+    zamani hazirlik bayraklarini uygulayarak dondurur.
 
-    `ai_report` katalogda `selectable_in_wizard=True` olsa da GERCEK provider
-    henuz olmadigi icin (`settings.ai_report_enabled` varsayilan `False`) ai
-    raporu hazir degilken bu listeden CIKARILIR - frontend'in modulu hic
-    gormemesi saglanir (yalnizca frontend gizlemesine guvenilmez; launch
-    dogrulamasi da app.services.test_wizard'da ayrica zorunludur). Diger tum
-    aktif moduller hazirlik bayragindan BAGIMSIZ dondurulur.
+    `ai_report` ve `ai_interaction_heatmap` katalogda `selectable_in_wizard=True`
+    olsa da GERCEK provider hazirligi ayri iki bayrakla (`settings.
+    ai_report_enabled` / `settings.ai_interaction_heatmap_enabled`, ikisi de
+    varsayilan `False`) kapilanir; ilgili hazirlik `False` iken o modul bu
+    listeden CIKARILIR - frontend'in modulu hic gormemesi saglanir (yalnizca
+    frontend gizlemesine guvenilmez; launch dogrulamasi da app.services.
+    test_wizard'da ayrica zorunludur). Iki bayrak BAGIMSIZDIR (biri acik digeri
+    kapali olabilir). Diger tum aktif moduller bu bayraklardan BAGIMSIZ dondurulur.
     """
 
+    gated: dict[str, bool] = {
+        AI_REPORT_MODULE_KEY: ai_report_enabled,
+        AI_INTERACTION_HEATMAP_MODULE_KEY: ai_interaction_heatmap_enabled,
+    }
     return tuple(
         module
         for module in get_active_module_catalog(version)
-        if not (module.key == AI_REPORT_MODULE_KEY and not ai_report_enabled)
+        if gated.get(module.key, True)
     )
 
 
@@ -401,6 +454,8 @@ def get_module_definition(key: str, version: str | None = None) -> AnalysisModul
 
 
 __all__ = [
+    "AI_INTERACTION_HEATMAP_CHIP_COST",
+    "AI_INTERACTION_HEATMAP_MODULE_KEY",
     "AI_REPORT_CHIP_COST",
     "AI_REPORT_MODULE_KEY",
     "ALL_SOURCE_TYPES",

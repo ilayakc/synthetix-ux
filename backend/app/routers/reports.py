@@ -30,11 +30,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.dependencies import get_organization_id
 from app.engine.baseline import compare_baseline_results
+from app.models.interaction_heatmap import InteractionHeatmap, InteractionHeatmapStatus
 from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.projects import Project
 from app.models.reports import Report
 from app.models.simulations import SimulationRun, SimulationStatus
 from app.models.tests import TestDefinition, TestVariant
+from app.services.ai_interaction_heatmap import INTERACTION_HEATMAP_DISCLAIMER
+from app.services.pricing import AI_INTERACTION_HEATMAP_MODULE_KEY
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -205,6 +208,66 @@ class CtaOverlaySection(BaseModel):
     disclaimer: str
 
 
+# --- AI etkilesim isi haritasi (ai_interaction_heatmap) bolumu ----------------
+#
+# ONEMLI (gorev talimati "MIMARI KARAR"): bu bolum YALNIZCA kaydedilmis heatmap
+# job durumunu/sonucunu OKUR (bkz. `_build_interaction_heatmap`). GET /api/reports/
+# {id} hicbir zaman provider CAGIRMAZ, Chip TUKETMEZ, DB'ye YAZMAZ. `status`
+# acikca queued/running/succeeded/failed olarak gosterilir; provider yoksa/is
+# tamamlanmadiysa deterministik cikti SESSIZCE "AI" gibi gosterilmez.
+INTERACTION_HEATMAP_TITLE = "AI tıklama tahmini"
+INTERACTION_HEATMAP_RUNNING_NOTE = (
+    "AI etkileşim ısı haritası hazırlanıyor. Bu işlem arka planda gerçek bir AI "
+    "sağlayıcısıyla yürütülür; sayfayı birazdan yenileyin."
+)
+INTERACTION_HEATMAP_FAILED_NOTE = (
+    "AI etkileşim ısı haritası bu çalışma için üretilemedi. Sonuç kaydedilmediği "
+    "için bir tahmin gösterilmiyor."
+)
+
+
+class InteractionHeatmapHotspot(BaseModel):
+    candidate_id: str
+    label: str
+    interaction_kind: str
+    role: str
+    x: float
+    y: float
+    w: float
+    h: float
+    above_fold: bool
+    score: float
+    confidence: str
+    reason: str
+    task_relevance: str
+
+
+class InteractionHeatmapSection(BaseModel):
+    # `requested`: `ai_interaction_heatmap` modulu bu run icin secildi mi.
+    requested: bool
+    # not_requested | queued | running | succeeded | failed
+    status: str
+    # Yalnizca `status=="succeeded"` VE gecerli sonuc varsa True.
+    available: bool
+    title: str = INTERACTION_HEATMAP_TITLE
+    provider: str | None = None
+    model_name: str | None = None
+    method: str | None = None
+    method_label: str | None = None
+    summary: str | None = None
+    hotspots: list[InteractionHeatmapHotspot] = []
+    unmatched_task_warning: str | None = None
+    # Her zaman dolu, her zaman gorunur kalmasi gereken zorunlu aciklama.
+    disclaimer: str = INTERACTION_HEATMAP_DISCLAIMER
+    # Sinirli/guvenli hata kodu (yalnizca failed) - ham provider hatasi ASLA sizmaz.
+    error_code: str | None = None
+    status_note: str | None = None
+    screenshot_url: str | None = None
+    image_width: int | None = None
+    image_height: int | None = None
+    coordinates_available: bool = False
+
+
 class CampaignCtaSection(BaseModel):
     ctas: list[dict]
     message_clarity_findings: list[dict]
@@ -230,6 +293,9 @@ class ReportDetailResponse(BaseModel):
     # ulasabilmek icin bu alani kullanir; standart rapor icerigini DEGISTIRMEZ.
     simulation_run_id: uuid.UUID
     ai_report_requested: bool = False
+    # `ai_interaction_heatmap` modulu bu run icin secildi mi (frontend, Isı
+    # Haritası sekmesinde "AI tıklama tahmini" gorunumunu buna gore acar).
+    interaction_heatmap_requested: bool = False
     title: str
     created_at: datetime
     project_id: uuid.UUID
@@ -248,6 +314,7 @@ class ReportDetailResponse(BaseModel):
     critical_findings: list[CriticalFinding]
     heatmap: HeatmapSection
     cta_overlay: CtaOverlaySection
+    interaction_heatmap: InteractionHeatmapSection
     campaign_cta: CampaignCtaSection | None
     network_device: NetworkDeviceSection | None
     accessible_chart_summaries: list[AccessibleChartSummary]
@@ -776,12 +843,13 @@ async def _build_cta_overlay(
                         interaction_kind = "content_link"
                 if interaction_kind == "container_link":
                     continue
+                raw_label = element.get("label")
                 boxes.append(
                     CtaOverlayBox(
                         classification="dom_interactive_candidate",
                         label=(
-                            element.get("label").strip()[:120]
-                            if isinstance(element.get("label"), str) and element.get("label").strip()
+                            raw_label.strip()[:120]
+                            if isinstance(raw_label, str) and raw_label.strip()
                             else CTA_CLASSIFICATION_LABELS["dom_interactive_candidate"]
                         ),
                         interaction_kind=interaction_kind,
@@ -803,6 +871,99 @@ async def _build_cta_overlay(
         coordinates_available=screenshot_url is not None,
         coordinates_unavailable_reason=None if screenshot_url else SCREENSHOT_MISSING_REASON,
         disclaimer=CTA_OVERLAY_DISCLAIMER,
+    )
+
+
+async def _build_interaction_heatmap(
+    session: AsyncSession, organization_id: uuid.UUID, report_id: uuid.UUID, run: SimulationRun
+) -> InteractionHeatmapSection:
+    """AI etkilesim isi haritasi bolumunu SALT-OKUNUR olarak, YALNIZCA kaydedilmis
+    `InteractionHeatmap` durumundan/sonucundan uretir.
+
+    Bu fonksiyon hicbir provider CAGIRMAZ, hicbir Chip TUKETMEZ ve hicbir DB
+    mutasyonu YAPMAZ (yalnizca SELECT/get). Modul secilmemisse `not_requested`;
+    secilmis ama job henuz olusmamis/QUEUED/RUNNING ise durum acikca gosterilir;
+    FAILED ise yalnizca sabit/guvenli `error_code` (ham provider hatasi degil)
+    tasinir; SUCCEEDED ise dogrulanmis sonuc (koordinatlar gercek adaylardan)
+    OKUNUR."""
+
+    modules = (run.input_snapshot or {}).get("modules") or []
+    requested = AI_INTERACTION_HEATMAP_MODULE_KEY in modules
+    if not requested:
+        return InteractionHeatmapSection(requested=False, status="not_requested", available=False)
+
+    # Ekran goruntusu + boyutlar (varsa) - overlay icin; salt-okunur cozumleme.
+    analysis = await _resolve_report_page_analysis(session, organization_id, run)
+    screenshot_url: str | None = None
+    image_width: int | None = None
+    image_height: int | None = None
+    if analysis is not None:
+        image_width = analysis.image_width
+        image_height = analysis.image_height
+        if analysis.screenshot_data is not None:
+            screenshot_url = f"/api/reports/{report_id}/heatmap-screenshot"
+
+    hm = (
+        await session.execute(
+            select(InteractionHeatmap).where(InteractionHeatmap.simulation_run_id == run.id)
+        )
+    ).scalar_one_or_none()
+
+    if hm is None:
+        # Modul secili ama job henuz olusmamis (baseline daha tamamlanmadi ya da
+        # worker henuz claim etmedi) -> queued (lazy hesaplama YOK).
+        return InteractionHeatmapSection(
+            requested=True,
+            status="queued",
+            available=False,
+            status_note=INTERACTION_HEATMAP_RUNNING_NOTE,
+            screenshot_url=screenshot_url,
+            image_width=image_width,
+            image_height=image_height,
+        )
+
+    if hm.status == InteractionHeatmapStatus.SUCCEEDED and isinstance(hm.result, dict):
+        result = hm.result
+        hotspots = [
+            InteractionHeatmapHotspot(**h)
+            for h in (result.get("hotspots") or [])
+            if isinstance(h, dict)
+        ]
+        return InteractionHeatmapSection(
+            requested=True,
+            status="succeeded",
+            available=True,
+            provider=result.get("provider"),
+            model_name=result.get("model_name"),
+            method=result.get("method"),
+            method_label=result.get("method_label"),
+            summary=result.get("summary"),
+            hotspots=hotspots,
+            unmatched_task_warning=result.get("unmatched_task_warning"),
+            disclaimer=result.get("disclaimer") or INTERACTION_HEATMAP_DISCLAIMER,
+            screenshot_url=screenshot_url,
+            image_width=image_width,
+            image_height=image_height,
+            coordinates_available=bool(hotspots) and screenshot_url is not None,
+        )
+
+    status = hm.status.value  # queued | running | failed
+    status_note = (
+        INTERACTION_HEATMAP_FAILED_NOTE
+        if hm.status == InteractionHeatmapStatus.FAILED
+        else INTERACTION_HEATMAP_RUNNING_NOTE
+    )
+    return InteractionHeatmapSection(
+        requested=True,
+        status=status,
+        available=False,
+        provider=hm.provider,
+        model_name=hm.model_name,
+        error_code=hm.error_code if hm.status == InteractionHeatmapStatus.FAILED else None,
+        status_note=status_note,
+        screenshot_url=screenshot_url,
+        image_width=image_width,
+        image_height=image_height,
     )
 
 
@@ -1044,6 +1205,12 @@ async def _build_detail_response(
         )
         ab_comparison["sibling_cta_overlay"] = sibling_cta_overlay.model_dump(mode="json")
 
+        # Sibling'in AI etkilesim isi haritasi (salt-okunur; ayni fonksiyon).
+        sibling_interaction_heatmap = await _build_interaction_heatmap(
+            session, organization_id, sibling_report.id, sibling_run
+        )
+        ab_comparison["sibling_interaction_heatmap"] = sibling_interaction_heatmap.model_dump(mode="json")
+
         # Byte-duzeyinde ayni snapshot karsilastirmasi uyarisi (bkz. plan §8):
         # iki tarafin PageAnalysis.content_sha256'si eslesiyorsa acikca
         # belirtilir - SHA-256 EŞITSIZLIGI gorsel farklilik KANITI sayilmaz,
@@ -1061,6 +1228,8 @@ async def _build_detail_response(
         id=ctx.report.id,
         simulation_run_id=ctx.run.id,
         ai_report_requested="ai_report" in (input_snapshot.get("modules") or []),
+        interaction_heatmap_requested=AI_INTERACTION_HEATMAP_MODULE_KEY
+        in (input_snapshot.get("modules") or []),
         title=ctx.report.title,
         created_at=ctx.report.created_at,
         project_id=ctx.project.id,
@@ -1100,6 +1269,9 @@ async def _build_detail_response(
         critical_findings=_build_critical_findings(metrics),
         heatmap=await _build_heatmap(session, organization_id, ctx.report.id, ctx.run, content),
         cta_overlay=await _build_cta_overlay(session, organization_id, ctx.report.id, ctx.run),
+        interaction_heatmap=await _build_interaction_heatmap(
+            session, organization_id, ctx.report.id, ctx.run
+        ),
         campaign_cta=_build_campaign_cta(content),
         network_device=_build_network_device(content),
         accessible_chart_summaries=_build_accessible_chart_summaries(metrics),

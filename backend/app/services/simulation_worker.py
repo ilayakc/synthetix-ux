@@ -364,6 +364,18 @@ async def _resolve_launch_group(session: AsyncSession, run: SimulationRun) -> No
         for reservation_id in ai_chip_reservation_ids:
             await _resolve_chip_reservation(session, run.organization_id, reservation_id, consume=False)
 
+        # AI etkilesim isi haritasi (`ai_interaction_heatmap`) rezervasyonu:
+        # `ai_report` ile AYNI, BAGIMSIZ desen. Baseline grubu tamamen basariliysa
+        # RESERVED birakilir (consume/release, heatmap job'larinin kendi terminal
+        # sonucuna gore ayri settlement cycle'inda olur - bkz. app.services.
+        # ai_interaction_heatmap.worker); en az bir baseline run FAILED/CANCELLED
+        # ise burada tam RELEASED edilir (heatmap job'lari hic olusmayacak).
+        heatmap_chip_reservation_ids = {
+            r.heatmap_chip_reservation_id for r in group_runs if r.heatmap_chip_reservation_id is not None
+        }
+        for reservation_id in heatmap_chip_reservation_ids:
+            await _resolve_chip_reservation(session, run.organization_id, reservation_id, consume=False)
+
     entitlement_feature_keys = {
         r.free_entitlement_feature_key for r in group_runs if r.free_entitlement_feature_key is not None
     }
@@ -744,6 +756,42 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
             for sibling in siblings:
                 if sibling.ai_chip_reservation_id is not None:
                     sibling.ai_chip_reservation_id = ai_reservation.id
+
+    # Heatmap rezervasyonu da (ai_report ile ayni gerekce) baseline yeniden
+    # denemede yeniden kurulur ve gruptaki tum sibling run'lara ayni yeni id
+    # yazilir - aksi halde baseline retry sonrasi heatmap sessizce eksik kalirdi.
+    if run.heatmap_chip_reservation_id:
+        previous_hm = await session.get(chip_ledger.ChipReservation, run.heatmap_chip_reservation_id)
+        hm_already_reserved = (
+            previous_hm is not None
+            and previous_hm.status == chip_ledger.ChipReservationStatus.RESERVED
+        )
+        if not hm_already_reserved and previous_hm is not None and previous_hm.amount > 0:
+            hm_reservation = await chip_ledger.reserve_chips(
+                session,
+                run.organization_id,
+                previous_hm.amount,
+                f"AI etkilesim isi haritasi baseline yeniden deneme: {run.id}",
+                run_id=run.launch_run_id or run.id,
+                idempotency_key=(
+                    f"ai-heatmap-baseline-retry:{run.launch_run_id or run.id}:{run.attempt_count + 1}"
+                ),
+            )
+            if run.launch_run_id is not None:
+                hm_siblings = list(
+                    (
+                        await session.execute(
+                            select(SimulationRun)
+                            .where(SimulationRun.launch_run_id == run.launch_run_id)
+                            .with_for_update()
+                        )
+                    ).scalars()
+                )
+            else:
+                hm_siblings = [run]
+            for sibling in hm_siblings:
+                if sibling.heatmap_chip_reservation_id is not None:
+                    sibling.heatmap_chip_reservation_id = hm_reservation.id
 
     run.status = SimulationStatus.QUEUED
     run.error = None

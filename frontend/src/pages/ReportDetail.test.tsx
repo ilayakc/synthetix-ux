@@ -15,6 +15,101 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("ReportDetail — AI tıklama tahmini", () => {
+  const succeededInteractionHeatmap = {
+    requested: true,
+    status: "succeeded",
+    available: true,
+    title: "AI tıklama tahmini",
+    provider: "openai",
+    model_name: "gpt-5.6-terra",
+    method: "openai_candidate_selection",
+    method_label: "OpenAI aday seçimi (DOM ve görsel özellik destekli)",
+    summary: "Hedef görev için en güçlü aday hesap oluşturma bağlantısıdır.",
+    hotspots: [
+      {
+        candidate_id: "candidate-1",
+        label: "Hesap oluştur",
+        interaction_kind: "cta_link",
+        role: "link",
+        x: 0.62,
+        y: 0.08,
+        w: 0.18,
+        h: 0.05,
+        above_fold: true,
+        score: 0.91,
+        confidence: "high",
+        reason: "Hedef görevle doğrudan eşleşen birincil eylem.",
+        task_relevance: "direct",
+      },
+    ],
+    unmatched_task_warning: null,
+    disclaimer:
+      "Bu harita hedef görev, hedef kitle ve sayfadaki gerçek etkileşim alanları kullanılarak oluşturulan sentetik bir AI tahminidir. Gerçek kullanıcı tıklaması veya göz takibi verisi değildir.",
+    error_code: null,
+    status_note: null,
+    screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
+    image_width: 1440,
+    image_height: 2400,
+    coordinates_available: true,
+  };
+
+  it("modül seçiliyse Isı Haritası içinde AI ve görsel dikkat görünümlerini sunar", async () => {
+    renderReportDetail(
+      baseReport({
+        interaction_heatmap_requested: true,
+        interaction_heatmap: succeededInteractionHeatmap,
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
+    goToTab("Isı Haritası");
+
+    expect(screen.getByRole("tab", { name: "AI tıklama tahmini" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: "Görsel dikkat tahmini" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Hesap oluştur: AI olasılık skoru %91/ })).toBeInTheDocument();
+    expect(screen.getByText("Görevle doğrudan eşleşiyor")).toBeInTheDocument();
+    expect(screen.getByText(/Gerçek kullanıcı tıklaması veya göz takibi verisi değildir/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Görsel dikkat tahmini" }));
+    expect(screen.getByText(/yeşil düşük, sarı artan, kırmızı/i)).toBeInTheDocument();
+  });
+
+  it("provider başarısızlığını açık gösterir ve sahte hotspot çizmez", async () => {
+    renderReportDetail(
+      baseReport({
+        interaction_heatmap_requested: true,
+        interaction_heatmap: {
+          ...succeededInteractionHeatmap,
+          status: "failed",
+          available: false,
+          hotspots: [],
+          error_code: "provider_unavailable",
+          status_note: "AI etkileşim ısı haritası bu çalışma için üretilemedi.",
+          coordinates_available: false,
+        },
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
+    goToTab("Isı Haritası");
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Deterministik bir sonuç AI çıktısı gibi gösterilmedi");
+    expect(document.querySelector(".ai-interaction-hotspot")).not.toBeInTheDocument();
+    expect(screen.queryByText("provider_unavailable")).not.toBeInTheDocument();
+  });
+
+  it("eski raporda yeni alt sekmeleri göstermeden görsel dikkat görünümünü korur", async () => {
+    renderReportDetail(baseReport());
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
+    goToTab("Isı Haritası");
+
+    expect(screen.queryByRole("tab", { name: "AI tıklama tahmini" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Gösterilecek sentetik dikkat tahmini veya CTA adayı bulunamadı/)).toBeInTheDocument();
+  });
+});
+
 function baseReport(overrides: Record<string, unknown> = {}) {
   return {
     id: "11111111-1111-1111-1111-111111111111",

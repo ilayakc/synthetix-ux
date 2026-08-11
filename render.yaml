@@ -79,6 +79,10 @@ services:
         value: "true"
       - key: AI_REPORT_PROVIDER
         value: openai
+      - key: AI_INTERACTION_HEATMAP_ENABLED
+        value: "true"
+      - key: AI_INTERACTION_HEATMAP_PROVIDER
+        value: openai
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL

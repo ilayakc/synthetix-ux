@@ -9,8 +9,8 @@ pytestmark = pytest.mark.unit
 
 def test_get_module_catalog_returns_current_version_by_default():
     modules = module_catalog.get_module_catalog()
-    # Faz 3C.2B1: guncel surum (2026.3) `ai_report`i ekler -> 8 modul.
-    assert len(modules) == 8
+    # 2026.3 `ai_report`i, 2026.4 `ai_interaction_heatmap`i ekler -> 9 modul.
+    assert len(modules) == 9
     assert {m.key for m in modules} == {
         "basic_ux_test",
         "accessibility_precheck",
@@ -20,6 +20,7 @@ def test_get_module_catalog_returns_current_version_by_default():
         "synthetic_attention_estimate",
         "ai_explanation",
         "ai_report",
+        "ai_interaction_heatmap",
     }
 
 
@@ -67,6 +68,7 @@ def test_get_selectable_wizard_module_keys_only_returns_selectable_advanced_modu
         "campaign_cta_test",
         "synthetic_attention_estimate",
         "ai_report",
+        "ai_interaction_heatmap",
     }
     # Test turleri (test_type) ve her zaman ucretsiz AI aciklamasi sihirbazin
     # 4. adiminda AYRICA secilebilir olarak listelenmemeli.

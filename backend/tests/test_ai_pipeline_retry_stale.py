@@ -270,9 +270,9 @@ async def test_single_alembic_head():  # (2)
     cfg = Config("alembic.ini")
     cfg.set_main_option("script_location", "migrations")
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    # Platform admin altyapisi: 'd68747f9e724' (users.is_platform_admin) tek
-    # head'i ilerletti (bkz. backend/migrations/versions/d68747f9e724_*).
-    assert heads == ["d68747f9e724"]
+    # AI interaction heatmap tablosu ve ayri Chip rezervasyon baglantisi mevcut
+    # tek Alembic head'ini ilerletir.
+    assert heads == ["f9b3c2e7a1d8"]
 
 
 async def test_migration_down_revision_chains_to_prior_head():  # (3)
@@ -517,15 +517,17 @@ async def test_second_retryable_error_fails_stage_and_pipeline(maker):  # (19)
     assert pipeline.status == AIPipelineStatus.FAILED
 
 
-async def test_non_retryable_error_terminal_on_first_attempt(maker):  # (20)
+async def test_repairable_validation_error_retries_once_then_fails(maker):  # (20)
     env = await _seed_pipeline(maker)
-    provider = BrokenScenarioProvider()  # sema-gecerli ama gecersiz -> non-retryable
+    provider = BrokenScenarioProvider()  # sema-gecerli ama kaniti bozuk -> bir kez onarim retry'i
     await _advance_pure_prefix(maker, provider)
+    first = await process_one_ai_stage(maker, provider=provider)
+    assert first.outcome == AIStageOutcome.RETRY_SCHEDULED
     r = await process_one_ai_stage(maker, provider=provider)
     assert r.outcome == AIStageOutcome.FAILED
     stage3 = await _stage3_queued_row(maker, env.pipeline_id)
     assert stage3.status == AIPipelineStageStatus.FAILED
-    assert stage3.attempt_count == 1  # tek deneme, retry YOK
+    assert stage3.attempt_count == 2  # bounded: yalnizca bir onarim retry'i
 
 
 async def test_provider_missing_is_not_retried(maker):  # (21)

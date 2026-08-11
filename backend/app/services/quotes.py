@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.billing import EntitlementStatus
 from app.services.entitlements import get_or_create_entitlement
 from app.services.pricing import (
+    AI_INTERACTION_HEATMAP_MODULE_KEY,
     AI_REPORT_MODULE_KEY,
     FEATURE_ACCESSIBILITY_PRECHECK,
     FEATURE_BASIC_UX_TEST,
@@ -52,6 +53,12 @@ class QuoteResult:
     # AI ucretini ICERMEZ (cift ucret/cift rezervasyon olmaz).
     required_chips: int = 0
     ai_report_chips: int = 0
+    # `ai_interaction_heatmap` seciliyse launch grubu basina flat Chip bedeli
+    # (bkz. pricing.AI_INTERACTION_HEATMAP_CHIP_COST), degilse 0. `ai_report_chips`
+    # ile AYNI desende AYRI bir rezervasyon icin kullanilir; `required_chips`e
+    # (baseline) EKLENMEZ. `total_chips` ucununun (baseline + ai_report + heatmap)
+    # toplamidir.
+    interaction_heatmap_chips: int = 0
     total_chips: int = 0
 
 
@@ -87,9 +94,13 @@ async def build_quote(
     # `advanced_module_chip_costs`ten (dolayisiyla `required_chips`ten) DEGIL,
     # `pricing.ai_report_chip_cost`ten gelir ve ayri bir line item + ayri bir
     # rezervasyon olur (bkz. QuoteResult docstring / test_wizard.launch_draft).
+    # `ai_report` gibi `ai_interaction_heatmap` de `advanced_module_chip_costs`ten
+    # DEGIL, ayri bir flat bedelden (`pricing.interaction_heatmap_chip_cost`)
+    # gelir ve ayri bir line item + ayri bir rezervasyon olur.
     ai_report_selected = AI_REPORT_MODULE_KEY in modules
+    interaction_heatmap_selected = AI_INTERACTION_HEATMAP_MODULE_KEY in modules
     for module_key in modules:
-        if module_key == AI_REPORT_MODULE_KEY:
+        if module_key in (AI_REPORT_MODULE_KEY, AI_INTERACTION_HEATMAP_MODULE_KEY):
             continue
         unit_cost = pricing.module_cost(module_key)
         line_items.append(
@@ -119,6 +130,20 @@ async def build_quote(
             )
         )
 
+    interaction_heatmap_chips = (
+        pricing.interaction_heatmap_chip_cost if interaction_heatmap_selected else 0
+    )
+    if interaction_heatmap_selected:
+        line_items.append(
+            QuoteLineItem(
+                key=AI_INTERACTION_HEATMAP_MODULE_KEY,
+                label="AI etkilesim isi haritasi (launch grubu basina)",
+                quantity=1,
+                unit_chip_cost=interaction_heatmap_chips,
+                chip_cost=interaction_heatmap_chips,
+            )
+        )
+
     return QuoteResult(
         pricing_version=pricing.version,
         test_type=test_type,
@@ -129,7 +154,8 @@ async def build_quote(
         line_items=tuple(line_items),
         required_chips=required_chips,
         ai_report_chips=ai_report_chips,
-        total_chips=required_chips + ai_report_chips,
+        interaction_heatmap_chips=interaction_heatmap_chips,
+        total_chips=required_chips + ai_report_chips + interaction_heatmap_chips,
     )
 
 

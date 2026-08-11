@@ -11,6 +11,7 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.ai_pipeline import AIPipelineRun
+    from app.models.interaction_heatmap import InteractionHeatmap
     from app.models.personas import Persona
 
 
@@ -107,6 +108,16 @@ class SimulationRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # UUID'dir - rezervasyonun kanonik durumu `chip_reservations` tablosunda
     # tutulur, bu yalnizca zayif bir referanstir.
     ai_chip_reservation_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
+    # `ai_chip_reservation_id` ile AYNI desende ama TAMAMEN AYRI bir referans:
+    # `ai_interaction_heatmap` seciliyse launch grubu basina rezerve edilen TEK
+    # heatmap Chip rezervasyonu (bkz. app.services.pricing.
+    # AI_INTERACTION_HEATMAP_CHIP_COST, app.services.test_wizard.launch_draft). AI
+    # raporu rezervasyonundan (`ai_chip_reservation_id`) BAGIMSIZDIR - iki modul
+    # birlikte secilirse iki AYRI rezervasyon/yasam dongusu olusur. A/B'nin iki
+    # run'i AYNI id'yi tasir; heatmap secilmemis run'larda NULL kalir (eski run'lar
+    # icin backfill YOKTUR). `chip_reservation_id` gibi bilerek plain (FK'siz,
+    # indekssiz) bir UUID'dir - kanonik durum `chip_reservations` tablosundadir.
+    heatmap_chip_reservation_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True)
 
     # `passive_deletes=True`: fiili silme, DB'deki `ondelete="CASCADE"` FK'si
     # (bkz. app.models.personas.Persona) tarafindan yapilir; ORM burada
@@ -119,6 +130,12 @@ class SimulationRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # app.models.ai_pipeline.AIPipelineRun.simulation_run_id UNIQUE
     # constraint'i) - bu yuzden liste degil, tekil/opsiyonel iliski.
     ai_pipeline_run: Mapped["AIPipelineRun | None"] = relationship(
+        back_populates="simulation_run", cascade="all, delete-orphan", passive_deletes=True
+    )
+    # Bir SimulationRun icin en fazla bir AI etkilesim isi haritasi kaydi olabilir
+    # (bkz. app.models.interaction_heatmap.InteractionHeatmap.simulation_run_id
+    # UNIQUE) - tekil/opsiyonel iliski.
+    interaction_heatmap: Mapped["InteractionHeatmap | None"] = relationship(
         back_populates="simulation_run", cascade="all, delete-orphan", passive_deletes=True
     )
 

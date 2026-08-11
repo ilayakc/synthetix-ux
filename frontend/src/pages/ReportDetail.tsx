@@ -12,6 +12,8 @@ import {
   type ReportHeatmapLevel,
   type ReportHeatmapRegion,
   type ReportHeatmapSection,
+  type ReportInteractionHeatmapHotspot,
+  type ReportInteractionHeatmapSection,
   type ReportNetworkDevice,
   type ReportVisualAttentionCell,
   getAiPipelineStatus,
@@ -1512,24 +1514,290 @@ function VisualReportPanel({
   );
 }
 
+const AI_INTERACTION_HEATMAP_DISCLAIMER =
+  "Bu harita hedef görev, hedef kitle ve sayfadaki gerçek etkileşim alanları kullanılarak oluşturulan sentetik bir AI tahminidir. Gerçek kullanıcı tıklaması veya göz takibi verisi değildir.";
+
+const AI_HEATMAP_CONFIDENCE_LABELS: Record<ReportInteractionHeatmapHotspot["confidence"], string> = {
+  high: "Yüksek güven",
+  medium: "Orta güven",
+  low: "Düşük güven",
+};
+
+const AI_HEATMAP_RELEVANCE_LABELS: Record<ReportInteractionHeatmapHotspot["task_relevance"], string> = {
+  direct: "Görevle doğrudan eşleşiyor",
+  related: "Görevle ilişkili",
+  weak: "Görevle zayıf ilişkili",
+  none: "Görevle eşleşmiyor",
+};
+
+function AiInteractionHotspotMarker({
+  hotspot,
+}: {
+  hotspot: ReportInteractionHeatmapHotspot;
+}) {
+  const left = Math.max(0, Math.min(100, hotspot.x * 100));
+  const top = Math.max(0, Math.min(100, hotspot.y * 100));
+  const width = Math.max(1, Math.min(100 - left, hotspot.w * 100));
+  const height = Math.max(1, Math.min(100 - top, hotspot.h * 100));
+  const label = `${hotspot.label}: AI olasılık skoru %${Math.round(hotspot.score * 100)}`;
+  return (
+    <button
+      type="button"
+      className="ai-interaction-hotspot"
+      style={{
+        left: `${left}%`,
+        top: `${top}%`,
+        width: `${width}%`,
+        height: `${height}%`,
+        opacity: Math.max(0.55, hotspot.score),
+      }}
+      aria-label={label}
+      title={label}
+    />
+  );
+}
+
+function AiInteractionHeatmapPanel({
+  section,
+  headingId,
+  title,
+  sourceType,
+}: {
+  section: ReportInteractionHeatmapSection | undefined;
+  headingId: string;
+  title: string;
+  sourceType?: string | null;
+}) {
+  const requested = Boolean(section?.requested);
+  const status = section?.status ?? "not_requested";
+  const hotspots = section?.hotspots ?? [];
+  const hasMap = Boolean(
+    status === "succeeded" &&
+      section?.available &&
+      section.coordinates_available &&
+      section.screenshot_url &&
+      hotspots.length > 0,
+  );
+
+  return (
+    <section className="report-section" aria-labelledby={headingId}>
+      <h3 id={headingId} className="report-section__heading">
+        {title}
+        {sourceType && (
+          <>
+            {" "}
+            <SourceTypeBadge sourceType={sourceType} />
+          </>
+        )}
+      </h3>
+
+      <p className="report-section__intro report-disclaimer-strong">
+        {normalizeTurkishSystemCopy(section?.disclaimer ?? AI_INTERACTION_HEATMAP_DISCLAIMER)}
+      </p>
+
+      {!requested && (
+        <div className="report-heatmap-empty">
+          <p>Bu çalışma için AI tıklama tahmini modülü seçilmedi.</p>
+        </div>
+      )}
+
+      {requested && (status === "queued" || status === "running") && (
+        <p className="auth-notice" role="status">
+          {status === "queued" ? "AI tıklama tahmini sıraya alındı." : "AI tıklama tahmini hazırlanıyor."}{" "}
+          {section?.status_note && normalizeTurkishSystemCopy(section.status_note)}
+        </p>
+      )}
+
+      {requested && status === "failed" && (
+        <p className="auth-error" role="alert">
+          AI tıklama tahmini üretilemedi. Deterministik bir sonuç AI çıktısı gibi gösterilmedi.
+          {section?.status_note ? ` ${normalizeTurkishSystemCopy(section.status_note)}` : ""}
+        </p>
+      )}
+
+      {requested && status === "succeeded" && (
+        <>
+          {section?.summary && (
+            <p className="report-section__intro">{normalizeTurkishSystemCopy(section.summary)}</p>
+          )}
+          {section?.unmatched_task_warning && (
+            <p className="auth-notice" role="status">
+              {normalizeTurkishSystemCopy(section.unmatched_task_warning)}
+            </p>
+          )}
+          {hotspots.length === 0 && !section?.unmatched_task_warning && (
+            <p className="auth-notice" role="status">
+              Görevle güçlü eşleşen bir etkileşim alanı bulunamadı.
+            </p>
+          )}
+
+          {hasMap && (
+            <div className="heatmap-visual-layout">
+              <div className="heatmap-image-wrap">
+                <img
+                  src={getReportHeatmapScreenshotUrl(section!.screenshot_url as string)}
+                  alt={`${title}: AI'ın hedef görev için daha olası gördüğü gerçek etkileşim alanları`}
+                  className="heatmap-screenshot heatmap-screenshot--muted"
+                />
+                <div className="ai-interaction-base-layer" aria-hidden="true" />
+                {hotspots.map((hotspot) => (
+                  <AiInteractionHotspotMarker key={hotspot.candidate_id} hotspot={hotspot} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {hotspots.length > 0 && (
+            <div className="ai-interaction-hotspot-cards" aria-label="AI tıklama tahmini açıklamaları">
+              {hotspots.map((hotspot, index) => (
+                <article className="ai-interaction-hotspot-card" key={hotspot.candidate_id}>
+                  <span className="heatmap-insight-card__eyebrow">Öncelik {index + 1}</span>
+                  <h4>{normalizeTurkishSystemCopy(hotspot.label)}</h4>
+                  <p>{normalizeTurkishSystemCopy(hotspot.reason)}</p>
+                  <dl>
+                    <div>
+                      <dt>AI olasılık skoru</dt>
+                      <dd>%{Math.round(hotspot.score * 100)}</dd>
+                    </div>
+                    <div>
+                      <dt>Güven</dt>
+                      <dd>{AI_HEATMAP_CONFIDENCE_LABELS[hotspot.confidence]}</dd>
+                    </div>
+                    <div>
+                      <dt>Görev ilişkisi</dt>
+                      <dd>{AI_HEATMAP_RELEVANCE_LABELS[hotspot.task_relevance]}</dd>
+                    </div>
+                    <div>
+                      <dt>Konum</dt>
+                      <dd>{hotspot.above_fold ? "İlk ekranda" : "İlk ekranın altında"}</dd>
+                    </div>
+                  </dl>
+                </article>
+              ))}
+            </div>
+          )}
+
+          {section?.method_label && (
+            <p className="methodology-note">
+              Yöntem: {normalizeTurkishSystemCopy(section.method_label)}
+              {section.model_name ? ` · Model: ${section.model_name}` : ""}
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function VisualComparisonTab({ report }: { report: ReportDetailResponse }) {
   const { ab_comparison: ab } = report;
+  const hasAiInteractionHeatmap = Boolean(
+    report.interaction_heatmap_requested ||
+      report.interaction_heatmap?.requested ||
+      ab?.sibling_interaction_heatmap?.requested,
+  );
+  const [view, setView] = useState<"ai" | "visual">(
+    hasAiInteractionHeatmap ? "ai" : "visual",
+  );
+  const viewPrefix = useId();
 
   return (
     <div>
-      <p className="report-section__intro">{HEATMAP_VISUAL_DISCLAIMER}</p>
+      {hasAiInteractionHeatmap && (
+        <div className="report-tabs" role="tablist" aria-label="Isı haritası görünümü">
+          <button
+            type="button"
+            role="tab"
+            id={`${viewPrefix}-tab-ai`}
+            aria-selected={view === "ai"}
+            aria-controls={`${viewPrefix}-panel-ai`}
+            className={`report-tab${view === "ai" ? " report-tab--active" : ""}`}
+            onClick={() => setView("ai")}
+          >
+            AI tıklama tahmini
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id={`${viewPrefix}-tab-visual`}
+            aria-selected={view === "visual"}
+            aria-controls={`${viewPrefix}-panel-visual`}
+            className={`report-tab${view === "visual" ? " report-tab--active" : ""}`}
+            onClick={() => setView("visual")}
+          >
+            Görsel dikkat tahmini
+          </button>
+        </div>
+      )}
 
-      {!ab ? (
-        <VisualReportPanel
-          heatmap={report.heatmap}
-          ctaOverlay={report.cta_overlay}
-          headingId="report-heatmap-heading"
-          title="Tasarım"
-          sourceType={report.info_box.input_summary.source_type}
-          targetTask={report.info_box.input_summary.target_task}
-        />
-      ) : (
-        <VisualComparisonAbPanels report={report} ab={ab} />
+      {hasAiInteractionHeatmap && view === "ai" && (
+        <div
+          role="tabpanel"
+          id={`${viewPrefix}-panel-ai`}
+          aria-labelledby={`${viewPrefix}-tab-ai`}
+        >
+          {!ab ? (
+            <AiInteractionHeatmapPanel
+              section={report.interaction_heatmap}
+              headingId="report-ai-interaction-heatmap-heading"
+              title="Tasarım"
+              sourceType={report.info_box.input_summary.source_type}
+            />
+          ) : (
+            <div className="report-ab-columns">
+              <AiInteractionHeatmapPanel
+                section={
+                  ab.this_variant_role === "variant_a"
+                    ? report.interaction_heatmap
+                    : ab.sibling_interaction_heatmap
+                }
+                headingId="report-ai-interaction-heatmap-heading-a"
+                title="Tasarım A"
+                sourceType={
+                  ab.this_variant_role === "variant_a"
+                    ? ab.this_source_type
+                    : ab.sibling_source_type
+                }
+              />
+              <AiInteractionHeatmapPanel
+                section={
+                  ab.this_variant_role === "variant_a"
+                    ? ab.sibling_interaction_heatmap
+                    : report.interaction_heatmap
+                }
+                headingId="report-ai-interaction-heatmap-heading-b"
+                title="Tasarım B"
+                sourceType={
+                  ab.this_variant_role === "variant_a"
+                    ? ab.sibling_source_type
+                    : ab.this_source_type
+                }
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {(!hasAiInteractionHeatmap || view === "visual") && (
+        <div
+          role={hasAiInteractionHeatmap ? "tabpanel" : undefined}
+          id={hasAiInteractionHeatmap ? `${viewPrefix}-panel-visual` : undefined}
+          aria-labelledby={hasAiInteractionHeatmap ? `${viewPrefix}-tab-visual` : undefined}
+        >
+          <p className="report-section__intro">{HEATMAP_VISUAL_DISCLAIMER}</p>
+          {!ab ? (
+            <VisualReportPanel
+              heatmap={report.heatmap}
+              ctaOverlay={report.cta_overlay}
+              headingId="report-heatmap-heading"
+              title="Tasarım"
+              sourceType={report.info_box.input_summary.source_type}
+              targetTask={report.info_box.input_summary.target_task}
+            />
+          ) : (
+            <VisualComparisonAbPanels report={report} ab={ab} />
+          )}
+        </div>
       )}
     </div>
   );

@@ -347,6 +347,25 @@ class Settings(BaseSettings):
     # giden `format` temsilini degistirir, dogrulama sozlesmesini DEGISTIRMEZ.
     ollama_structured_output_mode: Literal["json", "json_schema"] = "json"
 
+    # --- AI etkilesim isi haritasi (`ai_interaction_heatmap`) ------------------
+    # `ai_report`tan TAMAMEN AYRI, BAGIMSIZ iki kapi (bkz. app.services.
+    # module_catalog / app.services.ai_interaction_heatmap):
+    #   `ai_interaction_heatmap_enabled` -> modulu sihirbaz katalogunda gosterir
+    #     VE launch'a izin verir (varsayilan False -> modul gizli, launch reddedilir).
+    #   `ai_interaction_heatmap_provider` -> worker'in HANGI secici (selector) ile
+    #     calisacagi. "disabled" (varsayilan): hicbir selector olusturulmaz,
+    #     hicbir provider/network YOKTUR (heatmap job'lari QUEUED kalir). "openai":
+    #     GERCEK OpenAI Responses API (mevcut `openai_*` kimlik bilgilerini
+    #     YENIDEN KULLANIR - ayri bir key gerekmez). "mock": network'suz,
+    #     deterministik bir gelistirme/test secicisi; production'da (environment==
+    #     "production") gercek AI GIBI kullanilmasi `allow_mock_ai_provider` ile
+    #     ACIKCA izin verilmedikce ENGELLENIR (ai_report mock'uyla ayni fail-closed
+    #     kural). Hicbir dal digerine OTOMATIK DUSMEZ; provider yoksa deterministik
+    #     cikti sessizce "AI" gibi sunulmaz - job QUEUED/RUNNING/FAILED durumunda
+    #     acikca gorunur (bkz. app.routers.reports interaction heatmap bolumu).
+    ai_interaction_heatmap_enabled: bool = False
+    ai_interaction_heatmap_provider: Literal["disabled", "mock", "openai"] = "disabled"
+
     @field_validator("openai_timeout_seconds", "ollama_timeout_seconds")
     @classmethod
     def _ensure_provider_timeout_below_job_timeout(cls, value: int, info: ValidationInfo) -> int:
@@ -407,6 +426,37 @@ class Settings(BaseSettings):
             return _is_allowed_ollama_host(
                 self.ollama_base_url, allow_remote_host=self.ollama_allow_remote_host
             )
+        return False
+
+    @property
+    def interaction_heatmap_provider_ready(self) -> bool:
+        """`ai_interaction_heatmap` icin GERCEK/mock bir secici olusturulabilir mi?
+
+        `ai_report_provider_ready` ile AYNI fail-closed desen ama BAGIMSIZ
+        bayraklar:
+        - `ai_interaction_heatmap_enabled=False` -> daima False.
+        - "disabled": daima False.
+        - "openai": mevcut OpenAI kimlik bilgilerini yeniden kullanir (key + model
+          + timeout>0). Ayri bir key GEREKMEZ.
+        - "mock": `environment=="production"` ise `allow_mock_ai_provider=True`
+          acikca verilmedikce False (production'da mock gercek AI gibi sunulmaz).
+        """
+
+        if not self.ai_interaction_heatmap_enabled:
+            return False
+        if self.ai_interaction_heatmap_provider == "disabled":
+            return False
+        if self.ai_interaction_heatmap_provider == "mock":
+            if self.environment == "production" and not self.allow_mock_ai_provider:
+                return False
+            return True
+        if self.ai_interaction_heatmap_provider == "openai":
+            key = self.openai_api_key
+            if key is None or not key.get_secret_value().strip():
+                return False
+            if not self.openai_model.strip():
+                return False
+            return self.openai_timeout_seconds > 0
         return False
 
     model_config = SettingsConfigDict(

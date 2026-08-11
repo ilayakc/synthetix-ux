@@ -61,6 +61,29 @@ function renderStep4(overrides: Partial<ComponentProps<typeof Step4Modules>> = {
 }
 
 describe("Step4Modules", () => {
+  it("AI tıklama tahmini katalogdan geldiğinde bağımsız bir modül olarak gösterir", () => {
+    renderStep4({
+      moduleCatalog: [
+        ...selectableModules,
+        {
+          key: "ai_interaction_heatmap",
+          name: "AI tıklama tahmini",
+          description: "Hedef göreve göre gerçek etkileşim adaylarını sıralar.",
+          outputs: ["AI etkileşim ısı haritası"],
+          measurement_type: "synthetic_estimate",
+          chip_cost: 30,
+          free_entitlement_feature_key: null,
+          estimated_duration_minutes: 2,
+          selectable_in_wizard: true,
+          supported_source_types: ["url", "screenshot", "ai_generated"],
+        },
+      ],
+    });
+
+    expect(screen.getByRole("heading", { name: "AI tıklama tahmini" })).toBeInTheDocument();
+    expect(screen.getByText("30 Chip")).toBeInTheDocument();
+  });
+
   it("yalnizca sihirbazda secilebilir modulleri kart olarak gosterir", () => {
     renderStep4();
 
