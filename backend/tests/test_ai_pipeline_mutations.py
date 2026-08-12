@@ -256,7 +256,7 @@ def test_single_alembic_head():
     heads = ScriptDirectory.from_config(cfg).get_heads()
     # AI interaction heatmap tablosu ve ayri Chip rezervasyon baglantisi mevcut
     # tek Alembic head'ini ilerletir.
-    assert list(heads) == ["f9b3c2e7a1d8"], heads
+    assert list(heads) == ["a41d7e9c3b20"], heads
 
 
 def test_migration_down_revision_chain():

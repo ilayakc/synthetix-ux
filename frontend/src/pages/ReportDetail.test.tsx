@@ -164,18 +164,16 @@ describe("ReportDetail — AI tıklama tahmini", () => {
         cta_overlay: {
           available: true,
           feature_source: "dom",
-          boxes: [
-            {
-              classification: "dom_interactive_candidate",
-              label: "Hesap oluştur",
-              interaction_kind: "button",
-              x: 0.6,
-              y: 0.08,
-              w: 0.18,
-              h: 0.05,
-              heuristic_score: 0.8,
-            },
-          ],
+          boxes: [0, 1, 2, 3, 4].map((index) => ({
+            classification: "dom_interactive_candidate" as const,
+            label: `CTA adayı ${index + 1}`,
+            interaction_kind: "button",
+            x: 0.05 + index * 0.18,
+            y: 0.08 + index * 0.1,
+            w: 0.12,
+            h: 0.05,
+            heuristic_score: 0.8 - index * 0.05,
+          })),
           screenshot_url: "/api/reports/11111111-1111-1111-1111-111111111111/heatmap-screenshot",
           coordinates_available: true,
           coordinates_unavailable_reason: null,
@@ -193,7 +191,9 @@ describe("ReportDetail — AI tıklama tahmini", () => {
     expect(document.querySelector(".cta-overlay-box")).not.toBeInTheDocument();
     fireEvent.click(ctaToggle);
     expect(ctaToggle.checked).toBe(true);
-    const ctaBox = document.querySelector(".cta-overlay-box");
+    const ctaBoxes = document.querySelectorAll(".cta-overlay-box");
+    expect(ctaBoxes).toHaveLength(5);
+    const ctaBox = ctaBoxes.item(0);
     expect(ctaBox).toBeInTheDocument();
     // CTA sınır çizgisi ısı renginin içinde kaybolmasın: yüksek kontrastlı çift
     // katmanlı stil + numara rozeti.

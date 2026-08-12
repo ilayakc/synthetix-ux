@@ -1610,7 +1610,7 @@ function AiInteractionHeatmapPanel({
                   ))}
                   {hasCtaData &&
                     ctaLayerVisible &&
-                    ctaVisible.visible.map((box, index) => (
+                    ctaVisible.allBoxes.map((box, index) => (
                       <CtaOverlayBoxMarker
                         key={index}
                         box={box}
@@ -1635,7 +1635,7 @@ function AiInteractionHeatmapPanel({
                       </li>
                     ))}
                   </ul>
-                  {hasCtaData && ctaLayerVisible && <CtaOverlayLegend boxes={ctaVisible.visible} />}
+                  {hasCtaData && ctaLayerVisible && <CtaOverlayLegend boxes={ctaVisible.allBoxes} />}
                 </div>
               </div>
               {hasCtaData && ctaLayerVisible && (
