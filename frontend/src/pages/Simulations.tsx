@@ -21,6 +21,9 @@ import { selectPublicDemoItems } from "../lib/publicDemo";
 const NON_RETRYABLE_ERROR_MESSAGE =
   "Bu çalışma, seçili tasarım kaynağıyla uyumsuz bir analiz modülü nedeniyle tamamlanamadı ve yeniden denenemez.";
 
+const EMPTY_PAGE_SNAPSHOT_ERROR_MESSAGE =
+  "Sayfa açıldı ancak analiz edilebilir metin veya etkileşim alanı yüklenmedi. Site otomatik analiz tarayıcısına boş içerik döndürüyor olabilir. Bu siteyi ekran görüntüsü kaynağıyla deneyin.";
+
 const STATUS_LABELS: Record<SimulationRunStatus, string> = {
   queued: "Kuyrukta",
   running: "Çalışıyor",
@@ -367,6 +370,10 @@ function SimulationCard({
   // ile her zaman ayni sekilde basarisiz olacagini bildigi durumlarda
   // (ör. ekran goruntusu kaynagiyla `network_device_test`) false doner.
   const isNonRetryableFailure = isFailed && !run.retryable;
+  const nonRetryableMessage =
+    run.failure_code === "page_analysis_empty_snapshot"
+      ? EMPTY_PAGE_SNAPSHOT_ERROR_MESSAGE
+      : NON_RETRYABLE_ERROR_MESSAGE;
   const normalizedProgressMessage = run.progress_message
     ? normalizeTurkishSystemCopy(run.progress_message)
     : null;
@@ -422,7 +429,7 @@ function SimulationCard({
       )}
       {run.error &&
         (isNonRetryableFailure ? (
-          <p className="simulation-card__error">{NON_RETRYABLE_ERROR_MESSAGE}</p>
+          <p className="simulation-card__error">{nonRetryableMessage}</p>
         ) : (
           <p className="simulation-card__error">Hata: {normalizedError}</p>
         ))}

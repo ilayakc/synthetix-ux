@@ -32,6 +32,7 @@ function baseAnalysis(overrides: Partial<PageAnalysisResponse> = {}): PageAnalys
     status: "queued",
     attempt_count: 0,
     error: null,
+    error_code: null,
     snapshot_version: "design-asset-snapshot-1",
     analyzer_version: null,
     source: "design_asset",

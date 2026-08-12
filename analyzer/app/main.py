@@ -63,7 +63,14 @@ async def analyze(
         raise HTTPException(status_code=400, detail=exc.reason) from exc
     except AnalysisError as exc:
         logger.warning("analiz basarisiz: %s", exc.reason)
-        raise HTTPException(status_code=502, detail=exc.reason) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                {"code": exc.code, "message": exc.reason}
+                if exc.code != "analysis_failed"
+                else exc.reason
+            ),
+        ) from exc
 
     return snapshot
 
@@ -100,6 +107,13 @@ async def analyze_device_network_endpoint(
         raise HTTPException(status_code=400, detail=exc.reason) from exc
     except AnalysisError as exc:
         logger.warning("ag/cihaz analizi basarisiz: %s", exc.reason)
-        raise HTTPException(status_code=502, detail=exc.reason) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                {"code": exc.code, "message": exc.reason}
+                if exc.code != "analysis_failed"
+                else exc.reason
+            ),
+        ) from exc
 
     return response

@@ -70,15 +70,24 @@ _DESIGN_ASSET_ALLOWED_FORMATS = image_safety.STANDARD_IMAGE_FORMATS
 # (ki bunlar zaten sentetik/ham-veri-icermeyen metinlerdir) API yanitina asla
 # dogrudan yansitilmaz; yalnizca WARNING seviyeli log'da tutulur.
 _SCREENSHOT_VALIDATION_FAILED_MESSAGE = "Ekran goruntusu guvenlik dogrulamasindan gecemedi"
+EMPTY_PAGE_SNAPSHOT_CODE = "empty_page_snapshot"
+ANALYZER_UNAVAILABLE_CODE = "analyzer_unavailable"
+ANALYZER_REJECTED_CODE = "analyzer_rejected"
+_ALLOWED_ANALYZER_ERROR_CODES = {EMPTY_PAGE_SNAPSHOT_CODE}
+EMPTY_PAGE_SNAPSHOT_MESSAGE = (
+    "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
+    "Site otomatik tarayicilara bos icerik donduruyor olabilir."
+)
 
 
 class AnalyzerResponseError(RuntimeError):
     """Analyzer HTTP yanitini retry kararinda durum koduyla birlikte tasir."""
 
-    def __init__(self, status_code: int, detail: str):
+    def __init__(self, status_code: int, detail: str, *, code: str | None = None):
         super().__init__(f"analyzer hatasi ({status_code}): {detail}")
         self.status_code = status_code
         self.detail = detail
+        self.code = code or ANALYZER_REJECTED_CODE
 
 
 def _now() -> datetime:
@@ -190,6 +199,8 @@ async def claim_next_queued(session: AsyncSession, limit: int = CLAIM_BATCH_SIZE
         analysis.status = PageAnalysisStatus.RUNNING
         analysis.started_at = _now()
         analysis.attempt_count += 1
+        analysis.error = None
+        analysis.error_code = None
     await session.flush()
     return analyses
 
@@ -233,10 +244,22 @@ async def _call_analyzer(client: httpx.AsyncClient, url: str) -> dict:
         )
         if response.status_code != 200:
             try:
-                detail = response.json().get("detail", response.text)
+                detail_payload = response.json().get("detail", response.text)
             except ValueError:
-                detail = response.text
-            raise AnalyzerResponseError(response.status_code, str(detail))
+                detail_payload = response.text
+            if isinstance(detail_payload, dict):
+                raw_code = detail_payload.get("code")
+                code = (
+                    raw_code
+                    if isinstance(raw_code, str) and raw_code in _ALLOWED_ANALYZER_ERROR_CODES
+                    else ANALYZER_REJECTED_CODE
+                )
+                message = detail_payload.get("message")
+                detail = message if isinstance(message, str) else "Analyzer istegi tamamlanamadi"
+            else:
+                code = None
+                detail = str(detail_payload)
+            raise AnalyzerResponseError(response.status_code, detail, code=code)
         return response.json()
 
 
@@ -264,7 +287,19 @@ async def _record_analyzer_failure(
 ) -> None:
     retryable = _is_retryable_analyzer_failure(exc)
     attempts_remaining = analysis.attempt_count < settings.page_analysis_max_attempts
-    analysis.error = str(exc)
+    if isinstance(exc, AnalyzerResponseError):
+        analysis.error_code = exc.code[:100]
+        # Yeni typed analyzer sozlesmesinde kullaniciya yalnizca bizim sabit,
+        # guvenli mesajimiz acilir. Eski analyzer surumlerinin duz metin
+        # yanitlari geriye uyumluluk icin mevcut bicimini korur.
+        analysis.error = (
+            EMPTY_PAGE_SNAPSHOT_MESSAGE
+            if exc.code == EMPTY_PAGE_SNAPSHOT_CODE
+            else str(exc)
+        )
+    else:
+        analysis.error_code = ANALYZER_UNAVAILABLE_CODE
+        analysis.error = str(exc)
     if retryable and attempts_remaining:
         analysis.status = PageAnalysisStatus.QUEUED
         analysis.started_at = None
@@ -372,6 +407,8 @@ async def _process_design_asset_source(session: AsyncSession, analysis: PageAnal
     # ama yerel OpenCV analizinden gelen visual_cta_candidates/synthetic_
     # attention_estimate DOLU yazilir (feature_source="visual_heuristic").
     analysis.features = features
+    analysis.error = None
+    analysis.error_code = None
     analysis.status = PageAnalysisStatus.SUCCEEDED
     analysis.finished_at = _now()
     await session.flush()

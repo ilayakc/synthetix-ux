@@ -96,6 +96,7 @@ TERMINAL_STATUSES = (SimulationStatus.SUCCEEDED, SimulationStatus.FAILED, Simula
 # `retryable=True` kalir - yalnizca BU spesifik, yapisal olarak duzelemeyen
 # durum icin `retryable=False` dondurulur.
 NETWORK_DEVICE_TEST_REQUIRES_URL_CODE = "network_device_test_requires_url"
+PAGE_ANALYSIS_EMPTY_SNAPSHOT_CODE = "page_analysis_empty_snapshot"
 
 NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE = (
     "Bu çalışma ekran görüntüsüyle Ağ ve cihaz testi seçildiği için yeniden denenemez. "
@@ -125,6 +126,9 @@ def classify_run_failure(run: SimulationRun) -> tuple[bool, str | None]:
     # yapisal olarak duzelemez) non-retryable isaretlenir.
     if "network_device_test" in modules and not url and source_type in ("screenshot", "ai_generated"):
         return False, NETWORK_DEVICE_TEST_REQUIRES_URL_CODE
+
+    if run.error == _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE:
+        return False, PAGE_ANALYSIS_EMPTY_SNAPSHOT_CODE
 
     return True, None
 
@@ -179,6 +183,10 @@ async def claim_next_queued_runs(session: AsyncSession, limit: int = CLAIM_BATCH
 
 
 _PAGE_ANALYSIS_FAILED_MESSAGE = "Bagli sayfa analizi basarisiz oldugu icin bu calistirma islenemedi"
+_PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE = (
+    "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
+    "Bu site otomatik analiz tarayicisina bos icerik donduruyor olabilir."
+)
 
 
 async def fail_runs_blocked_by_failed_page_analysis(
@@ -196,21 +204,26 @@ async def fail_runs_blocked_by_failed_page_analysis(
     release edilir.
     """
 
-    failed_page_analysis_ids = select(PageAnalysis.id).where(PageAnalysis.status == PageAnalysisStatus.FAILED)
     result = await session.execute(
-        select(SimulationRun)
+        select(SimulationRun, PageAnalysis.error_code)
+        .join(PageAnalysis, PageAnalysis.id == SimulationRun.page_analysis_id)
         .where(
             SimulationRun.status == SimulationStatus.QUEUED,
-            SimulationRun.page_analysis_id.in_(failed_page_analysis_ids),
+            PageAnalysis.status == PageAnalysisStatus.FAILED,
         )
         .order_by(SimulationRun.created_at)
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
-    runs = list(result.scalars().all())
-    for run in runs:
-        await _finalize_failed(session, run, error=_PAGE_ANALYSIS_FAILED_MESSAGE)
-    return len(runs)
+    rows = list(result.all())
+    for run, page_analysis_error_code in rows:
+        message = (
+            _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE
+            if page_analysis_error_code == "empty_page_snapshot"
+            else _PAGE_ANALYSIS_FAILED_MESSAGE
+        )
+        await _finalize_failed(session, run, error=message)
+    return len(rows)
 
 
 async def _is_cancel_requested(session: AsyncSession, run_id: uuid.UUID) -> bool:

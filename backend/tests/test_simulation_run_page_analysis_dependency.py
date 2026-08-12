@@ -114,6 +114,7 @@ async def _make_page_analysis(
     status: PageAnalysisStatus = PageAnalysisStatus.SUCCEEDED,
     features: dict | None = None,
     content_sha256: str | None = "a" * 64,
+    error_code: str | None = None,
 ) -> PageAnalysis:
     analysis = PageAnalysis(
         organization_id=organization.id,
@@ -128,6 +129,7 @@ async def _make_page_analysis(
         content_sha256=content_sha256,
         image_width=1366,
         image_height=900,
+        error_code=error_code,
     )
     session.add(analysis)
     await session.flush()
@@ -246,6 +248,49 @@ async def test_fail_runs_blocked_by_failed_page_analysis_is_idempotent(
 
     assert first == 1
     assert second == 0
+
+
+async def test_empty_snapshot_failure_is_specific_non_retryable_and_releases_chips(
+    session: AsyncSession, organization: Organization
+):
+    from app.models.billing import ChipReservationStatus
+    from app.services import chip_ledger
+
+    await chip_ledger.credit(session, organization.id, 100, "kredi")
+    launch_run_id = uuid.uuid4()
+    reservation = await chip_ledger.reserve_chips(
+        session,
+        organization.id,
+        10,
+        "test",
+        run_id=launch_run_id,
+        idempotency_key=f"empty-page:{launch_run_id}",
+    )
+    analysis = await _make_page_analysis(
+        session,
+        organization,
+        status=PageAnalysisStatus.FAILED,
+        features=None,
+        error_code="empty_page_snapshot",
+    )
+    run = await _make_run(
+        session,
+        organization,
+        page_analysis_id=analysis.id,
+        launch_run_id=launch_run_id,
+        chip_reservation_id=reservation.id,
+    )
+
+    assert await simulation_worker.fail_runs_blocked_by_failed_page_analysis(session) == 1
+    await session.refresh(run)
+    retryable, failure_code = simulation_worker.classify_run_failure(run)
+    assert run.status == SimulationStatus.FAILED
+    assert "bos icerik" in (run.error or "")
+    assert retryable is False
+    assert failure_code == "page_analysis_empty_snapshot"
+
+    await session.refresh(reservation)
+    assert reservation.status == ChipReservationStatus.RELEASED
 
 
 async def test_ab_one_side_page_analysis_failure_releases_full_group(

@@ -80,6 +80,9 @@ class PageAnalysis(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Ham HTTP/provider govdesi yerine yalnizca allowlist'li, makinece
+    # okunabilir hata sinifi saklanir (ornegin `empty_page_snapshot`).
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # --- Sonuc: surumlu page_feature_snapshot (bkz. analyzer/app/schemas.py) ---
     snapshot_version: Mapped[str | None] = mapped_column(String(100), nullable=True)

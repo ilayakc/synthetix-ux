@@ -146,6 +146,20 @@ describe("Simulations", () => {
     ).toBeInTheDocument();
   });
 
+  it("bos sayfa snapshot hatasinda anlasilir ve spesifik yonlendirme gosterir", async () => {
+    stubRuns([
+      baseRun({
+        failure_code: "page_analysis_empty_snapshot",
+        error: "ic hata ayrintisi",
+      }),
+    ]);
+    renderSimulations();
+
+    await waitFor(() => expect(screen.getByText(/Çalıştırma 11111111/)).toBeInTheDocument());
+    expect(screen.getByText(/boş içerik döndürüyor olabilir/)).toBeInTheDocument();
+    expect(screen.queryByText(/ic hata ayrintisi/)).not.toBeInTheDocument();
+  });
+
   it("retryable=true olan gecici hatada 'Yeniden dene' gosterir ve 'Yeni test oluştur' gostermez", async () => {
     stubRuns([
       baseRun({

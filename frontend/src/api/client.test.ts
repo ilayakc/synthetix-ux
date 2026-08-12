@@ -156,6 +156,7 @@ describe("page-analyses uc noktalari (Paket 4C+4D)", () => {
       status: "queued",
       attempt_count: 0,
       error: null,
+      error_code: null,
       snapshot_version: null,
       analyzer_version: null,
       source: null,

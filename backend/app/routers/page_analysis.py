@@ -67,6 +67,7 @@ class AnalysisResponse(BaseModel):
     status: str
     attempt_count: int
     error: str | None
+    error_code: str | None
     snapshot_version: str | None
     analyzer_version: str | None
     source: str | None
@@ -98,6 +99,7 @@ def _to_response(analysis: PageAnalysis) -> AnalysisResponse:
         status=analysis.status.value,
         attempt_count=analysis.attempt_count,
         error=analysis.error,
+        error_code=analysis.error_code,
         snapshot_version=analysis.snapshot_version,
         analyzer_version=analysis.analyzer_version,
         source=analysis.source,

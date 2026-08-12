@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # boyut guvenlik sinirini asmamak icin ekran goruntusunu sinirla.
     screenshot_max_height: int = 4000
     dynamic_content_settle_ms: int = 750
+    # Tamamen bos bir DOM/skeleton donen dinamik veya otomasyon-korumali
+    # sayfalarda hemen sahte bir "basarili" snapshot uretme. Ayni pasif DOM
+    # olcumunu sinirli sayida tekrarla; form/tiklama/reload yapilmaz.
+    empty_snapshot_max_checks: int = 3
+    empty_snapshot_retry_delay_ms: int = 1000
     # axe-core buyuk/karmasik DOM'larda sayfanin geri kalan analizini
     # engellememeli. Bu sure asilinca temel snapshot korunur ve on kontrol
     # acik bir "skipped" durumu + uyariyla raporlanir.

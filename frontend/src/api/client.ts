@@ -1590,6 +1590,7 @@ export interface PageAnalysisResponse {
   status: PageAnalysisStatus;
   attempt_count: number;
   error: string | null;
+  error_code: string | null;
   snapshot_version: string | null;
   analyzer_version: string | null;
   source: string | null;

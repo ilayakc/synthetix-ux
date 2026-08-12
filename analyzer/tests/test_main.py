@@ -109,6 +109,24 @@ def test_analysis_timeout_returns_502(monkeypatch):
     assert response.status_code == 502
 
 
+def test_empty_snapshot_returns_typed_safe_502(monkeypatch):
+    async def _raise_empty(_url: str):
+        raise AnalysisError("guvenli bos sayfa mesaji", code="empty_page_snapshot")
+
+    monkeypatch.setattr(main, "analyze_url", _raise_empty)
+    response = client.post(
+        "/internal/analyze",
+        json={"url": "https://example.com/", "authorization_confirmed": True},
+        headers=VALID_HEADERS,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "code": "empty_page_snapshot",
+        "message": "guvenli bos sayfa mesaji",
+    }
+
+
 def test_successful_analysis_returns_versioned_snapshot(monkeypatch):
     async def _fake_analyze(_url: str):
         return _fixture_snapshot()

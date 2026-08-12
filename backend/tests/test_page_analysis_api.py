@@ -79,6 +79,7 @@ def test_api_creates_queued_analysis_for_public_url(client: TestClient):
     body = response.json()
     assert body["status"] == "queued"
     assert body["has_screenshot"] is False
+    assert body["error_code"] is None
 
     fetched = client.get(f"/api/page-analyses/{body['id']}")
     assert fetched.status_code == 200

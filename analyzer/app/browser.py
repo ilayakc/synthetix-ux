@@ -50,14 +50,53 @@ from app.url_safety import UnsafeUrlError, is_blocked_ip, resolve_host_ips, vali
 logger = logging.getLogger("analyzer.browser")
 
 _semaphore = asyncio.Semaphore(settings.max_concurrent_analyses)
+EMPTY_PAGE_SNAPSHOT_CODE = "empty_page_snapshot"
+EMPTY_PAGE_SNAPSHOT_MESSAGE = (
+    "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
+    "Site otomatik tarayicilara bos icerik donduruyor olabilir."
+)
 
 
 class AnalysisError(Exception):
     """SSRF disi, calisma zamani analiz hatalari (timeout, yanit boyutu, motor hatasi)."""
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, code: str = "analysis_failed"):
         self.reason = reason
+        self.code = code
         super().__init__(reason)
+
+
+def _is_empty_page_snapshot(features: dict) -> bool:
+    """Bos headless/skeleton cevabini gercek, sade bir sayfadan ayirir.
+
+    Ancak baslik, gorunur metin ve tum etkilesim kanitlari birlikte yoksa
+    bos kabul edilir. Boylece yalnizca az icerikli veya image-only bir sayfa,
+    gercek bir basligi/kontrolu varsa yanlislikla reddedilmez.
+    """
+
+    text_stats = features.get("text_stats") or {}
+    controls = features.get("controls") or {}
+    return (
+        not str(features.get("title") or "").strip()
+        and int(text_stats.get("visible_text_char_count") or 0) == 0
+        and int(controls.get("link_count") or 0) == 0
+        and int(controls.get("button_count") or 0) == 0
+        and int(controls.get("form_field_count") or 0) == 0
+        and not (features.get("element_boxes") or [])
+    )
+
+
+async def _extract_features_with_bounded_readiness(page, capture_height: int) -> dict:
+    """Dinamik icerik icin pasif ve bounded DOM hazirlik kontrolu."""
+
+    max_checks = max(1, min(settings.empty_snapshot_max_checks, 5))
+    for check_index in range(max_checks):
+        features = await page.evaluate(_FEATURE_EXTRACTION_JS, capture_height)
+        if not _is_empty_page_snapshot(features):
+            return features
+        if check_index + 1 < max_checks:
+            await page.wait_for_timeout(max(0, settings.empty_snapshot_retry_delay_ms))
+    raise AnalysisError(EMPTY_PAGE_SNAPSHOT_MESSAGE, code=EMPTY_PAGE_SNAPSHOT_CODE)
 
 
 async def _validate_and_cache_host(hostname: str, validated_hosts: dict[str, bool]) -> None:
@@ -595,13 +634,16 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
             f"Sayfa {int(document_height)} px; ekran goruntusu guvenlik siniri nedeniyle {capture_height} px ile sinirlandi"
         )
 
+    try:
+        features = await _extract_features_with_bounded_readiness(page, capture_height)
+    except AnalysisError:
+        await context.close()
+        raise
     screenshot_bytes = await page.screenshot(
         type="png",
         animations="disabled",
         clip={"x": 0, "y": 0, "width": settings.viewport_width, "height": capture_height},
     )
-    features = await page.evaluate(_FEATURE_EXTRACTION_JS, capture_height)
-
     axe_response = await _run_accessibility_precheck(page, warnings)
 
     await context.close()

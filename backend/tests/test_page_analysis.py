@@ -415,6 +415,43 @@ async def test_process_analysis_requeues_transient_analyzer_502(
     assert "502" in analysis.error
 
 
+async def test_process_analysis_requeues_then_persists_typed_empty_snapshot_error(
+    session: AsyncSession, organization: Organization, monkeypatch
+):
+    monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
+    analysis = await _make_queued_analysis(session, organization)
+    analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 1
+    typed_error = {
+        "detail": {
+            "code": "empty_page_snapshot",
+            "message": "ham analyzer mesaji kullaniciya kopyalanmamalidir",
+        }
+    }
+
+    client = _mock_client(status_code=502, json_body=typed_error)
+    try:
+        await page_analysis_service.process_analysis(session, analysis, client=client)
+    finally:
+        await client.aclose()
+
+    assert analysis.status == PageAnalysisStatus.QUEUED
+    assert analysis.error_code == "empty_page_snapshot"
+    assert analysis.error == page_analysis_service.EMPTY_PAGE_SNAPSHOT_MESSAGE
+
+    analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 3
+    client = _mock_client(status_code=502, json_body=typed_error)
+    try:
+        await page_analysis_service.process_analysis(session, analysis, client=client)
+    finally:
+        await client.aclose()
+
+    assert analysis.status == PageAnalysisStatus.FAILED
+    assert analysis.error_code == "empty_page_snapshot"
+    assert analysis.finished_at is not None
+
+
 async def test_process_analysis_marks_failed_when_analyzer_rejects_oversized_response(
     session: AsyncSession, organization: Organization, monkeypatch
 ):

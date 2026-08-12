@@ -66,3 +66,52 @@ async def test_accessibility_runtime_error_keeps_snapshot_usable(monkeypatch):
     assert result["scan_status"] == "skipped"
     assert result["violations"] == []
     assert "tamamlanamadi" in warnings[0]
+
+
+def test_empty_page_snapshot_requires_all_meaningful_signals_to_be_absent():
+    empty = {
+        "title": "",
+        "text_stats": {"visible_text_char_count": 0},
+        "controls": {"link_count": 0, "button_count": 0, "form_field_count": 0},
+        "element_boxes": [],
+    }
+    assert browser._is_empty_page_snapshot(empty) is True
+
+    with_button = {**empty, "controls": {**empty["controls"], "button_count": 1}}
+    assert browser._is_empty_page_snapshot(with_button) is False
+
+    with_title = {**empty, "title": "Gorsel katalog"}
+    assert browser._is_empty_page_snapshot(with_title) is False
+
+
+@pytest.mark.asyncio
+async def test_empty_page_snapshot_is_checked_bounded_times_before_typed_failure(monkeypatch):
+    empty = {
+        "title": "",
+        "text_stats": {"visible_text_char_count": 0},
+        "controls": {"link_count": 0, "button_count": 0, "form_field_count": 0},
+        "element_boxes": [],
+    }
+
+    class _Page:
+        def __init__(self):
+            self.evaluate_count = 0
+            self.wait_count = 0
+
+        async def evaluate(self, _script, _capture_height):
+            self.evaluate_count += 1
+            return empty
+
+        async def wait_for_timeout(self, _delay):
+            self.wait_count += 1
+
+    monkeypatch.setattr(browser.settings, "empty_snapshot_max_checks", 3)
+    monkeypatch.setattr(browser.settings, "empty_snapshot_retry_delay_ms", 1)
+    page = _Page()
+
+    with pytest.raises(browser.AnalysisError) as exc_info:
+        await browser._extract_features_with_bounded_readiness(page, 900)
+
+    assert exc_info.value.code == browser.EMPTY_PAGE_SNAPSHOT_CODE
+    assert page.evaluate_count == 3
+    assert page.wait_count == 2
