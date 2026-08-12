@@ -49,6 +49,11 @@ _KIND_WEIGHTS: dict[str, float] = {
     "form_action": 1.0,
     "button": 0.85,
     "cta_link": 0.85,
+    # Gorsel (ekran goruntusu) adaylari icin sekil-tabanli turler (bkz.
+    # candidates._visual_kind) - eylem gorunumlu buton adaylari daha yuksek.
+    "visual_button": 0.85,
+    "visual_card": 0.5,
+    "visual_region": 0.4,
     "content_link": 0.5,
     "image_link": 0.45,
     "navigation_action": 0.4,

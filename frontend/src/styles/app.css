@@ -3767,30 +3767,40 @@
   box-shadow: inset 0 0 80px rgba(34, 197, 94, 0.08);
 }
 
+/* AI hotspot: radyal ısı lekesi (renk/opaklık/boyut skorla değişir - inline
+   stil ile). Ortadaki numara (öncelik) kartlarla eşleşir; tıklanabilir. */
 .ai-interaction-hotspot {
   position: absolute;
-  min-width: 12px;
-  min-height: 12px;
+  min-width: 16px;
+  min-height: 14px;
   padding: 0;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  border-radius: 10px;
-  cursor: default;
-  background: radial-gradient(
-    ellipse at center,
-    rgba(239, 68, 68, 0.94) 0%,
-    rgba(249, 115, 22, 0.78) 43%,
-    rgba(250, 204, 21, 0.3) 72%,
-    rgba(250, 204, 21, 0) 100%
-  );
-  box-shadow:
-    0 0 12px rgba(239, 68, 68, 0.9),
-    0 0 28px rgba(249, 115, 22, 0.58);
-  mix-blend-mode: screen;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai-interaction-hotspot__rank {
+  font-size: 12px;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.95),
+    0 0 2px rgba(0, 0, 0, 0.95);
+}
+
+.ai-interaction-hotspot--selected {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+  z-index: 6;
 }
 
 .ai-interaction-hotspot:focus-visible {
   outline: 3px solid #ffffff;
   outline-offset: 2px;
+  z-index: 6;
 }
 
 .ai-interaction-hotspot-cards {
@@ -3805,6 +3815,29 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.ai-interaction-hotspot-card--selected {
+  border-color: rgba(37, 99, 235, 0.9);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35);
+}
+
+.ai-interaction-hotspot-card__select {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.ai-interaction-hotspot-card__select:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.8);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .ai-interaction-hotspot-card h4 {
@@ -4027,39 +4060,74 @@
 /* CTA overlay kutulari: renk TEK BASINA anlam tasimaz - her tur AYRICA
    cizgi tipi (dashed/solid) ile ayirt edilir (bkz. erisilebilirlik
    gereksinimi, renk korlugu). */
+/* CTA kutuları ısı haritası renklerinin İÇİNDE kaybolmamalı: çift katmanlı,
+   yüksek kontrastlı sınır (dışta koyu gölge, içte parlak çizgi) hem açık hem
+   koyu görsellerde görünür kalır. Adaylar kesikli çerçeve; kullanıcının
+   onayladığı CTA düz çizgi ile ayrılır (AI seçilen hotspot'lar ayrı ısı
+   lekesidir - farklı stil). */
 .cta-overlay-box {
   position: absolute;
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 0;
-  cursor: default;
+  cursor: pointer;
   background: transparent;
 }
 
 .cta-overlay-box--dom-candidate {
-  border: 2px dashed rgba(37, 99, 235, 0.9);
-  background-color: rgba(37, 99, 235, 0.08);
+  border: 3px dashed #00e5ff;
+  background-color: rgba(0, 229, 255, 0.1);
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.9),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6);
 }
 
 .cta-overlay-box--visual-candidate {
-  border: 2px dashed rgba(217, 119, 6, 0.9);
-  background-color: rgba(217, 119, 6, 0.08);
+  border: 3px dashed #d8b4fe;
+  background-color: rgba(192, 132, 252, 0.14);
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.9),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.6);
 }
 
 .cta-overlay-box--confirmed {
-  border: 3px solid rgba(124, 58, 237, 0.95);
-  background-color: rgba(124, 58, 237, 0.12);
+  border: 3px solid #ffffff;
+  background-color: rgba(124, 58, 237, 0.18);
+  box-shadow:
+    0 0 0 2px rgba(124, 58, 237, 0.95),
+    0 0 0 4px rgba(0, 0, 0, 0.75);
+}
+
+/* Kutunun sol üstünde opak, okunabilir numara rozeti (CTA 1, CTA 2 ...).
+   Kutunun İÇİNDE, sol üste sabitlenir; böylece görselin en üstündeki kutularda
+   bile kırpılmadan görünür kalır. */
+.cta-overlay-box__badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #111827;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 3px 0 4px 0;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .cta-overlay-box--focused {
   outline: 2px solid #ffffff;
   outline-offset: 1px;
   box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.5);
+  z-index: 7;
 }
 
 .cta-overlay-box:focus-visible {
   outline: 2px solid #ffffff;
   outline-offset: 1px;
   box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.5);
+  z-index: 7;
 }
 
 .cta-overlay-legend__swatch {

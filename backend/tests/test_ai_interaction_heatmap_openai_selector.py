@@ -1,6 +1,8 @@
+import io
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 from app.services.ai_interaction_heatmap.openai_selector import InteractionHeatmapOpenAISelector
 from app.services.ai_interaction_heatmap.schemas import (
@@ -10,6 +12,13 @@ from app.services.ai_interaction_heatmap.schemas import (
     AIInteractionOutput,
     InteractionCandidate,
 )
+
+
+def _png_bytes(width: int = 400, height: int = 800) -> bytes:
+    img = Image.new("RGB", (width, height), (238, 238, 238))
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 class _FakeResponses:
@@ -79,6 +88,33 @@ async def test_gpt_terra_receives_screenshot_and_persona_distribution():
     assert any(item["type"] == "input_image" for item in content)
     text_item = next(item for item in content if item["type"] == "input_text")
     assert '"persona_distribution": {"mobile": 0.7, "desktop": 0.3}' in text_item["text"]
+
+
+@pytest.mark.asyncio
+async def test_vision_request_includes_clean_and_numbered_overlay_images():
+    """Test 1/2: gorsel destekli modele GERCEK iki goruntu gonderilir - temiz
+    ekran goruntusu + numarali aday overlay - ve candidate view marker_number icerir.
+    (URL ve screenshot kaynagi ayni kod yolunu kullanir; fark aday etiketleridir.)"""
+
+    selector, responses = _selector()  # gpt-5.6-terra -> gorsel destekli
+    result = await selector.select(
+        candidates=[_candidate()],
+        target_task="Hesap oluştur",
+        target_audience=None,
+        persona_distribution=None,
+        confirmed_candidate_id=None,
+        screenshot_data=_png_bytes(),
+        screenshot_content_type="image/png",
+    )
+
+    assert result.method == METHOD_OPENAI_VISION_SELECTION
+    content = responses.kwargs["input"][1]["content"]
+    images = [item for item in content if item["type"] == "input_image"]
+    assert len(images) == 2, "temiz goruntu + numarali overlay gonderilmeli"
+    # Ikinci goruntu numarali overlay PNG'sidir.
+    assert images[1]["image_url"].startswith("data:image/png;base64,")
+    text = next(item for item in content if item["type"] == "input_text")["text"]
+    assert '"marker_number": 1' in text
 
 
 @pytest.mark.asyncio

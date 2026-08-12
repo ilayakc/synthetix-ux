@@ -759,163 +759,6 @@ function HeatmapRegionMarker({
   );
 }
 
-// Tıklama haritası semantik başlık/gövde bölgelerine çizilmez. Gerçek DOM
-// koordinatı bulunan buton ve bağlantı adayları önem büyüklüğü, merkezilik ve
-// ilk ekran konumuyla sıralanır. Böylece bütün CTA'ların toplam skoru tek bir
-// `buttons[0]` kutusuna aktarılmaz ve başlık gibi tıklanamaz alanlar kırmızı
-// gösterilmez.
-function compactRepeatedLabel(value: string): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  const words = normalized.split(" ");
-  if (words.length >= 2 && words.length % 2 === 0) {
-    const midpoint = words.length / 2;
-    const first = words.slice(0, midpoint).join(" ");
-    const second = words.slice(midpoint).join(" ");
-    if (first.localeCompare(second, "tr", { sensitivity: "base" }) === 0) return first;
-  }
-  return normalized;
-}
-
-function deriveInteractiveClickRegions(
-  boxes: ReportCtaOverlaySection["boxes"],
-  targetTask?: string | null,
-): ReportHeatmapRegion[] {
-  const taskTokens = new Set(
-    (targetTask ?? "")
-      .toLocaleLowerCase("tr-TR")
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/ı/g, "i")
-      .split(/[^a-z0-9]+/)
-      .filter((token) => token.length >= 4),
-  );
-  const accountIntent = [...taskTokens].some((token) =>
-    ["hesap", "uyelik", "kayit", "olustur"].includes(token),
-  );
-  if (accountIntent) {
-    ["hesap", "uyelik", "kayit", "uye", "olustur"].forEach((token) => taskTokens.add(token));
-  }
-  const candidates = dedupeCtaBoxes(boxes)
-    .filter(
-      (box) =>
-        Number.isFinite(box.x) &&
-        Number.isFinite(box.y) &&
-        Number.isFinite(box.w) &&
-        Number.isFinite(box.h) &&
-        box.w > 0 &&
-        box.h > 0,
-    )
-    .map((box) => {
-      const area = Math.max(0.000001, box.w * box.h);
-      const aspect = box.h > 0 ? box.w / box.h : Number.POSITIVE_INFINITY;
-      const inferredKind =
-        box.interaction_kind ??
-        (box.w > 0.55 || aspect > 16
-          ? "container_link"
-          : box.w <= 0.011 && box.h <= 0.016
-            ? "pagination_control"
-            : box.y < 0.14
-              ? "navigation_link"
-              : "content_link");
-      const looksLikeLargeContentCard =
-        box.classification !== "user_confirmed_cta" &&
-        (inferredKind === "cta_link" || inferredKind === "content_link") &&
-        (box.h >= 0.065 || box.w * box.h >= 0.018);
-      const effectiveKind =
-        looksLikeLargeContentCard
-          ? "image_link"
-          : inferredKind === "content_link" && box.w >= 0.1 && box.h >= 0.025 && box.y >= 0.14
-          ? "cta_link"
-          : inferredKind;
-      const kindBias =
-        {
-          form_action: 4.2,
-          button: 3.2,
-          cta_link: 3.2,
-          content_link: 1.7,
-          image_link: 0.35,
-          navigation_action: 1.15,
-          navigation_link: 0.55,
-          pagination_control: 0.18,
-          container_link: 0,
-        }[effectiveKind] ?? 1;
-      const centerX = box.x + box.w / 2;
-      const centerDistance = Math.min(1, Math.abs(centerX - 0.5) / 0.5);
-      const centerBias = 1.15 - centerDistance * 0.35;
-      const headerBias = box.y < 0.14 ? 0.72 : 1;
-      const aboveFoldBias = box.y >= 0.14 && box.y < 0.65 ? 1.12 : 1;
-      const confirmedBias = box.classification === "user_confirmed_cta" ? 1.35 : 1;
-      const normalizedLabel = (box.label ?? "")
-        .toLocaleLowerCase("tr-TR")
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/ı/g, "i");
-      const labelTokens = new Set(
-        normalizedLabel.split(/[^a-z0-9]+/).filter((token) => token.length >= 4),
-      );
-      const strongActionMatch =
-        accountIntent && /(uye ol|kayit ol|hesap olustur|hesap ac)/.test(normalizedLabel);
-      const taskMatched =
-        taskTokens.size > 0 && [...taskTokens].some((token) => labelTokens.has(token));
-      const taskMatchBias = strongActionMatch ? 10 : taskMatched ? 3.5 : 1;
-      const deepPageBias = box.y > 0.65 && !taskMatched ? 0.28 : 1;
-      return {
-        box,
-        effectiveKind,
-        taskMatched,
-        strongActionMatch,
-        weight:
-          Math.min(0.08, Math.sqrt(area)) *
-          kindBias *
-          centerBias *
-          headerBias *
-          aboveFoldBias *
-          confirmedBias *
-          taskMatchBias *
-          deepPageBias,
-      };
-    })
-    .filter((candidate) => candidate.weight > 0)
-    .sort((a, b) => b.weight - a.weight)
-    .slice(0, 6);
-
-  const totalWeight = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
-  if (totalWeight <= 0) return [];
-
-  return candidates.map((candidate, index) => {
-    const score = candidate.weight / totalWeight;
-    const canBeStrongSignal =
-      candidate.box.classification === "user_confirmed_cta" ||
-      candidate.strongActionMatch ||
-      (["form_action", "button", "cta_link"].includes(candidate.effectiveKind) &&
-        (candidate.box.y <= 0.65 || candidate.taskMatched));
-    return {
-      key: `interactive-${index}`,
-      label:
-        candidate.box.classification === "user_confirmed_cta"
-          ? "Sizin seçtiğiniz CTA"
-          : candidate.box.classification === "dom_interactive_candidate" &&
-              candidate.box.label &&
-              candidate.box.label !== "DOM etkileşimli aday"
-              ? compactRepeatedLabel(candidate.box.label)
-            : index === 0
-              ? "Birincil etkileşim alanı"
-              : `Etkileşim alanı ${index + 1}`,
-      score,
-      // Etiket, ekranda gösterilen göreli pay ile aynı skordan türetilir.
-      // Düşük güvenli navigasyon/carousel adayları zaten ağırlık aşamasında
-      // aşağı çekildiği için ikinci kez cezalandırılmaz.
-      level: canBeStrongSignal ? scoreToLevel(score) : "low",
-      box: {
-        x_pct: candidate.box.x * 100,
-        y_pct: candidate.box.y * 100,
-        width_pct: candidate.box.w * 100,
-        height_pct: candidate.box.h * 100,
-      },
-    };
-  });
-}
-
 // Piksel-tabanli gercek OpenCV grid hucresi (screenshot/AI kaynagi) -
 // bolge-tabanli `HeatmapRegionMarker`dan (5 isimli DOM bolgesi) BILEREK
 // AYRI bir bilesendir: farkli veri sekli (yogunluk grid'i), etkilesimli
@@ -1091,17 +934,34 @@ function ctaShortLabels(boxes: ReportCtaOverlayBox[]): Map<ReportCtaOverlayBox, 
   return labels;
 }
 
+// Görselde her kutunun sol üstünde gösterilecek okunabilir numara. Kullanıcının
+// onayladığı CTA numara yerine ✓ ile işaretlenir; adaylar 1'den başlayarak
+// numaralandırılır (bkz. plan "CTA BÖLGELERİ" - "Kutunun sol üstünde CTA 1...").
+function ctaBoxNumbers(boxes: ReportCtaOverlayBox[]): Map<ReportCtaOverlayBox, string> {
+  const numbers = new Map<ReportCtaOverlayBox, string>();
+  let candidateIndex = 0;
+  for (const box of boxes) {
+    if (box.classification === "user_confirmed_cta") {
+      numbers.set(box, "✓");
+    } else {
+      candidateIndex += 1;
+      numbers.set(box, String(candidateIndex));
+    }
+  }
+  return numbers;
+}
+
 function CtaOverlayBoxMarker({
   box,
   shortLabel,
-  layerVisible,
+  ctaNumber,
   focused,
   onFocus,
   onBlur,
 }: {
   box: ReportCtaOverlayBox;
   shortLabel: string;
-  layerVisible: boolean;
+  ctaNumber: string | null;
   focused: boolean;
   onFocus: () => void;
   onBlur: () => void;
@@ -1109,6 +969,7 @@ function CtaOverlayBoxMarker({
   const scoreText =
     box.heuristic_score != null ? ` (aday sıralama skoru: ${box.heuristic_score.toFixed(2)})` : "";
   const accessibleLabel = `${shortLabel}: ${box.label}${scoreText}`;
+  const badgeText = ctaNumber === "✓" ? "✓" : ctaNumber != null ? `CTA ${ctaNumber}` : shortLabel;
   return (
     <button
       type="button"
@@ -1118,7 +979,6 @@ function CtaOverlayBoxMarker({
         top: `${box.y * 100}%`,
         width: `${box.w * 100}%`,
         height: `${box.h * 100}%`,
-        visibility: layerVisible ? "visible" : "hidden",
       }}
       aria-label={accessibleLabel}
       title={accessibleLabel}
@@ -1126,7 +986,11 @@ function CtaOverlayBoxMarker({
       onBlur={onBlur}
       onMouseEnter={onFocus}
       onMouseLeave={onBlur}
-    />
+    >
+      <span className="cta-overlay-box__badge" aria-hidden="true">
+        {badgeText}
+      </span>
+    </button>
   );
 }
 
@@ -1207,17 +1071,14 @@ function VisualReportPanel({
   headingId,
   title,
   sourceType,
-  targetTask,
 }: {
   heatmap: ReportHeatmapSection;
   ctaOverlay: ReportCtaOverlaySection;
   headingId: string;
   title: string;
   sourceType?: string | null;
-  targetTask?: string | null;
 }) {
   const [activeTab, setActiveTab] = useState<"visual" | "table">("visual");
-  const [attentionMode, setAttentionMode] = useState<AttentionMode>("click");
   const [backgroundMuted, setBackgroundMuted] = useState(true);
   // CTA kutuları ısı haritasından farklı, sezgisel bir teknik katmandır. Ana
   // görseli kalabalıklaştırmaması için yalnızca kullanıcı isterse açılır.
@@ -1229,36 +1090,25 @@ function VisualReportPanel({
   const panelVisualId = `${idPrefix}-panel-visual`;
   const panelTableId = `${idPrefix}-panel-table`;
 
+  // "Görsel dikkat tahmini" görünümü YALNIZCA görsel odak/dikkat tahminini
+  // gösterir. DOM/heuristik "Sentetik tıklama eğilimi" alt seçeneği kaldırıldı;
+  // tıklama tahmini artık yalnızca "AI tıklama tahmini" görünümünde üretilir
+  // (bkz. AiInteractionHeatmapPanel) ve onunla rekabet eden ikinci bir tıklama
+  // haritası burada gösterilmez.
   const isVisualOverlay = heatmap.overlay_kind === "synthetic_visual_attention";
   const visualCells = heatmap.visual_cells ?? [];
   const gazeRegions = deriveHeatmapRegions(heatmap.regions, heatmap.grid);
-  const interactiveClickRegions = deriveInteractiveClickRegions(ctaOverlay.boxes, targetTask);
-  const semanticClickRegions = deriveHeatmapRegions(
-    heatmap.click_regions,
-    heatmap.click_grid ?? null,
-  );
-  // DOM/URL raporunda gerçek etkileşim kutusu yoksa semantik başlık/gövde
-  // bölgelerine düşüp onları tıklanabilir gibi göstermeyiz. Semantik fallback
-  // yalnızca DOM dışı legacy veri biçimleri için korunur.
-  const clickRegions =
-    heatmap.feature_source === "dom"
-      ? interactiveClickRegions
-      : interactiveClickRegions.length > 0
-        ? interactiveClickRegions
-        : semanticClickRegions;
-  const hasClickEstimate = clickRegions.length > 0;
   const hasGazeData = isVisualOverlay
     ? Boolean(heatmap.available && visualCells.length > 0)
     : Boolean(heatmap.available && heatmap.grid && heatmap.grid.length > 0);
-  const displayedAttentionMode: AttentionMode =
-    attentionMode === "click" && hasClickEstimate ? "click" : "gaze";
-  const regions = displayedAttentionMode === "click" ? clickRegions : gazeRegions;
-  const hasAttentionData = hasGazeData || hasClickEstimate;
+  const regions = gazeRegions;
+  const hasAttentionData = hasGazeData;
   const hasCtaData = Boolean(ctaOverlay.available && ctaOverlay.boxes.length > 0);
   const hasAnyData = hasAttentionData || hasCtaData;
 
   const ctaVisible = useCtaVisibleSet(ctaOverlay.boxes);
   const ctaShortLabelMap = ctaShortLabels(ctaVisible.allBoxes);
+  const ctaNumberMap = ctaBoxNumbers(ctaVisible.allBoxes);
 
   const screenshotUrl = heatmap.screenshot_url ?? ctaOverlay.screenshot_url ?? null;
   const imageAvailable = Boolean(screenshotUrl);
@@ -1297,9 +1147,7 @@ function VisualReportPanel({
                 "bu nedenle yalnızca erişilebilir tablo/liste görünümü gösteriliyor."}
           </p>
           {hasAttentionData &&
-            (displayedAttentionMode === "click" ? (
-              <HeatmapAccessibleTable regions={clickRegions} />
-            ) : isVisualOverlay ? (
+            (isVisualOverlay ? (
               <VisualAttentionAccessibleTable cells={visualCells} />
             ) : (
               <HeatmapAccessibleTable regions={gazeRegions} />
@@ -1343,37 +1191,12 @@ function VisualReportPanel({
 
           {activeTab === "visual" && (
             <div role="tabpanel" id={panelVisualId} aria-labelledby={tabVisualId}>
-              {hasGazeData && hasClickEstimate && (
-                <div
-                  className="attention-mode-switch"
-                  role="group"
-                  aria-label="Sentetik analiz görünümü"
-                >
-                  <button
-                    type="button"
-                    className={`report-tab${attentionMode === "click" ? " report-tab--active" : ""}`}
-                    aria-pressed={attentionMode === "click"}
-                    onClick={() => setAttentionMode("click")}
-                  >
-                    Sentetik tıklama eğilimi
-                  </button>
-                  <button
-                    type="button"
-                    className={`report-tab${attentionMode === "gaze" ? " report-tab--active" : ""}`}
-                    aria-pressed={attentionMode === "gaze"}
-                    onClick={() => setAttentionMode("gaze")}
-                  >
-                    Görsel odak haritası
-                  </button>
-                </div>
-              )}
-              {hasAttentionData && hasClickEstimate && (
+              {hasAttentionData && (
                 <div className="attention-mode-explanation" aria-live="polite">
-                  <strong>{attentionMode === "click" ? "Eylem tahmini" : "Dikkat tahmini"}</strong>
+                  <strong>Görsel dikkat tahmini</strong>
                   <span>
-                    {displayedAttentionMode === "click"
-                      ? "Buton, bağlantı ve etkileşimli alanlarda beklenen tıklama eğilimini gösterir."
-                      : "Renk, kontrast, boyut ve yerleşimin bakışı çekmesi beklenen alanları gösterir."}
+                    Renk, kontrast, boyut ve yerleşimin bakışı çekmesi beklenen alanları gösterir.
+                    Tıklama tahmini için "AI tıklama tahmini" görünümünü kullanın.
                   </span>
                 </div>
               )}
@@ -1402,12 +1225,8 @@ function VisualReportPanel({
 
               {hasAttentionData && (
                 <HeatmapEvidenceSummary
-                  mode={displayedAttentionMode}
-                  featureSource={
-                    displayedAttentionMode === "click"
-                      ? ctaOverlay.feature_source
-                      : heatmap.feature_source
-                  }
+                  mode="gaze"
+                  featureSource={heatmap.feature_source}
                   hasConfirmedCta={ctaOverlay.boxes.some(
                     (box) => box.classification === "user_confirmed_cta",
                   )}
@@ -1426,30 +1245,28 @@ function VisualReportPanel({
                   />
                   {hasAttentionData && (
                     <div
-                      className={`heatmap-base-layer heatmap-base-layer--${displayedAttentionMode}`}
+                      className="heatmap-base-layer heatmap-base-layer--gaze"
                       aria-hidden="true"
                       title="Sayfanın düşük yoğunluklu temel alanı"
                     />
                   )}
+                  {/* Katman sırası: ekran görüntüsü → ısı haritası → CTA sınırları → etiketler */}
                   {hasAttentionData &&
-                    (displayedAttentionMode === "click"
-                      ? clickRegions.map((region) => (
-                          <HeatmapRegionMarker key={region.key} region={region} mode="click" />
+                    (isVisualOverlay
+                      ? visualCells.map((cell, index) => (
+                          <VisualAttentionCellMarker key={index} cell={cell} />
                         ))
-                      : isVisualOverlay
-                        ? visualCells.map((cell, index) => (
-                            <VisualAttentionCellMarker key={index} cell={cell} />
-                          ))
-                        : gazeRegions.map((region) => (
-                            <HeatmapRegionMarker key={region.key} region={region} mode="gaze" />
-                          )))}
+                      : gazeRegions.map((region) => (
+                          <HeatmapRegionMarker key={region.key} region={region} mode="gaze" />
+                        )))}
                   {hasCtaData &&
+                    ctaLayerVisible &&
                     ctaVisible.visible.map((box, index) => (
                       <CtaOverlayBoxMarker
                         key={index}
                         box={box}
                         shortLabel={ctaShortLabelMap.get(box) ?? box.label}
-                        layerVisible={ctaLayerVisible}
+                        ctaNumber={ctaNumberMap.get(box) ?? null}
                         focused={focusedCtaIndex === index}
                         onFocus={() => setFocusedCtaIndex(index)}
                         onBlur={() => setFocusedCtaIndex(null)}
@@ -1457,9 +1274,7 @@ function VisualReportPanel({
                     ))}
                 </div>
                 <div className="heatmap-legends-stack">
-                  {hasAttentionData && (displayedAttentionMode === "click" || !isVisualOverlay) && (
-                    <HeatmapLegend mode={displayedAttentionMode} />
-                  )}
+                  {hasAttentionData && !isVisualOverlay && <HeatmapLegend mode="gaze" />}
                   {hasCtaData && ctaLayerVisible && <CtaOverlayLegend boxes={ctaVisible.visible} />}
                 </div>
               </div>
@@ -1475,7 +1290,7 @@ function VisualReportPanel({
               )}
               <HeatmapInsights
                 regions={regions}
-                mode={displayedAttentionMode}
+                mode="gaze"
                 ctaCount={ctaVisible.total}
               />
             </div>
@@ -1484,9 +1299,7 @@ function VisualReportPanel({
           {activeTab === "table" && (
             <div role="tabpanel" id={panelTableId} aria-labelledby={tabTableId}>
               {hasAttentionData &&
-                (displayedAttentionMode === "click" ? (
-                  <HeatmapAccessibleTable regions={clickRegions} />
-                ) : isVisualOverlay ? (
+                (isVisualOverlay ? (
                   <VisualAttentionAccessibleTable cells={visualCells} />
                 ) : (
                   <HeatmapAccessibleTable regions={gazeRegions} />
@@ -1530,54 +1343,146 @@ const AI_HEATMAP_RELEVANCE_LABELS: Record<ReportInteractionHeatmapHotspot["task_
   none: "Görevle eşleşmiyor",
 };
 
+// AI olasılık skoru -> yüksek (kırmızı) / orta (turuncu-sarı) / düşük (yeşil).
+// Renk TEK BAŞINA anlam taşımaz; her hotspot kartında sayısal skor + güven +
+// görev ilişkisi metinle de gösterilir.
+function aiHotspotLevel(score: number): ReportHeatmapLevel {
+  if (score >= 0.66) return "high";
+  if (score >= 0.4) return "medium";
+  return "low";
+}
+
+// Görsel analiz gerçekten YAPILDI mı? Yöntem "openai_vision_candidate_selection"
+// ise model temiz görüntü + numaralı overlay ile analiz etti; "openai_candidate_
+// selection" ise model görüntüyü desteklemedi (yalnızca DOM/çıkarılmış özellik) -
+// bu durumda "görsel analiz edildi" DENMEZ.
+function aiVisionUsed(section: ReportInteractionHeatmapSection | undefined): boolean {
+  return section?.method === "openai_vision_candidate_selection";
+}
+
+// Sağlayıcı hatasının ham içeriği kullanıcıya gösterilmez; yalnızca güvenli,
+// tiplenmiş `error_code` -> anlaşılır bir duruma eşlenir (queued/running/
+// succeeded/empty/failed/provider_unavailable/unsupported_vision_model/
+// invalid_provider_output).
+type AiHeatmapState =
+  | "not_requested"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "empty"
+  | "failed"
+  | "provider_unavailable"
+  | "invalid_provider_output";
+
+const AI_PROVIDER_UNAVAILABLE_CODES = new Set([
+  "provider_unavailable",
+  "provider_authentication_error",
+  "provider_permission_error",
+  "provider_configuration",
+  "provider_invalid_request",
+]);
+const AI_INVALID_OUTPUT_CODES = new Set(["provider_invalid_output", "output_validation_failed"]);
+
+function resolveAiHeatmapState(section: ReportInteractionHeatmapSection | undefined): AiHeatmapState {
+  if (!section || !section.requested) return "not_requested";
+  if (section.status === "queued") return "queued";
+  if (section.status === "running") return "running";
+  if (section.status === "succeeded") {
+    return (section.hotspots?.length ?? 0) > 0 ? "succeeded" : "empty";
+  }
+  if (section.status === "failed") {
+    const code = section.error_code ?? "";
+    if (AI_INVALID_OUTPUT_CODES.has(code)) return "invalid_provider_output";
+    if (AI_PROVIDER_UNAVAILABLE_CODES.has(code)) return "provider_unavailable";
+    return "failed";
+  }
+  return "not_requested";
+}
+
 function AiInteractionHotspotMarker({
   hotspot,
+  rank,
+  selected,
+  onSelect,
 }: {
   hotspot: ReportInteractionHeatmapHotspot;
+  rank: number;
+  selected: boolean;
+  onSelect: () => void;
 }) {
-  const left = Math.max(0, Math.min(100, hotspot.x * 100));
-  const top = Math.max(0, Math.min(100, hotspot.y * 100));
-  const width = Math.max(1, Math.min(100 - left, hotspot.w * 100));
-  const height = Math.max(1, Math.min(100 - top, hotspot.h * 100));
-  const label = `${hotspot.label}: AI olasılık skoru %${Math.round(hotspot.score * 100)}`;
+  const level = aiHotspotLevel(hotspot.score);
+  const color = HEATMAP_LEVEL_COLORS[level];
+  // Nokta boyutu/opaklığı AI skoruna göre değişir; küçük butonlar da görünür
+  // kalması için minimum boyut uygulanır. Yüzde tabanlı olduğu için görsel
+  // yeniden boyutlandığında koordinatlar doğru ölçeklenir.
+  const sizeBoost = 0.9 + hotspot.score * 0.6;
+  const width = Math.min(34, Math.max(6, hotspot.w * 100 * sizeBoost));
+  const height = Math.min(26, Math.max(5, hotspot.h * 100 * (sizeBoost + 0.5)));
+  const centerX = (hotspot.x + hotspot.w / 2) * 100;
+  const centerY = (hotspot.y + hotspot.h / 2) * 100;
+  const left = Math.max(0, Math.min(100 - width, centerX - width / 2));
+  const top = Math.max(0, Math.min(100 - height, centerY - height / 2));
+  const opacity = Math.min(0.95, 0.5 + hotspot.score * 0.5);
+  const label =
+    `AI hotspot ${rank}: ${hotspot.label} — olasılık skoru %${Math.round(hotspot.score * 100)}, ` +
+    `${AI_HEATMAP_CONFIDENCE_LABELS[hotspot.confidence]}, ${AI_HEATMAP_RELEVANCE_LABELS[hotspot.task_relevance]}`;
   return (
     <button
       type="button"
-      className="ai-interaction-hotspot"
+      className={`ai-interaction-hotspot ai-interaction-hotspot--${level}${selected ? " ai-interaction-hotspot--selected" : ""}`}
       style={{
         left: `${left}%`,
         top: `${top}%`,
         width: `${width}%`,
         height: `${height}%`,
-        opacity: Math.max(0.55, hotspot.score),
+        background: `radial-gradient(ellipse at center, rgba(${color}, ${opacity}) 0%, rgba(${color}, ${opacity * 0.72}) 42%, rgba(${color}, ${opacity * 0.34}) 70%, rgba(${color}, 0) 100%)`,
+        boxShadow: `0 0 14px rgba(${color}, ${opacity}), 0 0 30px rgba(${color}, ${opacity * 0.6})`,
       }}
       aria-label={label}
+      aria-pressed={selected}
       title={label}
-    />
+      onClick={onSelect}
+    >
+      <span className="ai-interaction-hotspot__rank" aria-hidden="true">
+        {rank}
+      </span>
+    </button>
   );
 }
 
 function AiInteractionHeatmapPanel({
   section,
+  ctaOverlay,
   headingId,
   title,
   sourceType,
 }: {
   section: ReportInteractionHeatmapSection | undefined;
+  ctaOverlay?: ReportCtaOverlaySection;
   headingId: string;
   title: string;
   sourceType?: string | null;
 }) {
-  const requested = Boolean(section?.requested);
-  const status = section?.status ?? "not_requested";
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [ctaLayerVisible, setCtaLayerVisible] = useState(false);
+  const [focusedCtaIndex, setFocusedCtaIndex] = useState<number | null>(null);
+
+  const state = resolveAiHeatmapState(section);
   const hotspots = section?.hotspots ?? [];
   const hasMap = Boolean(
-    status === "succeeded" &&
+    state === "succeeded" &&
       section?.available &&
       section.coordinates_available &&
       section.screenshot_url &&
       hotspots.length > 0,
   );
+  const visionUsed = aiVisionUsed(section);
+
+  const ctaBoxes = ctaOverlay?.boxes ?? [];
+  const ctaVisible = useCtaVisibleSet(ctaBoxes);
+  const ctaNumberMap = ctaBoxNumbers(ctaVisible.allBoxes);
+  const ctaShortLabelMap = ctaShortLabels(ctaVisible.allBoxes);
+  const hasCtaData = Boolean(ctaOverlay?.available && ctaBoxes.length > 0 && ctaOverlay?.screenshot_url);
 
   return (
     <section className="report-section" aria-labelledby={headingId}>
@@ -1595,64 +1500,171 @@ function AiInteractionHeatmapPanel({
         {normalizeTurkishSystemCopy(section?.disclaimer ?? AI_INTERACTION_HEATMAP_DISCLAIMER)}
       </p>
 
-      {!requested && (
+      {state === "not_requested" && (
         <div className="report-heatmap-empty">
           <p>Bu çalışma için AI tıklama tahmini modülü seçilmedi.</p>
         </div>
       )}
 
-      {requested && (status === "queued" || status === "running") && (
+      {(state === "queued" || state === "running") && (
         <p className="auth-notice" role="status">
-          {status === "queued" ? "AI tıklama tahmini sıraya alındı." : "AI tıklama tahmini hazırlanıyor."}{" "}
+          {state === "queued"
+            ? "AI tıklama tahmini sıraya alındı."
+            : "AI görsel ve etkileşim alanlarını değerlendiriyor."}{" "}
           {section?.status_note && normalizeTurkishSystemCopy(section.status_note)}
         </p>
       )}
 
-      {requested && status === "failed" && (
+      {state === "provider_unavailable" && (
         <p className="auth-error" role="alert">
-          AI tıklama tahmini üretilemedi. Deterministik bir sonuç AI çıktısı gibi gösterilmedi.
-          {section?.status_note ? ` ${normalizeTurkishSystemCopy(section.status_note)}` : ""}
+          AI tıklama tahmini şu anda üretilemiyor: yapay zeka sağlayıcısına ulaşılamadı veya
+          yapılandırma tamamlanmadı. Deterministik bir sonuç AI çıktısı gibi gösterilmedi.
         </p>
       )}
 
-      {requested && status === "succeeded" && (
+      {state === "invalid_provider_output" && (
+        <p className="auth-error" role="alert">
+          AI tıklama tahmini üretilemedi: sağlayıcı çıktısı doğrulama kurallarını karşılamadı
+          (yalnızca gerçek aday alanları kabul edilir). Deterministik bir sonuç AI çıktısı gibi
+          gösterilmedi.
+        </p>
+      )}
+
+      {state === "failed" && (
+        <p className="auth-error" role="alert">
+          AI tıklama tahmini bu çalışma için üretilemedi. Deterministik bir sonuç AI çıktısı gibi
+          gösterilmedi. Yeni bir test ile yeniden deneyebilirsiniz.
+        </p>
+      )}
+
+      {state === "empty" && (
         <>
           {section?.summary && (
             <p className="report-section__intro">{normalizeTurkishSystemCopy(section.summary)}</p>
           )}
-          {section?.unmatched_task_warning && (
-            <p className="auth-notice" role="status">
-              {normalizeTurkishSystemCopy(section.unmatched_task_warning)}
+          <p className="auth-notice" role="status">
+            {normalizeTurkishSystemCopy(
+              section?.unmatched_task_warning ??
+                "Görevle güçlü eşleşen bir etkileşim alanı bulunamadı.",
+            )}
+          </p>
+          {section?.method_label && (
+            <p className="methodology-note">
+              Yöntem: {normalizeTurkishSystemCopy(section.method_label)}
+              {section.model_name ? ` · Model: ${section.model_name}` : ""}
             </p>
           )}
-          {hotspots.length === 0 && !section?.unmatched_task_warning && (
+        </>
+      )}
+
+      {state === "succeeded" && (
+        <>
+          {section?.summary && (
+            <p className="report-section__intro">
+              {normalizeTurkishSystemCopy(section.summary)} AI’ın hedef görev için daha olası gördüğü
+              etkileşim alanları aşağıda gösterilir.
+            </p>
+          )}
+          {!visionUsed && section?.provider === "openai" && (
             <p className="auth-notice" role="status">
-              Görevle güçlü eşleşen bir etkileşim alanı bulunamadı.
+              Kullanılan model görüntü girdisini desteklemedi; sonuç yalnızca DOM ve çıkarılmış
+              görsel özelliklerden üretildi (sayfa görüntüsü görsel olarak analiz edilmedi).
             </p>
           )}
 
           {hasMap && (
-            <div className="heatmap-visual-layout">
-              <div className="heatmap-image-wrap">
-                <img
-                  src={getReportHeatmapScreenshotUrl(section!.screenshot_url as string)}
-                  alt={`${title}: AI'ın hedef görev için daha olası gördüğü gerçek etkileşim alanları`}
-                  className="heatmap-screenshot heatmap-screenshot--muted"
-                />
-                <div className="ai-interaction-base-layer" aria-hidden="true" />
-                {hotspots.map((hotspot) => (
-                  <AiInteractionHotspotMarker key={hotspot.candidate_id} hotspot={hotspot} />
-                ))}
+            <>
+              {hasCtaData && (
+                <div className="heatmap-layer-toggles">
+                  <label className="heatmap-layer-toggle">
+                    <input
+                      type="checkbox"
+                      checked={ctaLayerVisible}
+                      onChange={(event) => setCtaLayerVisible(event.target.checked)}
+                    />
+                    CTA bölgelerini göster (buton ve bağlantı adayları)
+                  </label>
+                </div>
+              )}
+              <div className="heatmap-visual-layout">
+                <div className="heatmap-image-wrap">
+                  {/* Katman sırası: ekran görüntüsü → ısı haritası → CTA sınırları → etiketler */}
+                  <img
+                    src={getReportHeatmapScreenshotUrl(section!.screenshot_url as string)}
+                    alt={`${title}: AI'ın hedef görev için daha olası gördüğü gerçek etkileşim alanları`}
+                    className="heatmap-screenshot heatmap-screenshot--muted"
+                  />
+                  <div className="ai-interaction-base-layer" aria-hidden="true" />
+                  {hotspots.map((hotspot, index) => (
+                    <AiInteractionHotspotMarker
+                      key={hotspot.candidate_id}
+                      hotspot={hotspot}
+                      rank={index + 1}
+                      selected={selectedId === hotspot.candidate_id}
+                      onSelect={() =>
+                        setSelectedId((current) =>
+                          current === hotspot.candidate_id ? null : hotspot.candidate_id,
+                        )
+                      }
+                    />
+                  ))}
+                  {hasCtaData &&
+                    ctaLayerVisible &&
+                    ctaVisible.visible.map((box, index) => (
+                      <CtaOverlayBoxMarker
+                        key={index}
+                        box={box}
+                        shortLabel={ctaShortLabelMap.get(box) ?? box.label}
+                        ctaNumber={ctaNumberMap.get(box) ?? null}
+                        focused={focusedCtaIndex === index}
+                        onFocus={() => setFocusedCtaIndex(index)}
+                        onBlur={() => setFocusedCtaIndex(null)}
+                      />
+                    ))}
+                </div>
+                <div className="heatmap-legends-stack">
+                  <ul className="heatmap-legend">
+                    {(["high", "medium", "low"] as ReportHeatmapLevel[]).map((level) => (
+                      <li key={level} className="heatmap-legend__item">
+                        <span
+                          className="heatmap-legend__swatch"
+                          style={{ backgroundColor: `rgba(${HEATMAP_LEVEL_COLORS[level]}, 0.6)` }}
+                          aria-hidden="true"
+                        />
+                        {HEATMAP_LEVEL_LABELS[level]} AI olasılığı
+                      </li>
+                    ))}
+                  </ul>
+                  {hasCtaData && ctaLayerVisible && <CtaOverlayLegend boxes={ctaVisible.visible} />}
+                </div>
               </div>
-            </div>
+              {hasCtaData && ctaLayerVisible && (
+                <p className="methodology-note">{CTA_SHARED_DISCLAIMER}</p>
+              )}
+            </>
           )}
 
           {hotspots.length > 0 && (
             <div className="ai-interaction-hotspot-cards" aria-label="AI tıklama tahmini açıklamaları">
               {hotspots.map((hotspot, index) => (
-                <article className="ai-interaction-hotspot-card" key={hotspot.candidate_id}>
-                  <span className="heatmap-insight-card__eyebrow">Öncelik {index + 1}</span>
-                  <h4>{normalizeTurkishSystemCopy(hotspot.label)}</h4>
+                <article
+                  className={`ai-interaction-hotspot-card${selectedId === hotspot.candidate_id ? " ai-interaction-hotspot-card--selected" : ""}`}
+                  key={hotspot.candidate_id}
+                  aria-current={selectedId === hotspot.candidate_id ? "true" : undefined}
+                >
+                  <button
+                    type="button"
+                    className="ai-interaction-hotspot-card__select"
+                    onClick={() =>
+                      setSelectedId((current) =>
+                        current === hotspot.candidate_id ? null : hotspot.candidate_id,
+                      )
+                    }
+                    aria-pressed={selectedId === hotspot.candidate_id}
+                  >
+                    <span className="heatmap-insight-card__eyebrow">Öncelik {index + 1}</span>
+                    <h4>{normalizeTurkishSystemCopy(hotspot.label)}</h4>
+                  </button>
                   <p>{normalizeTurkishSystemCopy(hotspot.reason)}</p>
                   <dl>
                     <div>
@@ -1739,6 +1751,7 @@ function VisualComparisonTab({ report }: { report: ReportDetailResponse }) {
           {!ab ? (
             <AiInteractionHeatmapPanel
               section={report.interaction_heatmap}
+              ctaOverlay={report.cta_overlay}
               headingId="report-ai-interaction-heatmap-heading"
               title="Tasarım"
               sourceType={report.info_box.input_summary.source_type}
@@ -1750,6 +1763,11 @@ function VisualComparisonTab({ report }: { report: ReportDetailResponse }) {
                   ab.this_variant_role === "variant_a"
                     ? report.interaction_heatmap
                     : ab.sibling_interaction_heatmap
+                }
+                ctaOverlay={
+                  ab.this_variant_role === "variant_a"
+                    ? report.cta_overlay
+                    : ab.sibling_cta_overlay
                 }
                 headingId="report-ai-interaction-heatmap-heading-a"
                 title="Tasarım A"
@@ -1764,6 +1782,11 @@ function VisualComparisonTab({ report }: { report: ReportDetailResponse }) {
                   ab.this_variant_role === "variant_a"
                     ? ab.sibling_interaction_heatmap
                     : report.interaction_heatmap
+                }
+                ctaOverlay={
+                  ab.this_variant_role === "variant_a"
+                    ? ab.sibling_cta_overlay
+                    : report.cta_overlay
                 }
                 headingId="report-ai-interaction-heatmap-heading-b"
                 title="Tasarım B"
@@ -1792,7 +1815,6 @@ function VisualComparisonTab({ report }: { report: ReportDetailResponse }) {
               headingId="report-heatmap-heading"
               title="Tasarım"
               sourceType={report.info_box.input_summary.source_type}
-              targetTask={report.info_box.input_summary.target_task}
             />
           ) : (
             <VisualComparisonAbPanels report={report} ab={ab} />
@@ -1835,7 +1857,6 @@ function VisualComparisonAbPanels({
           headingId="report-heatmap-heading-a"
           title="Tasarım A"
           sourceType={aSourceType}
-          targetTask={report.info_box.input_summary.target_task}
         />
         <VisualReportPanel
           heatmap={bHeatmap}
@@ -1843,7 +1864,6 @@ function VisualComparisonAbPanels({
           headingId="report-heatmap-heading-b"
           title="Tasarım B"
           sourceType={bSourceType}
-          targetTask={report.info_box.input_summary.target_task}
         />
       </div>
     </>

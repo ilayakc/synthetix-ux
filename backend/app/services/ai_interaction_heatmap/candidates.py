@@ -59,6 +59,129 @@ def _safe_label(raw: object, fallback: str) -> str:
     return fallback
 
 
+# --- Gorsel (ekran goruntusu) adaylarina AYIRT EDILEBILIR, guvenli kimlik ----
+#
+# Ekran goruntusu kaynaklarinda OCR metni YOKTUR; bu yuzden gercek buton metni
+# UYDURULMAZ (gorev talimati "gercek metin uydurma"). Bunun yerine adaya, gorsel
+# analizden ZATEN cikarilmis GUVENLI ozelliklerden (baskin renk, kutu sekli/
+# boyutu, yaklasik konum ve sira numarasi) ayirt edilebilir bir kimlik uretilir.
+# Boylece her aday "Gorsel CTA adayi" gibi ayni/anlamsiz etiketle degil; ornegin
+# "Mor buton adayi - alt orta (aday 3)" gibi tekil bir etiketle gonderilir ve
+# OpenAI numarali overlay + bu etiket ile dogru `candidate_id`'yi eslestirebilir.
+
+_VERTICAL_LABELS = ("ust", "orta", "alt")
+_HORIZONTAL_LABELS = ("sol", "orta", "sag")
+
+
+def _color_name(color: Mapping | None) -> str | None:
+    """Baskin RGB rengini kaba, insan-okur bir Turkce renk adina cevirir. Renk
+    bilgisi yoksa/gecersizse `None` (etikette renk atlanir - uydurulmaz)."""
+
+    if not isinstance(color, Mapping):
+        return None
+    try:
+        r = float(color["r"])
+        g = float(color["g"])
+        b = float(color["b"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    mx, mn = max(r, g, b), min(r, g, b)
+    delta = mx - mn
+    if delta < 28:  # doygunluk dusuk -> gri tonu
+        if mx >= 210:
+            return "beyaz"
+        if mx <= 60:
+            return "siyah"
+        return "gri"
+    if mx == r:
+        hue = 60.0 * (((g - b) / delta) % 6.0)
+    elif mx == g:
+        hue = 60.0 * (((b - r) / delta) + 2.0)
+    else:
+        hue = 60.0 * (((r - g) / delta) + 4.0)
+    if hue < 0:
+        hue += 360.0
+    if hue < 15 or hue >= 345:
+        return "kirmizi"
+    if hue < 45:
+        return "turuncu"
+    if hue < 70:
+        return "sari"
+    if hue < 165:
+        return "yesil"
+    if hue < 200:
+        return "camgobegi"
+    if hue < 255:
+        return "mavi"
+    if hue < 290:
+        return "mor"
+    return "pembe"
+
+
+def _visual_kind(w: float, h: float) -> tuple[str, str]:
+    """Kutu sekil/boyutundan (interaction_kind, insan-okur tur) uretir.
+
+    interaction_kind, ranking._KIND_WEIGHTS ile eslesen KONTROLLU bir degerdir;
+    ikinci deger etikette gosterilen serbest metindir."""
+
+    area = max(0.0, w) * max(0.0, h)
+    aspect = (w / h) if h > 0 else float("inf")
+    if area >= 0.055 and 0.5 <= aspect <= 2.4:
+        return "visual_card", "kart"
+    if aspect >= 2.4:
+        return "visual_button", "buton"
+    if aspect <= 0.5:
+        return "visual_region", "menu veya kenar alani"
+    return "visual_button", "buton"
+
+
+def _position_phrase(x: float, y: float, w: float, h: float) -> str:
+    cx = x + w / 2.0
+    cy = y + h / 2.0
+    vertical = _VERTICAL_LABELS[0] if cy < 0.34 else (_VERTICAL_LABELS[1] if cy < 0.67 else _VERTICAL_LABELS[2])
+    horizontal = (
+        _HORIZONTAL_LABELS[0] if cx < 0.34 else (_HORIZONTAL_LABELS[1] if cx < 0.67 else _HORIZONTAL_LABELS[2])
+    )
+    if horizontal == "orta":
+        return f"{vertical} orta"
+    return f"{horizontal} {vertical}"
+
+
+def marker_number(candidate_id: str) -> int:
+    """`candidate-N` icindeki sira numarasini (N) dondurur - numarali overlay
+    isareti ve etiketteki "(aday N)" bununla eslesir. Parse edilemezse 0."""
+
+    try:
+        return int(candidate_id.rsplit("-", 1)[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
+def _marker_number(candidate_id: str) -> int:
+    return marker_number(candidate_id)
+
+
+def _describe_visual_candidate(cand: Mapping, marker: int, w: float, h: float) -> tuple[str, str]:
+    """Bir gorsel CTA adayina ayirt edilebilir, guvenli etiket + interaction_kind
+    uretir. Ornek: ("Mor buton adayi - alt orta (aday 3)", "visual_button").
+
+    OCR metni bulunmadigi icin gercek buton metni IDDIA EDILMEZ; etiket yalnizca
+    renk + tur + konum + sira numarasindan olusur. `marker`, `candidate_id`'nin
+    sira numarasidir (numarali overlay isaretiyle eslesir)."""
+
+    interaction_kind, human_type = _visual_kind(w, h)
+    color = _color_name(cand.get("dominant_color"))
+    box = cand.get("box") or {}
+    try:
+        x = float(box["x"])
+        y = float(box["y"])
+    except (KeyError, TypeError, ValueError):
+        x = y = 0.0
+    position = _position_phrase(x, y, w, h)
+    prefix = f"{color.capitalize()} {human_type}" if color else human_type.capitalize()
+    return f"{prefix} adayi - {position} (aday {marker})", interaction_kind
+
+
 def build_interaction_candidates(
     *,
     features: Mapping | None,
@@ -136,11 +259,19 @@ def build_interaction_candidates(
                     continue
                 if w <= 0 or h <= 0:
                     continue
+                # OCR metni yoksa gercek metin uydurulmaz: renk + tur + konum +
+                # sira numarasindan ayirt edilebilir, guvenli bir kimlik uretilir
+                # (aksi halde tum adaylar "Gorsel CTA adayi" ile gonderiliyordu).
+                # Etiketteki "(aday N)", `candidate_id`'nin sira numarasiyla (ve
+                # dolayisiyla numarali overlay isaretiyle) BIREBIR eslesir.
+                cid = _next_id()
+                marker = _marker_number(cid)
+                described_label, visual_kind = _describe_visual_candidate(cand, marker, w, h)
                 candidates.append(
                     InteractionCandidate(
-                        candidate_id=_next_id(),
-                        label=_safe_label(cand.get("label"), "Gorsel CTA adayi"),
-                        interaction_kind=_safe_label(cand.get("kind"), "cta_link"),
+                        candidate_id=cid,
+                        label=described_label,
+                        interaction_kind=visual_kind,
                         role="link",
                         x=x,
                         y=y,
@@ -189,4 +320,4 @@ def build_interaction_candidates(
     return candidates, confirmed_candidate_id
 
 
-__all__ = ["build_interaction_candidates"]
+__all__ = ["build_interaction_candidates", "marker_number"]

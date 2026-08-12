@@ -23,22 +23,28 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 # Cikti semasi ve prompt/siralama mantigi surumleri - fingerprint'e girer.
+# PROMPT_VERSION 2026.3: numarali aday overlay + gorsel-tabanli eslestirme +
+# ekran goruntusu adaylarina semantik kimlik (bkz. candidates._describe_visual_
+# candidate). Prompt/girdi degistigi icin eski cache gecersizlesir.
 INTERACTION_HEATMAP_SCHEMA_VERSION = "2026.1"
-INTERACTION_HEATMAP_PROMPT_VERSION = "2026.2"
+INTERACTION_HEATMAP_PROMPT_VERSION = "2026.3"
 
 # En fazla hotspot sayisi (gorev talimati "AI CIKTI SEMASI" kurallari).
 MAX_HOTSPOTS = 5
 
-# Yontem/veri kaynagi etiketleri (UI'da gosterilir). Model gorsel girdi
-# DESTEKLEMEDIGI icin (bkz. app.services.ai_pipeline.openai_provider - yalnizca
-# metin gonderir) varsayilan yontem analyzer'in DOM/gorsel ozelliklerine dayali
-# siralamadir; ekran goruntusunun modele gonderildigi IDDIA EDILMEZ.
+# Yontem/veri kaynagi etiketleri (UI'da gosterilir).
+# METHOD_DOM_VISUAL_RANKING: provider YOKKEN kullanilan deterministik siralama
+#   (DOM/gorsel ozellik). "AI tiklama tahmini" gibi gosterilMEZ (mock/fallback).
 METHOD_DOM_VISUAL_RANKING = "dom_visual_feature_ranking"
-# Gercek OpenAI provider'i worker icinde cagrildiginda kullanilan yontem: model
-# YALNIZCA gercek aday `candidate_id`'lerinden secim yapar; koordinat URETMEZ.
-# Model gorsel girdiyi DESTEKLEMEDIGI icin (yalnizca metin: DOM + cikarilmis
-# gorsel ozellikler gonderilir) ekran goruntusunun analiz edildigi IDDIA EDILMEZ.
+# METHOD_OPENAI_SELECTION: gercek OpenAI provider'i, ancak model gorsel girdiyi
+#   DESTEKLEMEDIGI icin yalnizca metin (DOM + cikarilmis gorsel ozellikler)
+#   gonderildi - "gorsel analiz edildi" IDDIA EDILMEZ. Model YALNIZCA gercek
+#   `candidate_id` secer, koordinat URETMEZ.
 METHOD_OPENAI_SELECTION = "openai_candidate_selection"
+# METHOD_OPENAI_VISION_SELECTION: gercek OpenAI provider'i, modele GERCEK iki
+#   goruntu (temiz ekran goruntusu + numarali aday overlay) gonderildi. Model
+#   gorseldeki ogeyi numarali overlay ile candidate_id'ye eslestirir; koordinat
+#   URETMEZ - haritadaki koordinatlar analyzer adaylarindan gelir.
 METHOD_OPENAI_VISION_SELECTION = "openai_vision_candidate_selection"
 METHOD_LABELS: dict[str, str] = {
     METHOD_DOM_VISUAL_RANKING: "DOM ve görsel özellik destekli AI sıralaması",
@@ -47,9 +53,9 @@ METHOD_LABELS: dict[str, str] = {
 }
 
 # Isı haritasinda her zaman gorunur kalan zorunlu aciklama (gorev talimati).
-# ONEMLI: model gorsel girdiyi desteklemedigi icin "sayfa goruntusu analiz
-# edildi" IDDIASI YOKTUR - yalnizca "sayfadaki gercek etkilesim alanlari" ve
-# gorev/kitle baglami ile calisildigi belirtilir.
+# Gorsel destekli bir model kullanilsa bile bu, GERCEK tiklama/goz takibi degil,
+# hedef gorev + gercek etkilesim alanlari uzerinden uretilen SENTETIK bir AI
+# tahminidir; aciklama her durumda gorunur kalir.
 INTERACTION_HEATMAP_DISCLAIMER = (
     "Bu harita hedef görev, hedef kitle ve sayfadaki gerçek etkileşim "
     "alanları kullanılarak oluşturulan sentetik bir AI tahminidir. Gerçek "

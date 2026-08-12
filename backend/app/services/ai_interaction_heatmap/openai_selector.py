@@ -13,10 +13,14 @@ SEMA TARAFINDAN reddedilir - model koordinat URETEMEZ. Haritada kullanilan
 koordinatlar backend'de, dogrulanmis analyzer aday kayitlarindan (bkz.
 service._resolve) yazilir.
 
-GORSEL GIRDI: model gorsel girdi DESTEKLEMEDIGI icin (yalnizca metin gonderilir:
-DOM + cikarilmis gorsel ozellikler) ekran goruntusunun modele gonderildigi /
-analiz edildigi IDDIA EDILMEZ (bkz. schemas.INTERACTION_HEATMAP_DISCLAIMER /
-METHOD_OPENAI_SELECTION).
+GORSEL GIRDI: model GORSEL girdiyi destekliyorsa (bkz.
+`_IMAGE_CAPABLE_MODEL_PREFIXES`) modele GERCEK iki goruntu gonderilir - (1) temiz
+ekran goruntusu, (2) her adayin etrafina numara cizilmis overlay - ve yontem
+`METHOD_OPENAI_VISION_SELECTION` olarak isaretlenir. Model gorsel girdiyi
+DESTEKLEMIYORSA yalnizca metin (DOM + cikarilmis gorsel ozellikler) gonderilir,
+yontem `METHOD_OPENAI_SELECTION` kalir ve "gorsel analiz edildi" IDDIA EDILMEZ.
+Her iki durumda da koordinatlar YALNIZCA analyzer adaylarindan (dogrulanmis)
+gelir - model koordinat URETEMEZ.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ from typing import Any, Protocol, cast, runtime_checkable
 # container'inda da import edilebilmelidir (openai orada kurulu degildir) - bu
 # yuzden `import openai` MODUL SEVIYESINDE YAPILMAZ, yalnizca OpenAI secicisinin
 # __init__/hata haritalama fonksiyonu icinde LAZILY yapilir.
+from app.services.ai_interaction_heatmap.candidates import marker_number
+from app.services.ai_interaction_heatmap.overlay import build_numbered_candidate_overlay
 from app.services.ai_interaction_heatmap.ranking import rank_interaction_hotspots
 from app.services.ai_interaction_heatmap.schemas import (
     METHOD_DOM_VISUAL_RANKING,
@@ -64,22 +70,29 @@ INTERACTION_HEATMAP_SELECTOR_CTX_KEY = "interaction_heatmap_selector"
 _STRUCTURED_OUTPUT_MODE = "openai-responses.parse+pydantic-v1"
 _SAFETY_IDENTIFIER_NAMESPACE = "synthetix-interaction-heatmap-safety-identifier-v1"
 
-# Model gorseli DESTEKLEMEDIGI icin yalnizca metin gonderilir; sistem talimati
-# koordinat-guvenligi ve "guclu eslesme yoksa uydurma" kurallarini ACIKCA kodlar.
+# Gorsel destekli modellerde iki goruntu gonderilir: (1) temiz ekran goruntusu,
+# (2) her adayin etrafina numara cizilmis overlay. Sistem talimati koordinat-
+# guvenligi, numarali overlay eslestirmesi ve "guclu eslesme yoksa uydurma"
+# kurallarini ACIKCA kodlar.
 _SYSTEM_INSTRUCTIONS = (
-    "Bir sentetik UX arastirma asistanisin. Sana bir web sayfasindaki GERCEK "
-    "etkilesim alanlarinin (adaylarin) listesi, bir hedef gorev ve hedef kitle "
-    "verilir. Gorevin, verilen HEDEF GOREV icin sentetik bir kullanicinin daha "
-    "OLASI etkilesecegi alanlari secmektir.\n"
+    "Bir sentetik UX arastirma asistanisin. Sana bir web sayfasinin/tasariminin "
+    "GERCEK etkilesim alanlarinin (adaylarin) listesi, bir hedef gorev, hedef "
+    "kitle ve (destekleniyorsa) IKI goruntu verilir: (1) temiz ekran goruntusu, "
+    "(2) her adayin etrafina kutu + adayin 'marker_number' degeri cizilmis "
+    "NUMARALI overlay. Gorevin, verilen HEDEF GOREV icin sentetik bir kullanicinin "
+    "daha OLASI etkilesecegi alanlari secmektir.\n"
     "KATI KURALLAR:\n"
     "1. YALNIZCA sana verilen 'candidate_id' degerlerinden secim yapabilirsin. "
     "Yeni bir aday veya koordinat (x/y/w/h) URETEMEZSIN.\n"
-    "2. En fazla 5 hotspot dondur; en olası olandan baslayarak sirala.\n"
-    "3. Bir adayin YALNIZCA buyuk/one cikan olmasi onu yuksek yapmaz; oncelik "
+    "2. Gorselde bir ogeyi tanidiginda, numarali overlay'deki numarayi ('marker_"
+    "number') kullanarak onu dogru 'candidate_id' ile eslestir. Numarayi asla "
+    "koordinata cevirme.\n"
+    "3. En fazla 5 hotspot dondur; en olası olandan baslayarak sirala.\n"
+    "4. Bir adayin YALNIZCA buyuk/one cikan olmasi onu yuksek yapmaz; oncelik "
     "hedef gorevle anlam eslesmesindedir.\n"
-    "4. Hedef gorevle GUCLU eslesen hicbir aday yoksa hotspot listesini BOS "
+    "5. Hedef gorevle GUCLU eslesen hicbir aday yoksa hotspot listesini BOS "
     "birak ve 'unmatched_task_warning' alanini doldur - alan UYDURMA.\n"
-    "5. Bu gercek tiklama/goz takibi verisi degildir; sentetik bir tahmindir."
+    "6. Bu gercek tiklama/goz takibi verisi degildir; sentetik bir tahmindir."
 )
 
 
@@ -177,6 +190,10 @@ def _candidate_view(candidate: InteractionCandidate, prerank_score: float) -> di
     size = "buyuk" if area >= 0.08 else ("orta" if area >= 0.02 else "kucuk")
     return {
         "candidate_id": candidate.candidate_id,
+        # Numarali overlay goruntusunde bu adayin etrafina cizilen sayi. Model,
+        # gorselde gordugu numarayi bu alan uzerinden dogru candidate_id'ye
+        # baglar (koordinat URETMEZ).
+        "marker_number": marker_number(candidate.candidate_id),
         "label": candidate.label,
         "interaction_kind": candidate.interaction_kind,
         "role": candidate.role,
@@ -279,6 +296,7 @@ class InteractionHeatmapOpenAISelector:
         )
         user_content: list[dict[str, Any]] = [{"type": "input_text", "text": serialized_input}]
         if image_sent and screenshot_data is not None:
+            # (1) Temiz ekran goruntusu.
             encoded = base64.b64encode(screenshot_data).decode("ascii")
             user_content.append(
                 {
@@ -287,6 +305,20 @@ class InteractionHeatmapOpenAISelector:
                     "detail": "high",
                 }
             )
+            # (2) Numarali aday overlay'i: modelin gorselde gordugu ogeyi guvenli
+            # bicimde gercek `candidate_id` ile eslestirebilmesi icin. Uretimi
+            # basarisiz olursa (None) yalnizca temiz goruntu ile devam edilir -
+            # koordinat kaynagi HER ZAMAN analyzer adaylaridir.
+            overlay_png = build_numbered_candidate_overlay(screenshot_data, candidates)
+            if overlay_png is not None and len(overlay_png) <= self._MAX_IMAGE_BYTES:
+                overlay_encoded = base64.b64encode(overlay_png).decode("ascii")
+                user_content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/png;base64,{overlay_encoded}",
+                        "detail": "high",
+                    }
+                )
 
         try:
             response = await self._client.responses.parse(

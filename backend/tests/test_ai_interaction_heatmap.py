@@ -299,6 +299,35 @@ def test_user_confirmed_candidate_gets_bonus_but_others_still_evaluated() -> Non
 # --- aday cikarici (DOM) -----------------------------------------------------
 
 
+def test_screenshot_candidates_get_distinct_semantic_labels_without_ocr() -> None:
+    """Gorev talimati "EKRAN GORUNTUSU ADAYLARINI DUZELT": OCR metni olmasa bile
+    her gorsel aday AYIRT EDILEBILIR (renk + tur + konum + sira numarasi) bir
+    etiket alir - artik hepsi "Gorsel CTA adayi" degildir. Gercek metin uydurulmaz."""
+
+    features = {
+        "visual_cta_candidates": [
+            {"box": {"x": 0.4, "y": 0.82, "w": 0.2, "h": 0.05}, "dominant_color": {"r": 120, "g": 40, "b": 200}},
+            {"box": {"x": 0.75, "y": 0.05, "w": 0.15, "h": 0.04}, "dominant_color": {"r": 30, "g": 120, "b": 230}},
+            {"box": {"x": 0.1, "y": 0.4, "w": 0.3, "h": 0.28}, "dominant_color": {"r": 240, "g": 240, "b": 240}},
+        ]
+    }
+    candidates, _ = build_interaction_candidates(
+        features=features,
+        image_width=1000,
+        image_height=2000,
+        source_kind=PageAnalysisSourceKind.DESIGN_ASSET,
+    )
+    labels = [c.label for c in candidates]
+    assert len(set(labels)) == len(labels), "etiketler tekil olmali"
+    assert all(label != "Gorsel CTA adayi" for label in labels)
+    # Renk + tur + konum + sira numarasi etikette gorunur; "(aday N)" candidate_id ile eslesir.
+    assert "Mor buton adayi" in labels[0]
+    assert "(aday 1)" in labels[0]
+    assert "alt orta" in labels[0]
+    # Kart benzeri buyuk kutu "kart" olarak siniflanir.
+    assert "kart adayi" in labels[2]
+
+
 def test_build_candidates_from_dom_features_assigns_stable_ids() -> None:
     features = {
         "element_boxes": [
