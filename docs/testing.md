@@ -36,6 +36,16 @@ Sonuç: testler herhangi bir sırada, paralel çalıştırmalarda veya tekrar
 tekrar çalıştırıldığında birbirini etkilemez (flaky'lik kaynağı ortadan
 kalkar).
 
+Ziyaretçi/trafik analitiği için `backend/tests/test_analytics_api.py` şunları
+doğrular: anonim page_view kaydı, izin (consent) reddedildiğinde kayıt
+yapılmaması, başarılı login olayının bir kez kaydı, başarısız login'in kimlik/
+hassas bilgi içermemesi, signup→kullanıcı/organizasyon edinim ilişkisi,
+platform-admin erişimi ve normal kullanıcı için 403, tarih aralığı filtresi,
+sayfalama, takip bağlantısı oluşturma ve open-redirect hedeflerinin reddi,
+geçersiz olay türünün reddi, ingestion hız-sınırı, `event_id` ile
+deduplication, CSV export yetkisi + formula-injection escape'i ve retention
+cleanup'ının yalnızca süresi dolmuş satırları silmesi.
+
 ### Marker'lar
 
 ```powershell
@@ -101,7 +111,12 @@ Vitest + Testing Library ile kritik kullanıcı akışları test edilir: kayıt
 (başarı/hata), giriş, şifre sıfırlama, sihirbaz (persona sınırı
 doğrulaması, ücretsiz hak/Chip ile başlatma, 402 yetersiz bakiye hatası),
 Kullanım & Chip sayfası (hak durumları), Raporlar/Rapor Detayı (yükleme/hata
-durumları, AI açıklaması), Projeler (hata durumları).
+durumları, AI açıklaması), Projeler (hata durumları). "Girişler ve Trafik"
+yönetici ekranı (`AdminTraffic.test.tsx`): sekmelerin açılması, özet kartların
+render'ı, tarih filtresi, kullanıcı/şirket araması, boş/hata durumu, sayfalama,
+kampanya (takip bağlantısı) oluşturma formu ve yetkisiz (403) davranışı; sol
+menü öğesinin platform-admin kabuğunda görünmesi ise `AdminShell.test.tsx`
+tarafından kanıtlanır.
 
 ```powershell
 docker compose exec frontend npm run test            # testler

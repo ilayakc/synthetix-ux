@@ -121,6 +121,11 @@ simulation_runs 1──* calibration_observations *──0..1 users (recorded_by
 organizations 1──* entitlements
 organizations 1──* chip_ledger_entries
 organizations 1──* audit_logs *──0..1 users (actor)
+analytics_visitors 1──* analytics_sessions 1──* analytics_events
+analytics_events *──0..1 users, *──0..1 organizations, *──0..1 analytics_visitors
+users 1──0..1 user_acquisition_attribution
+organizations 1──0..1 organization_acquisition_attribution
+tracking_links *──0..1 users (created_by)
 ```
 
 **Tenant sınırı:** `organizations` kiracı (tenant) köküdür. `users` global bir
@@ -156,6 +161,19 @@ toplanarak hesaplanır (hesaplama mantığı sonraki bir aşamaya bırakılmış
 sonuçlarını ilgili `simulation_runs` satırına bağlı olarak saklar; bir run
 birden fazla gözlem alabilir (benzersizlik kısıtı yoktur) ve bu kayıt
 `calibration_status`u hiçbir zaman otomatik olarak değiştirmez.
+
+**Ziyaretçi/trafik analitiği** (`analytics_visitors`/`analytics_sessions`/
+`analytics_events`, `tracking_links`, `user_acquisition_attribution`,
+`organization_acquisition_attribution`) yalnızca platform yöneticisinin gördüğü,
+gizlilik dostu bir alt sistemdir (bkz. [docs/security.md](security.md)
+"Ziyaretçi ve trafik analitiği"). `analytics_events` ekle-sadecedir ve HAM IP/
+tam user-agent/token/hassas query saklamaz; kullanıcı/organizasyon FK'leri
+`ON DELETE SET NULL`'dır (o satırlar silinse bile analitik satırı bozulmaz).
+Bu tablolar tenant-scoped değildir (site geneli, platform-admin görünürlüğü);
+edinim (attribution) tabloları ise kayıt anında denormalize doldurulur ve
+retention cleanup'ında silinmez. Okuma uçları `/api/admin/analytics/*`
+(`require_platform_admin`), anonim yazma ucu `/api/analytics/events`
+(kimlik doğrulamasız, hız-sınırlı, yalnızca `page_view`).
 
 ## Migration ve seed
 

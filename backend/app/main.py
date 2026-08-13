@@ -16,10 +16,11 @@ from app.db import engine, get_session
 from app.logging_config import configure_logging
 from app.logging_middleware import install_request_logging
 from app.redis_client import check_redis_connection
-from app.security import InvalidAccessTokenError, decode_access_token
 from app.routers.admin import router as admin_router
 from app.routers.ai_explanations import router as ai_explanations_router
 from app.routers.analysis_modules import router as analysis_modules_router
+from app.routers.analytics import admin_router as analytics_admin_router
+from app.routers.analytics import public_router as analytics_public_router
 from app.routers.auth import router as auth_router
 from app.routers.billing import router as billing_router
 from app.routers.design_assets import router as design_assets_router
@@ -31,6 +32,7 @@ from app.routers.reports import router as reports_router
 from app.routers.settings import router as settings_router
 from app.routers.simulations import router as simulations_router
 from app.routers.test_wizard import router as test_wizard_router
+from app.security import InvalidAccessTokenError, decode_access_token
 
 # Modul importunda BIR KEZ yapilandirilir (gercek calisma zamani ortamina
 # gore) - `create_app()`'in kendisi degil, cunku bu fabrika testlerde farkli
@@ -109,6 +111,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "/api/auth/demo-login",
             "/api/auth/refresh",
             "/api/auth/logout",
+            # Anonim/salt-okunur analitik olay kaydi kalici TENANT verisini
+            # DEGISTIRMEZ (yalnizca analytics_* tablolarina yazar); demo
+            # oturumlarinda da sayfa goruntulemenin olculebilmesi icin izinlidir.
+            "/api/analytics/events",
         }:
             token = request.cookies.get(ACCESS_TOKEN_COOKIE)
             if token:
@@ -119,9 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if payload.get("demo") is True:
                     return JSONResponse(
                         status_code=403,
-                        content={
-                            "detail": "Canli demo salt okunurdur; bu hesapta degisiklik yapilamaz."
-                        },
+                        content={"detail": "Canli demo salt okunurdur; bu hesapta degisiklik yapilamaz."},
                     )
 
         return await call_next(request)
@@ -175,6 +179,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_router)
     app.include_router(ai_explanations_router)
     app.include_router(analysis_modules_router)
+    app.include_router(analytics_public_router)
+    app.include_router(analytics_admin_router)
     app.include_router(auth_router)
     app.include_router(billing_router)
     app.include_router(design_assets_router)

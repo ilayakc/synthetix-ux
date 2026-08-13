@@ -25,6 +25,13 @@ ACCESS_TOKEN_COOKIE = "access_token"
 REFRESH_TOKEN_COOKIE = "refresh_token"
 CSRF_TOKEN_COOKIE = "csrf_token"
 
+# Anonim ziyaretci analitigi cookie'leri (bkz. app.services.analytics,
+# app.routers.analytics). HttpOnly'dir: JS tarafindan okunamaz/degistirilemez -
+# visitor kimligi yalnizca sunucu tarafinda uretilir ve dogrulanir. Kimlik
+# dogrulama tasimaz; salt-okunur analitik iliskilendirme icindir.
+ANALYTICS_VISITOR_COOKIE = "analytics_vid"
+ANALYTICS_SESSION_COOKIE = "analytics_vsid"
+
 REFRESH_COOKIE_PATH = "/api/auth"
 
 
@@ -64,6 +71,34 @@ def set_csrf_token_cookie(response: Response, token: str) -> None:
         value=token,
         max_age=settings.refresh_token_ttl_seconds,
         httponly=False,
+        secure=settings.resolved_cookie_secure,
+        samesite=_same_site(),
+        domain=settings.cookie_domain,
+        path="/",
+    )
+
+
+def set_analytics_visitor_cookie(response: Response, visitor_id: str) -> None:
+    response.set_cookie(
+        key=ANALYTICS_VISITOR_COOKIE,
+        value=visitor_id,
+        max_age=settings.analytics_cookie_ttl_days * 24 * 60 * 60,
+        httponly=True,
+        secure=settings.resolved_cookie_secure,
+        samesite=_same_site(),
+        domain=settings.cookie_domain,
+        path="/",
+    )
+
+
+def set_analytics_session_cookie(response: Response, session_id: str) -> None:
+    # Oturum (session-scoped) cookie: max_age verilmez, tarayici kapaninca
+    # dusmesi beklenir; hareketsizlik penceresi sunucu tarafinda da uygulanir
+    # (bkz. app.services.analytics.SESSION_IDLE_MINUTES).
+    response.set_cookie(
+        key=ANALYTICS_SESSION_COOKIE,
+        value=session_id,
+        httponly=True,
         secure=settings.resolved_cookie_secure,
         samesite=_same_site(),
         domain=settings.cookie_domain,

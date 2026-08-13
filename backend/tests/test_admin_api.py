@@ -65,6 +65,43 @@ def test_non_admin_cannot_access_admin_summary(client):
     assert response.status_code == 403
 
 
+def test_non_admin_cannot_access_login_history(client):
+    _register(client, prefix="non-admin-logins")
+    response = client.get("/api/admin/login-history")
+    assert response.status_code == 403
+
+
+def test_login_history_records_registration_and_login(client):
+    admin = _register(client, prefix="login-history-admin")
+    asyncio.run(_set_platform_admin(admin["user_id"]))
+
+    login = client.post(
+        "/api/auth/login",
+        json={"email": admin["email"], "password": "CorrectHorse123!"},
+    )
+    assert login.status_code == 200
+
+    response = client.get("/api/admin/login-history")
+    assert response.status_code == 200
+    payload = response.json()
+
+    # Kayit (register) + parola girisi = en az iki giris olayi.
+    assert payload["total_logins"] >= 2
+    assert payload["unique_users"] >= 1
+
+    events = payload["events"]
+    assert events, "giris gecmisi bos olmamali"
+    # En yeni giris ustte olmali (created_at azalan siralama).
+    timestamps = [event["logged_in_at"] for event in events]
+    assert timestamps == sorted(timestamps, reverse=True)
+
+    admin_events = [event for event in events if event["email"] == admin["email"]]
+    login_types = {event["login_type"] for event in admin_events}
+    assert {"register", "password"} <= login_types
+    # Ham parola hicbir zaman kayda/yanita sizmamali.
+    assert "CorrectHorse123!" not in response.text
+
+
 def test_admin_settings_are_sanitized_and_operational(client):
     session = _register(client, prefix="settings-admin")
     asyncio.run(_set_platform_admin(session["user_id"]))

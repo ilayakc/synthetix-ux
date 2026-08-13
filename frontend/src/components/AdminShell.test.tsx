@@ -51,6 +51,11 @@ describe("AdminShell", () => {
     expect(await screen.findAllByRole("navigation")).toHaveLength(2);
     expect(screen.getByRole("navigation", { name: "Yönetim ayarları" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Yönetim Özeti" })).toBeInTheDocument();
+    // "Girişler ve Trafik" yalnızca platform-admin yönetim kabuğunda görünür.
+    expect(screen.getByRole("link", { name: "Girişler ve Trafik" })).toHaveAttribute(
+      "href",
+      "/yonetim/trafik",
+    );
     expect(screen.getByRole("link", { name: "Chip Talepleri" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "AI İşlemleri" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "İşlem Kayıtları" })).toBeInTheDocument();

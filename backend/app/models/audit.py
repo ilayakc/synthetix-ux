@@ -5,6 +5,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, CreatedAtMixin, UUIDPrimaryKeyMixin
 
+# Kullanicilarin sisteme girisini (kayit + parola girisi + demo giris) kaydeden
+# ekle-sadece denetim eylemi. Yazma tarafi (app.routers.auth) ve okuma tarafi
+# (app.routers.admin giris gecmisi) arasindaki yazim tutarliligini garanti eder.
+USER_LOGIN_ACTION = "user_login"
+
 
 class AuditLog(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     """Organizasyon icindeki onemli eylemleri kaydeden ekle-sadece iz kaydi."""

@@ -45,6 +45,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import async_session_maker
 from app.engine.advanced_modules import (
     ModuleInputError,
@@ -53,9 +54,11 @@ from app.engine.advanced_modules import (
 )
 from app.engine.baseline import SimulationInputError, run_baseline_simulation
 from app.engine.rules_config import CURRENT_RULES_VERSION
+from app.models.analytics import AnalyticsEventType
 from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
 from app.models.reports import Report
 from app.models.simulations import SimulationRun, SimulationStatus
+from app.services import analytics as analytics_service
 from app.services import chip_ledger, device_network_analysis, simulation_progress
 from app.services import entitlements as entitlements_service
 from app.services.exceptions import (
@@ -590,6 +593,21 @@ async def process_run(session: AsyncSession, run: SimulationRun) -> None:
     )
     await session.flush()
 
+    # Organizasyonun ILK tamamlanan testi is olayi (dedup_key ile yalnizca bir
+    # kez). Analitik, simulasyonun tamamlanmasini asla bloklamamalidir; bu
+    # yuzden en fazla logla, yeniden firlatma.
+    if settings.analytics_enabled:
+        try:
+            await analytics_service.insert_event(
+                session,
+                event_type=AnalyticsEventType.FIRST_TEST_COMPLETED,
+                organization_id=run.organization_id,
+                dedup_key=f"first_test_completed:{run.organization_id}",
+            )
+            await session.flush()
+        except Exception:  # noqa: BLE001 - analitik simulasyon sonucunu bozmaz
+            logger.warning("first_test_completed analitik olayi yazilamadi", exc_info=True)
+
     await simulation_progress.publish_progress(
         run.id, status=SimulationStatus.SUCCEEDED.value, percent=100, message="Tamamlandi"
     )
@@ -681,9 +699,7 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
     if run.page_analysis_id is not None:
         analysis = (
             await session.execute(
-                select(PageAnalysis)
-                .where(PageAnalysis.id == run.page_analysis_id)
-                .with_for_update()
+                select(PageAnalysis).where(PageAnalysis.id == run.page_analysis_id).with_for_update()
             )
         ).scalar_one_or_none()
         if (
@@ -740,8 +756,7 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
     if run.ai_chip_reservation_id:
         previous_ai = await session.get(chip_ledger.ChipReservation, run.ai_chip_reservation_id)
         ai_already_reserved = (
-            previous_ai is not None
-            and previous_ai.status == chip_ledger.ChipReservationStatus.RESERVED
+            previous_ai is not None and previous_ai.status == chip_ledger.ChipReservationStatus.RESERVED
         )
         if not ai_already_reserved and previous_ai is not None and previous_ai.amount > 0:
             ai_reservation = await chip_ledger.reserve_chips(
@@ -776,8 +791,7 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
     if run.heatmap_chip_reservation_id:
         previous_hm = await session.get(chip_ledger.ChipReservation, run.heatmap_chip_reservation_id)
         hm_already_reserved = (
-            previous_hm is not None
-            and previous_hm.status == chip_ledger.ChipReservationStatus.RESERVED
+            previous_hm is not None and previous_hm.status == chip_ledger.ChipReservationStatus.RESERVED
         )
         if not hm_already_reserved and previous_hm is not None and previous_hm.amount > 0:
             hm_reservation = await chip_ledger.reserve_chips(

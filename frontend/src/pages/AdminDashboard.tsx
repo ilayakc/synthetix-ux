@@ -2,13 +2,21 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ApiError,
+  type AdminLoginHistoryResponse,
   type AdminSummaryResponse,
   type AdminTopUpRequestResponse,
   type TopUpRequestStatus,
+  getAdminLoginHistory,
   getAdminSummary,
   listAdminTopUpRequests,
   reviewAdminTopUpRequest,
 } from "../api/client";
+
+const LOGIN_TYPE_LABELS: Record<string, string> = {
+  register: "Kayıt",
+  password: "Giriş",
+  demo: "Demo",
+};
 
 const STATUS_LABELS: Record<TopUpRequestStatus, string> = {
   pending: "Beklemede",
@@ -31,7 +39,7 @@ const SUMMARY_ITEMS: Array<{
   },
 ];
 
-type AdminSection = "overview" | "topups" | "ai" | "audit";
+type AdminSection = "overview" | "topups" | "ai" | "audit" | "logins";
 
 const SECTION_COPY: Record<AdminSection, { eyebrow: string; title: string; description: string }> =
   {
@@ -39,6 +47,12 @@ const SECTION_COPY: Record<AdminSection, { eyebrow: string; title: string; descr
       eyebrow: "Platform yönetimi",
       title: "Yönetim Özeti",
       description: "Platformun güncel operasyonel durumunu tek yerden izleyin.",
+    },
+    logins: {
+      eyebrow: "Erişim ve güvenlik",
+      title: "Giriş Kayıtları",
+      description:
+        "Sisteme kimlerin, ne zaman ve nereden giriş yaptığını kalıcı olarak izleyin.",
     },
     topups: {
       eyebrow: "Finansal operasyonlar",
@@ -68,6 +82,7 @@ function formatDate(value: string | null): string {
 export default function AdminDashboard({ section }: { section: AdminSection }) {
   const [summary, setSummary] = useState<AdminSummaryResponse | null>(null);
   const [requests, setRequests] = useState<AdminTopUpRequestResponse[]>([]);
+  const [loginHistory, setLoginHistory] = useState<AdminLoginHistoryResponse | null>(null);
   const [filter, setFilter] = useState<"all" | TopUpRequestStatus>(
     section === "audit" ? "all" : "pending",
   );
@@ -81,18 +96,22 @@ export default function AdminDashboard({ section }: { section: AdminSection }) {
   const loadData = useCallback(async () => {
     setError(null);
     try {
-      const [summaryResponse, requestResponse] = await Promise.all([
-        getAdminSummary(),
-        listAdminTopUpRequests(filter === "all" ? undefined : filter),
-      ]);
-      setSummary(summaryResponse);
-      setRequests(requestResponse);
+      if (section === "logins") {
+        setLoginHistory(await getAdminLoginHistory({ limit: 200 }));
+      } else {
+        const [summaryResponse, requestResponse] = await Promise.all([
+          getAdminSummary(),
+          listAdminTopUpRequests(filter === "all" ? undefined : filter),
+        ]);
+        setSummary(summaryResponse);
+        setRequests(requestResponse);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Yönetim bilgileri yüklenemedi.");
     } finally {
       setIsLoading(false);
     }
-  }, [filter]);
+  }, [filter, section]);
 
   useEffect(() => {
     setFilter(section === "audit" ? "all" : "pending");
@@ -183,6 +202,10 @@ export default function AdminDashboard({ section }: { section: AdminSection }) {
               <strong>AI işlem durumunu görüntüle</strong>
               <span>{summary?.failed_ai_pipeline_count ?? 0} başarısız işlem</span>
             </Link>
+            <Link to="/yonetim/giris-kayitlari">
+              <strong>Giriş kayıtlarını aç</strong>
+              <span>Sisteme kimlerin ne zaman girdiğini görün</span>
+            </Link>
             <Link to="/yonetim/islem-kayitlari">
               <strong>İşlem kayıtlarını aç</strong>
               <span>Onay ve red geçmişini inceleyin</span>
@@ -207,6 +230,75 @@ export default function AdminDashboard({ section }: { section: AdminSection }) {
               : "Şu anda müdahale gerektiren başarısız AI işlemi bulunmuyor."}
           </p>
         </section>
+      )}
+
+      {section === "logins" && (
+        <>
+          <div className="admin-summary-grid" aria-label="Giriş istatistikleri">
+            <article className="admin-summary-card">
+              <span>Giriş yapan kişi</span>
+              <strong>
+                {loginHistory ? loginHistory.unique_users.toLocaleString("tr-TR") : "—"}
+              </strong>
+              <p>Farklı kullanıcı hesabı</p>
+            </article>
+            <article className="admin-summary-card">
+              <span>Toplam giriş</span>
+              <strong>
+                {loginHistory ? loginHistory.total_logins.toLocaleString("tr-TR") : "—"}
+              </strong>
+              <p>Kaydedilen tüm oturum açma</p>
+            </article>
+          </div>
+          <section className="admin-panel" aria-labelledby="login-history-heading">
+            <div className="admin-panel__header">
+              <div>
+                <h2 id="login-history-heading">Giriş geçmişi</h2>
+                <p>
+                  Her başarılı kayıt ve giriş kalıcı olarak kaydedilir; en yeni girişler üstte
+                  listelenir. Bu kayıt silinmez.
+                </p>
+              </div>
+            </div>
+
+            {isLoading ? (
+              <p className="page-placeholder">Giriş kayıtları yükleniyor…</p>
+            ) : !loginHistory || loginHistory.events.length === 0 ? (
+              <div className="admin-empty-state">
+                <strong>Henüz giriş kaydı yok</strong>
+                <p>Bir kullanıcı sisteme giriş yaptığında burada görüntülenecek.</p>
+              </div>
+            ) : (
+              <div className="admin-table-wrapper">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Kullanıcı</th>
+                      <th>Şirket</th>
+                      <th>Tarih ve saat</th>
+                      <th>IP adresi</th>
+                      <th>Tür</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loginHistory.events.map((event) => (
+                      <tr key={event.id} title={event.user_agent ?? undefined}>
+                        <td>
+                          <strong>{event.display_name ?? event.email ?? "Bilinmeyen kullanıcı"}</strong>
+                          {event.display_name && event.email && <span>{event.email}</span>}
+                        </td>
+                        <td>{event.organization_name ?? "—"}</td>
+                        <td>{formatDate(event.logged_in_at)}</td>
+                        <td>{event.ip_address ?? "—"}</td>
+                        <td>{LOGIN_TYPE_LABELS[event.login_type] ?? event.login_type}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
       )}
 
       {(section === "topups" || section === "audit") && (

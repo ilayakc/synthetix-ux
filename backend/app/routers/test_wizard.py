@@ -6,9 +6,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import get_session
 from app.dependencies import Principal, get_organization_id, require_roles
+from app.models.analytics import AnalyticsEventType
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
+from app.services import analytics as analytics_service
 from app.services import settings as settings_service
 from app.services import test_wizard as wizard_service
 from app.services import url_safety
@@ -297,6 +300,17 @@ async def launch_draft(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except UnauthorizedPageAnalysisError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Organizasyonun ILK testini baslatma is olayi (dedup_key ile yalnizca bir
+    # kez; launch idempotent oldugu icin tekrar denemeler de tekilligi korur).
+    if settings.analytics_enabled:
+        await analytics_service.insert_event(
+            session,
+            event_type=AnalyticsEventType.FIRST_TEST_STARTED,
+            user_id=principal.user_id,
+            organization_id=principal.organization_id,
+            dedup_key=f"first_test_started:{principal.organization_id}",
+        )
 
     await session.commit()
 

@@ -5,6 +5,15 @@ from app.models.ai_pipeline import (
     AIPipelineStageType,
     AIPipelineStatus,
 )
+from app.models.analytics import (
+    AnalyticsEvent,
+    AnalyticsEventType,
+    AnalyticsSession,
+    AnalyticsVisitor,
+    OrganizationAcquisitionAttribution,
+    TrackingLink,
+    UserAcquisitionAttribution,
+)
 from app.models.audit import AuditLog
 from app.models.auth import PasswordResetToken, RefreshToken
 from app.models.base import Base
@@ -75,4 +84,11 @@ __all__ = [
     "AIPipelineStageType",
     "InteractionHeatmap",
     "InteractionHeatmapStatus",
+    "AnalyticsEvent",
+    "AnalyticsEventType",
+    "AnalyticsSession",
+    "AnalyticsVisitor",
+    "TrackingLink",
+    "UserAcquisitionAttribution",
+    "OrganizationAcquisitionAttribution",
 ]

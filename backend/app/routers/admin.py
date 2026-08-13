@@ -13,7 +13,7 @@ from app.db import get_session
 from app.dependencies import Principal, require_platform_admin, verify_csrf
 from app.logging_config import get_logger
 from app.models.ai_pipeline import AIPipelineRun, AIPipelineStatus
-from app.models.audit import AuditLog
+from app.models.audit import USER_LOGIN_ACTION, AuditLog
 from app.models.billing import ChipTopUpRequest, ChipTopUpRequestStatus
 from app.models.tenancy import Organization, User
 from app.services import chip_ledger
@@ -65,6 +65,24 @@ class AdminPlatformSettingsResponse(BaseModel):
     operations: AdminOperationsSettingsResponse
 
 
+class AdminLoginEventResponse(BaseModel):
+    id: uuid.UUID
+    user_id: uuid.UUID | None
+    email: str | None
+    display_name: str | None
+    organization_name: str | None
+    logged_in_at: datetime
+    ip_address: str | None
+    user_agent: str | None
+    login_type: str
+
+
+class AdminLoginHistoryResponse(BaseModel):
+    total_logins: int
+    unique_users: int
+    events: list[AdminLoginEventResponse]
+
+
 class AdminTopUpRequestResponse(BaseModel):
     id: uuid.UUID
     organization_id: uuid.UUID
@@ -108,6 +126,67 @@ async def get_admin_summary(
     )
 
 
+LOGIN_HISTORY_DEFAULT_LIMIT = 100
+LOGIN_HISTORY_MAX_LIMIT = 500
+
+
+@router.get("/login-history", response_model=AdminLoginHistoryResponse)
+async def get_admin_login_history(
+    _principal: Principal = Depends(require_platform_admin),
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=LOGIN_HISTORY_DEFAULT_LIMIT, ge=1, le=LOGIN_HISTORY_MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+) -> AdminLoginHistoryResponse:
+    """Platform genelinde kalici giris gecmisi: kim, ne zaman, hangi IP/tarayici.
+
+    Her basarili kayit/giris/demo-giris `audit_logs` icine `user_login` olarak
+    yazilir (bkz. app.routers.auth). Bu tablo ekle-sadecedir; oturum
+    (refresh_token) suresi dolsa veya iptal edilse bile kayit KALICIDIR.
+    `total_logins` tum giris olaylarini, `unique_users` farkli kullanici
+    sayisini verir; `events` ise en yeni giris ustte olacak sekilde sayfalanir.
+    """
+
+    total_logins = await session.scalar(
+        select(func.count()).select_from(AuditLog).where(AuditLog.action == USER_LOGIN_ACTION)
+    )
+    unique_users = await session.scalar(
+        select(func.count(func.distinct(AuditLog.actor_user_id))).where(AuditLog.action == USER_LOGIN_ACTION)
+    )
+    rows = (
+        (
+            await session.execute(
+                select(AuditLog)
+                .where(AuditLog.action == USER_LOGIN_ACTION)
+                .order_by(AuditLog.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    events = [
+        AdminLoginEventResponse(
+            id=row.id,
+            user_id=row.actor_user_id,
+            email=(row.entry_metadata or {}).get("email"),
+            display_name=(row.entry_metadata or {}).get("display_name"),
+            organization_name=(row.entry_metadata or {}).get("organization_name"),
+            logged_in_at=row.created_at,
+            ip_address=(row.entry_metadata or {}).get("ip_address"),
+            user_agent=(row.entry_metadata or {}).get("user_agent"),
+            login_type=(row.entry_metadata or {}).get("login_type", "password"),
+        )
+        for row in rows
+    ]
+    return AdminLoginHistoryResponse(
+        total_logins=int(total_logins or 0),
+        unique_users=int(unique_users or 0),
+        events=events,
+    )
+
+
 @router.get("/settings", response_model=AdminPlatformSettingsResponse)
 async def get_admin_settings(
     _principal: Principal = Depends(require_platform_admin),
@@ -145,6 +224,8 @@ async def get_admin_settings(
             // (24 * 60 * 60),
         ),
     )
+
+
 def _topup_query():
     reviewer = aliased(User)
     return (

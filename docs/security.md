@@ -552,3 +552,109 @@ prosedür:**
 Bu kurallar yalnızca dev/smoke ortamı için değildir — production'da
 organizasyon/tenant silme akışı (varsa) aynı ilkeleri (exact ID, çoklu alan
 doğrulaması, transaction+rollback, silme-sonrası doğrulama) izlemelidir.
+
+---
+
+## Ziyaretçi ve trafik analitiği (KVKK açısından ölçülü)
+
+`/yonetim/trafik` ("Girişler ve Trafik") ekranı ve `/api/analytics/*` uçları,
+platform yöneticisinin site trafiğini, kayıtları, girişleri, şirketleri ve
+kampanya bağlantılarını izlemesini sağlayan **gizlilik dostu** bir analitik
+sistemidir. Tasarım ilkesi: **ölçmek için gereken en az veri**.
+
+### Amaç ve erişim
+
+- Yalnızca **platform yöneticisi** (`users.is_platform_admin`, bkz.
+  `require_platform_admin`) admin uçlarını görür; normal organizasyon
+  kullanıcıları (owner/admin/analyst/viewer) 403 alır.
+- Analitik olayları, per-tenant **güvenlik/denetim** kaydı olan `audit_logs`
+  ile **karıştırılmaz** — amaçları (toplam trafik ölçümü vs. denetim) ve
+  tabloları ayrıdır.
+
+### Toplanan veriler
+
+Olay başına (`analytics_events`): olay türü (kontrollü enum), anonim visitor ID,
+oturum ID, gerçekleşme zamanı (UTC), normalize edilmiş sayfa yolu, referrer
+**domain**'i, UTM alanları, özel `ref` kodu, kaba cihaz kategorisi (desktop/
+mobile/tablet/unknown), tarayıcı/işletim sistemi **ailesi**, giriş yapılmışsa
+doğrulanmış kullanıcı/organizasyon ID'si, ülke (yalnızca güvenilir bir
+reverse-proxy header'ı varsa).
+
+### Toplanmayan / saklanmayan veriler
+
+- **Ham IP adresi saklanmaz.** (Yalnızca IP hız-sınırı için geçici olarak
+  Redis anahtarında kullanılır; DB'ye yazılmaz.)
+- **Tam user-agent metni saklanmaz** — yalnızca kaba tarayıcı/OS ailesi türetilir.
+- **Fingerprinting yapılmaz** (canvas/font/donanım/vb. yoktur).
+- Parola, token, cookie içeriği, form alanları veya sayfa içeriği saklanmaz.
+- **Hassas URL query parametreleri saklanmaz**: `normalize_path` yolun
+  query kısmını tamamen atar; `access_token`, `refresh_token`, `token`, `code`,
+  `password`, `email` gibi parametreler analitiğe hiçbir zaman girmez. Yalnızca
+  izin verilen UTM/`ref` alanları ayrı kolonlarda tutulur.
+
+### Anonim ziyaretçi kimliği ve izin (consent)
+
+- Anonim ziyaretçi, sunucunun ürettiği rastgele bir first-party visitor ID ile
+  temsil edilir; bu ID **HttpOnly** `analytics_vid` çerezinde taşınır. JS
+  tarafından okunamaz/değiştirilemez — istemci visitor kimliğini zorlayamaz.
+  DB'de olmayan bir cookie değeri gönderilirse sunucu taze bir ID üretir.
+- `ANALYTICS_REQUIRE_CONSENT=true` (varsayılan) iken pazarlama analitiği
+  (page_view / visitor çerezi / edinim kaynağı) yalnızca istemci açıkça izin
+  verdiğinde işlenir. Kullanıcı reddederse yalnızca sistemin çalışması için
+  gerekli sunucu-taraflı iş olayları (signup/login/organizasyon) — pazarlama
+  attribution'ı **olmadan** — tutulur. Frontend'de hafif bir onay şeridi
+  (bkz. `ConsentBanner`) izni `localStorage`'da saklar.
+
+### Olay güvenliği (ingestion)
+
+Public `POST /api/analytics/events` ucu kimlik doğrulaması gerektirmez ama:
+yalnızca `page_view` olay türünü kabul eder; payload `extra="forbid"` ile
+keyfi metadata'yı reddeder; IP başına hız-sınırlıdır; kullanıcı/organizasyon
+bilgisi **yalnızca sunucudaki access token'dan** doğrulanır (istemcinin
+gönderdiği değerlere güvenilmez); aynı olayın iki kez kaydını (frontend
+yeniden denemesi) `event_id` tabanlı `dedup_key` ile önler. Ana sayfa/işlem
+akışı, analitik yazımı başarısız olsa bile bozulmaz.
+
+### İş olayları (güvenilir)
+
+signup/login/organizasyon oluşturma ve ilk proje/test gibi iş olayları,
+ilgili isteğin transaction'ı içinde güvenilir biçimde kaydedilir. Başarısız
+giriş **yalnızca toplam sayaç** olarak (`login_failed_security_summary`),
+kullanıcı kimliği/e-posta **içermeden** yazılır — admin ekranında kullanıcı
+bazında ifşa edilmez.
+
+### Ülke tespiti
+
+`ANALYTICS_COUNTRY_HEADER` boş (varsayilan) iken ülke alanı her zaman boş
+bırakılır; IP'den ülke tespiti için **yeni bir üçüncü taraf servise veri
+gönderilmez**. Yalnızca güvenilir bir reverse-proxy header'ı (ör. CF-IPCountry)
+yapılandırılırsa iki harfli ülke kodu okunur.
+
+### Edinim (attribution) ve open-redirect koruması
+
+- Anonim ziyaretçi kayıt olursa, first-touch (ilk kaynak) ve last-touch (kayıt
+  oturumu kaynağı) edinim alanları `user_acquisition_attribution` /
+  `organization_acquisition_attribution` tablolarına **denormalize** kopyalanır;
+  böylece ziyaretçinin gereksiz geçmişi profile taşınmadan yalnızca edinim
+  bilgisi ilişkilendirilir ve ziyaretçi satırı retention ile silinse bile korunur.
+- Takip bağlantılarının `referral_code`'u tahmin edilmesi zor, rastgele
+  üretilmiş bir token'dır (sıralı ID değil). Bağlantı yönlendirmesi
+  (`GET /api/analytics/track/{code}`) yalnızca **izin verilen dahili bir yola**
+  302 yapar; mutlak/`//`/scheme içeren hedefler oluşturma anında ve yönlendirme
+  anında reddedilir (open redirect yoktur, bkz. `validate_internal_path`).
+- CSV dışa aktarma yalnızca platform yöneticisine açıktır; `=`, `+`, `-`, `@`
+  ile başlayan hücreler formula-injection'a karşı tek tırnakla escape edilir.
+
+### Saklama (retention) ve temizlik
+
+`ANALYTICS_RETENTION_DAYS` (varsayılan 180) süresini aşan `analytics_events` /
+`analytics_sessions` / `analytics_visitors` satırları, güvenli bir cleanup
+cron'uyla (yalnızca zaman-eşikli, exact `WHERE ... < cutoff`; prefix/pattern
+yok — bkz. `app.services.analytics.purge_expired`) silinir. Edinim tabloları
+kasıtlı olarak silinmez (kalıcı, denormalize edinim özeti).
+
+### Sistemi tamamen kapatma
+
+`ANALYTICS_ENABLED=false` yapıldığında hiçbir olay kaydedilmez, public
+ingestion ucu no-op (204) döner ve hiçbir analitik çerez set edilmez. Retention
+cleanup yine de eski kayıtları temizlemeye devam eder.

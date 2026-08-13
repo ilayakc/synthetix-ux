@@ -6,13 +6,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import get_session
 from app.dependencies import Principal, get_organization_id, require_roles
+from app.models.analytics import AnalyticsEventType
 from app.models.projects import Project, ProjectStatus
 from app.models.reports import Report
 from app.models.simulations import SimulationRun
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
 from app.models.tests import TestDefinition, TestVariant
+from app.services import analytics as analytics_service
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -127,6 +130,18 @@ async def create_project(
         description=body.description,
     )
     session.add(project)
+    await session.flush()
+
+    # Organizasyonun ILK projesi is olayi (dedup_key ile yalnizca bir kez).
+    if settings.analytics_enabled:
+        await analytics_service.insert_event(
+            session,
+            event_type=AnalyticsEventType.FIRST_PROJECT_CREATED,
+            user_id=principal.user_id,
+            organization_id=principal.organization_id,
+            dedup_key=f"first_project_created:{principal.organization_id}",
+        )
+
     await session.commit()
     await session.refresh(project)
 

@@ -6,6 +6,7 @@ from arq.connections import RedisSettings
 from app.config import settings
 from app.config_security import validate_production_secrets
 from app.logging_config import configure_logging
+from app.services import analytics as analytics_service
 from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import page_analysis as page_analysis_service
@@ -97,6 +98,19 @@ async def reap_stale_design_generations(ctx: dict) -> None:
 async def purge_expired_design_generations(ctx: dict) -> None:
     """Saklama suresi dolmus AI tasarim uretim islerinin prompt metnini temizler."""
     await design_generation_service.run_purge_cycle()
+
+
+async def purge_expired_analytics(ctx: dict) -> None:
+    """Saklama suresi (`ANALYTICS_RETENTION_DAYS`) dolmus ziyaretci/trafik analitigi
+    satirlarini guvenle siler (bkz. app.services.analytics.purge_expired)."""
+    counts = await analytics_service.run_purge_cycle()
+    if counts.events or counts.sessions or counts.visitors:
+        logger.info(
+            "analitik retention temizligi: events=%s sessions=%s visitors=%s",
+            counts.events,
+            counts.sessions,
+            counts.visitors,
+        )
 
 
 async def process_ai_pipeline_stage_job(ctx: dict) -> dict:
@@ -254,6 +268,7 @@ class WorkerSettings:
         reap_stale_page_analyses,
         purge_expired_page_analysis_screenshots,
         purge_expired_design_assets,
+        purge_expired_analytics,
         process_queued_design_generations,
         reap_stale_design_generations,
         purge_expired_design_generations,
@@ -306,6 +321,9 @@ class WorkerSettings:
         cron(reap_stale_page_analyses, second={5, 20, 35, 50}),
         cron(purge_expired_page_analysis_screenshots, second={10}, minute=set(range(0, 60, 10))),
         cron(purge_expired_design_assets, second={25}, minute=set(range(0, 60, 10))),
+        # Analitik retention: gunluk yeterli olurdu ama seyrek/deterministik bir
+        # saatlik cron kullanilir (saat basi degil, 55. saniye + 15. dakika).
+        cron(purge_expired_analytics, second={55}, minute={15}),
         # AI tasarim uretim isleri: gorsel uretimi bir sayfa analizinden cok
         # daha uzun surebilecegi icin (bkz. design_generation_stale_timeout_seconds)
         # daha seyrek bir polling araligi kullanilir.

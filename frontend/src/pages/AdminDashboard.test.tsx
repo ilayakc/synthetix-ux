@@ -47,6 +47,25 @@ function stubAdminFetch() {
     if (url.includes("/api/admin/topup-requests")) {
       return jsonResponse(200, [pendingRequest]);
     }
+    if (url.includes("/api/admin/login-history")) {
+      return jsonResponse(200, {
+        total_logins: 5,
+        unique_users: 3,
+        events: [
+          {
+            id: "33333333-3333-3333-3333-333333333333",
+            user_id: "44444444-4444-4444-4444-444444444444",
+            email: "kullanici@example.com",
+            display_name: "Deneme Kullanıcı",
+            organization_name: "Örnek Şirket",
+            logged_in_at: "2026-08-06T09:30:00Z",
+            ip_address: "203.0.113.7",
+            user_agent: "Mozilla/5.0",
+            login_type: "password",
+          },
+        ],
+      });
+    }
     throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -57,7 +76,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderDashboard(section: "overview" | "topups" | "ai" | "audit") {
+function renderDashboard(section: "overview" | "topups" | "ai" | "audit" | "logins") {
   return render(
     <MemoryRouter>
       <AdminDashboard section={section} />
@@ -97,6 +116,19 @@ describe("AdminDashboard", () => {
       action: "approve",
       note: "Ödeme doğrulandı",
     });
+  });
+
+  it("giris kayitlarini ve sayaclari gosterir", async () => {
+    stubAdminFetch();
+    renderDashboard("logins");
+
+    expect(await screen.findByRole("heading", { name: "Giriş Kayıtları" })).toBeInTheDocument();
+    expect(await screen.findByText("Deneme Kullanıcı")).toBeInTheDocument();
+    expect(screen.getByText("kullanici@example.com")).toBeInTheDocument();
+    expect(screen.getByText("203.0.113.7")).toBeInTheDocument();
+    // Farkli kullanici (3) ve toplam giris (5) sayaclari.
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
   });
 
   it("aciklama olmadan reddetmeye izin vermez", async () => {

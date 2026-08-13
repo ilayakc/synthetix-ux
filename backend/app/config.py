@@ -366,6 +366,36 @@ class Settings(BaseSettings):
     ai_interaction_heatmap_enabled: bool = False
     ai_interaction_heatmap_provider: Literal["disabled", "mock", "openai"] = "disabled"
 
+    # --- Ziyaretci / trafik analitigi (bkz. app.services.analytics, ---------------
+    # app.routers.analytics, docs/security.md "Ziyaretci ve trafik analitigi") ---
+    # KVKK acisindan olculu, gizlilik dostu bir sistem: HAM IP / tam user-agent /
+    # token / hassas query saklanmaz, fingerprinting yapilmaz.
+    #   analytics_enabled -> ana anahtar. False iken hicbir olay kaydedilmez,
+    #     public ingestion ucu no-op (204) doner, hicbir analitik cerez set edilmez.
+    #     Sistemi TAMAMEN kapatmak icin bu bayragi False yapmak yeterlidir.
+    #   analytics_require_consent -> True iken pazarlama analitigi (page_view /
+    #     visitor oturumu / visitor cerezi / edinim kaynagi) YALNIZCA istemci
+    #     acikca izin (consent) bildirdiginde islenir; izin yoksa yalnizca
+    #     sistemin calismasi/guvenligi icin gerekli sunucu-tarafli is olaylari
+    #     (signup/login/organizasyon) pazarlama attribution'i OLMADAN tutulur.
+    #     Gizlilik-oncelikli varsayilan olarak True'dur (opt-in).
+    #   analytics_retention_days -> analitik satirlarinin saklama suresi (gun);
+    #     bu sureyi asan kayitlar guvenli cleanup cron'uyla silinir.
+    #   analytics_cookie_ttl_days -> HttpOnly `analytics_vid` (visitor) cerezinin
+    #     omru (gun).
+    analytics_enabled: bool = True
+    analytics_require_consent: bool = True
+    analytics_retention_days: int = Field(default=180, gt=0, le=3650)
+    analytics_cookie_ttl_days: int = Field(default=180, gt=0, le=3650)
+    # Ulke tespiti icin GUVENILEN reverse-proxy header'i (ornegin Cloudflare
+    # "CF-IPCountry"). Bos (varsayilan) iken ulke alani HER ZAMAN bos birakilir -
+    # IP'den ulke tespiti icin yeni/gereksiz bir ucuncu taraf servise veri
+    # GONDERILMEZ.
+    analytics_country_header: str = ""
+    # Public ingestion ucunun IP basina sabit-pencere hiz siniri.
+    analytics_ingest_rate_limit_max_events: int = Field(default=120, gt=0)
+    analytics_ingest_rate_limit_window_seconds: int = Field(default=60, gt=0)
+
     @field_validator("openai_timeout_seconds", "ollama_timeout_seconds")
     @classmethod
     def _ensure_provider_timeout_below_job_timeout(cls, value: int, info: ValidationInfo) -> int:

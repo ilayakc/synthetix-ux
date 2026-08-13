@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.cookies import (
+    ACCESS_TOKEN_COOKIE,
+    ANALYTICS_VISITOR_COOKIE,
     REFRESH_TOKEN_COOKIE,
     clear_auth_cookies,
     set_access_token_cookie,
@@ -16,13 +18,28 @@ from app.cookies import (
 )
 from app.db import get_session
 from app.dependencies import Principal, get_current_principal, verify_csrf
+from app.logging_config import get_logger
+from app.models.analytics import AnalyticsEventType
+from app.models.audit import USER_LOGIN_ACTION, AuditLog
 from app.models.tenancy import Organization, User
 from app.redis_client import redis_client
-from app.security import create_access_token, generate_csrf_token
+from app.security import (
+    InvalidAccessTokenError,
+    create_access_token,
+    decode_access_token,
+    generate_csrf_token,
+)
+from app.services import analytics as analytics_service
 from app.services import auth as auth_service
 from app.services import rate_limit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+audit_logger = get_logger("audit")
+
+# `user_agent` uzun olabilir; denetim kaydinda makul bir ust sinira kirpilir
+# (refresh_tokens.user_agent 500 karakterle sinirli, burada daha da muhafazakar).
+_USER_AGENT_AUDIT_MAX_LEN = 400
 
 GENERIC_LOGIN_ERROR = "E-posta veya parola hatali"
 LOCKED_OUT_ERROR = "Cok fazla basarisiz deneme yapildi. Lutfen daha sonra tekrar deneyin."
@@ -97,6 +114,18 @@ def _client_identifier(request: Request, email: str) -> str:
     return f"{client_host}:{auth_service.normalize_email(email)}"
 
 
+def _normalized_demo_email() -> str | None:
+    """Yapilandirilmis herkese acik demo hesabinin normalize e-postasi (yoksa None)."""
+    email = settings.demo_account_email
+    return auth_service.normalize_email(email) if email else None
+
+
+def _is_demo_account(user: User) -> bool:
+    """Kullanici, yapilandirilmis herkese acik demo hesabi mi (demo yoksa False)."""
+    demo_email = _normalized_demo_email()
+    return demo_email is not None and user.email_normalized == demo_email
+
+
 async def _issue_session_cookies(
     response: Response,
     session: AsyncSession,
@@ -130,6 +159,123 @@ async def _issue_session_cookies(
 
 def _refresh_max_age(issued: auth_service.IssuedRefreshToken) -> int:
     return max(0, int((issued.expires_at - datetime.now(UTC)).total_seconds()))
+
+
+def _record_login_audit(
+    session: AsyncSession,
+    *,
+    user: User,
+    organization: Organization,
+    login_type: str,
+    ip_address: str | None,
+    user_agent: str | None,
+) -> None:
+    """Bir sisteme giris olayini kalici (ekle-sadece) denetim kaydina yazar.
+
+    Kimlik/organizasyon adi gibi gosterim alanlari `entry_metadata` icinde
+    denormalize saklanir; boylece kayit, kullanici/organizasyon sonradan
+    silinse bile o anki durumu korur (nokta-zaman denetim kaydi). `login_type`:
+    `register` (kayit), `password` (parola girisi) veya `demo` (demo giris).
+    Ham parola, token veya cookie ASLA saklanmaz.
+    """
+
+    session.add(
+        AuditLog(
+            organization_id=organization.id,
+            actor_user_id=user.id,
+            action=USER_LOGIN_ACTION,
+            entity_type="user",
+            entity_id=user.id,
+            entry_metadata={
+                "email": user.email,
+                "display_name": user.display_name,
+                "organization_name": organization.name,
+                "ip_address": ip_address,
+                "user_agent": (user_agent[:_USER_AGENT_AUDIT_MAX_LEN] if user_agent else None),
+                "login_type": login_type,
+            },
+        )
+    )
+    audit_logger.info(
+        "Kullanici sisteme giris yapti",
+        extra={
+            "action": USER_LOGIN_ACTION,
+            "login_type": login_type,
+            "actor_user_id": str(user.id),
+            "organization_id": str(organization.id),
+        },
+    )
+
+
+async def _visitor_id(session: AsyncSession, request: Request) -> uuid.UUID | None:
+    """Analitik ziyaretci cerezinden (varsa, DB'de gercekten var olan) visitor id."""
+    return await analytics_service.resolve_existing_visitor_id(
+        session, request.cookies.get(ANALYTICS_VISITOR_COOKIE)
+    )
+
+
+async def _record_login_analytics(
+    session: AsyncSession, request: Request, *, user: User, organization: Organization
+) -> None:
+    """Basarili giris IS OLAYINI (audit'ten AYRI) analitige guvenilir sekilde yazar.
+
+    audit_logs (guvenlik/denetim) ile KARISTIRILMAZ; bu, toplam trafik/giris
+    olcumu icin ayri `analytics_events` tablosuna yazar. Cagiran taraf ayni
+    transaction'da commit eder (is olaylari guvenilir kaydedilir)."""
+
+    if not settings.analytics_enabled:
+        return
+    await analytics_service.insert_event(
+        session,
+        event_type=AnalyticsEventType.LOGIN_SUCCEEDED,
+        user_id=user.id,
+        organization_id=organization.id,
+        visitor_id=await _visitor_id(session, request),
+    )
+
+
+async def _record_signup_analytics(
+    session: AsyncSession, request: Request, *, user: User, organization: Organization
+) -> None:
+    """Kayit + organizasyon olusturma + ilk giris IS OLAYLARINI ve edinim
+    iliskisini analitige yazar (audit'ten AYRI, ayni transaction'da guvenilir)."""
+
+    if not settings.analytics_enabled:
+        return
+    visitor_id = await _visitor_id(session, request)
+    for event_type in (
+        AnalyticsEventType.SIGNUP_COMPLETED,
+        AnalyticsEventType.ORGANIZATION_CREATED,
+        AnalyticsEventType.LOGIN_SUCCEEDED,
+    ):
+        await analytics_service.insert_event(
+            session,
+            event_type=event_type,
+            user_id=user.id,
+            organization_id=organization.id,
+            visitor_id=visitor_id,
+        )
+    # Anonim edinim kaynagini kullaniciya/organizasyona bagla (varsa).
+    await analytics_service.link_signup_attribution(
+        session, visitor_id=visitor_id, user_id=user.id, organization_id=organization.id
+    )
+
+
+async def _record_login_failed_analytics(session: AsyncSession) -> None:
+    """Basarisiz girisi YALNIZCA toplam sayaç olarak, kimlik ICERMEDEN yazar.
+
+    Guvenlik: e-posta/kullanici/parola ASLA yazilmaz - kullanici bazinda ifsa
+    yoktur. Best-effort'tur: analitik yazimi 401 yanitini bloklamamalidir."""
+
+    if not settings.analytics_enabled:
+        return
+    try:
+        await analytics_service.insert_event(
+            session, event_type=AnalyticsEventType.LOGIN_FAILED_SECURITY_SUMMARY
+        )
+        await session.commit()
+    except Exception:  # noqa: BLE001 - analitik, guvenlik yanitini asla bloklamaz
+        await session.rollback()
 
 
 @router.post("/register", response_model=SessionResponse, status_code=201)
@@ -168,6 +314,15 @@ async def register(
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
+    _record_login_audit(
+        session,
+        user=result.user,
+        organization=result.organization,
+        login_type="register",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await _record_signup_analytics(session, request, user=result.user, organization=result.organization)
     await session.commit()
 
     return SessionResponse(
@@ -198,6 +353,7 @@ async def login(
         user = await auth_service.authenticate_user(session, email=body.email, password=body.password)
     except auth_service.InvalidCredentialsError as exc:
         await rate_limit.register_failed_attempt(redis_client, identifier)
+        await _record_login_failed_analytics(session)
         raise HTTPException(status_code=401, detail=GENERIC_LOGIN_ERROR) from exc
 
     await rate_limit.clear_attempts(redis_client, identifier)
@@ -213,13 +369,19 @@ async def login(
         user_id=user.id,
         organization_id=organization.id,
         role=membership.role,
-        is_demo=(
-            bool(settings.demo_account_email)
-            and user.email_normalized == auth_service.normalize_email(settings.demo_account_email)
-        ),
+        is_demo=_is_demo_account(user),
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
+    _record_login_audit(
+        session,
+        user=user,
+        organization=organization,
+        login_type="password",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await _record_login_analytics(session, request, user=user, organization=organization)
     await session.commit()
 
     return SessionResponse(
@@ -230,10 +392,7 @@ async def login(
         organization_name=organization.name,
         role=membership.role,
         is_platform_admin=user.is_platform_admin,
-        is_demo=(
-            bool(settings.demo_account_email)
-            and user.email_normalized == auth_service.normalize_email(settings.demo_account_email)
-        ),
+        is_demo=_is_demo_account(user),
     )
 
 
@@ -262,7 +421,11 @@ async def demo_login(
     if await rate_limit.is_demo_login_rate_limited(redis_client, client_host or "unknown"):
         raise HTTPException(status_code=429, detail=DEMO_LOGIN_RATE_LIMITED)
 
-    demo_email = auth_service.normalize_email(settings.demo_account_email)
+    demo_email = _normalized_demo_email()
+    if demo_email is None:
+        # Yukaridaki guard bunu zaten sagliyor; burada acik kontrol hem
+        # savunma amacli hem de tip daraltma (mypy) icindir.
+        raise HTTPException(status_code=404, detail="Bulunamadi")
     user = (
         await session.execute(select(User).where(User.email_normalized == demo_email))
     ).scalar_one_or_none()
@@ -287,6 +450,15 @@ async def demo_login(
         user_agent=request.headers.get("user-agent"),
         ip_address=client_host,
     )
+    _record_login_audit(
+        session,
+        user=user,
+        organization=organization,
+        login_type="demo",
+        ip_address=client_host,
+        user_agent=request.headers.get("user-agent"),
+    )
+    await _record_login_analytics(session, request, user=user, organization=organization)
     await session.commit()
 
     return SessionResponse(
@@ -337,9 +509,7 @@ async def refresh(
     if organization is None:
         raise HTTPException(status_code=401, detail="Organizasyon bulunamadi")
 
-    is_demo = bool(settings.demo_account_email) and user.email_normalized == auth_service.normalize_email(
-        settings.demo_account_email
-    )
+    is_demo = _is_demo_account(user)
     access_token = create_access_token(
         user_id=user.id,
         organization_id=organization.id,
@@ -376,6 +546,31 @@ async def logout(
         await auth_service.revoke_refresh_token_session(session, raw_token=raw_token)
         await session.commit()
 
+    # Logout is olayi (best-effort): access token'dan kullanici/organizasyon
+    # cozulebiliyorsa iliskilendirilir; analitik yazimi cikisi asla bloklamaz.
+    if settings.analytics_enabled:
+        try:
+            user_id: uuid.UUID | None = None
+            organization_id: uuid.UUID | None = None
+            access_token = request.cookies.get(ACCESS_TOKEN_COOKIE)
+            if access_token:
+                try:
+                    payload = decode_access_token(access_token)
+                    user_id = uuid.UUID(payload["sub"])
+                    organization_id = uuid.UUID(payload["org"])
+                except (InvalidAccessTokenError, KeyError, ValueError):
+                    user_id = organization_id = None
+            await analytics_service.insert_event(
+                session,
+                event_type=AnalyticsEventType.LOGOUT,
+                user_id=user_id,
+                organization_id=organization_id,
+                visitor_id=await _visitor_id(session, request),
+            )
+            await session.commit()
+        except Exception:  # noqa: BLE001 - analitik cikis akisini asla bozmaz
+            await session.rollback()
+
     clear_auth_cookies(response)
     response.status_code = 204
     return response
@@ -399,10 +594,7 @@ async def me(
         organization_name=organization.name,
         role=principal.role,
         is_platform_admin=user.is_platform_admin,
-        is_demo=(
-            bool(settings.demo_account_email)
-            and user.email_normalized == auth_service.normalize_email(settings.demo_account_email)
-        ),
+        is_demo=_is_demo_account(user),
     )
 
 

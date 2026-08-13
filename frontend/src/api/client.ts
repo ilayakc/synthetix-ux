@@ -349,6 +349,24 @@ export interface AdminTopUpRequestResponse {
   review_note: string | null;
 }
 
+export interface AdminLoginEventResponse {
+  id: string;
+  user_id: string | null;
+  email: string | null;
+  display_name: string | null;
+  organization_name: string | null;
+  logged_in_at: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  login_type: string;
+}
+
+export interface AdminLoginHistoryResponse {
+  total_logins: number;
+  unique_users: number;
+  events: AdminLoginEventResponse[];
+}
+
 export interface AdminPlatformSettingsResponse {
   environment: string;
   ai_report: {
@@ -382,6 +400,17 @@ export function getAdminSummary(): Promise<AdminSummaryResponse> {
 
 export function getAdminPlatformSettings(): Promise<AdminPlatformSettingsResponse> {
   return apiFetch<AdminPlatformSettingsResponse>("/api/admin/settings");
+}
+
+export function getAdminLoginHistory(options?: {
+  limit?: number;
+  offset?: number;
+}): Promise<AdminLoginHistoryResponse> {
+  const params = new URLSearchParams();
+  if (options?.limit != null) params.set("limit", String(options.limit));
+  if (options?.offset != null) params.set("offset", String(options.offset));
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<AdminLoginHistoryResponse>(`/api/admin/login-history${query}`);
 }
 
 export function listAdminTopUpRequests(
@@ -1082,11 +1111,7 @@ export interface ReportHeatmapSection {
 }
 
 export type InteractionHeatmapStatus =
-  | "not_requested"
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed";
+  "not_requested" | "queued" | "running" | "succeeded" | "failed";
 
 export interface ReportInteractionHeatmapHotspot {
   candidate_id: string;
@@ -1826,4 +1851,378 @@ export function updateOrganizationSettings(
     method: "PATCH",
     body: JSON.stringify(body),
   });
+}
+
+// --- Ziyaretci / trafik analitigi (yalnizca platform yoneticisi) -------------
+//
+// Public ingestion (page_view) gizlilik-dostudur: HAM IP/tam UA/token/hassas
+// query saklanmaz; visitor kimligi sunucu HttpOnly cerezinden gelir. Admin
+// okuma uclari `require_platform_admin` ile korunur (bkz.
+// backend/app/routers/analytics.py).
+
+export interface AnalyticsPageViewPayload {
+  path?: string | null;
+  referrer?: string | null;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
+  utm_term?: string | null;
+  ref?: string | null;
+  consent: boolean;
+  event_id?: string;
+}
+
+// Fire-and-forget: sayfa goruntuleme kaydi asla kullanici akisini bloklamaz
+// veya bir hata firlatmaz. `keepalive`, sayfa gecisi/kapanisi sirasinda da
+// gonderimi mumkun kilar.
+export function recordAnalyticsPageView(payload: AnalyticsPageViewPayload): void {
+  try {
+    void fetch(`${API_BASE_URL}/api/analytics/events`, {
+      method: "POST",
+      credentials: "include",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event_type: "page_view", ...payload }),
+    }).catch(() => {
+      // yut: analitik gonderimi sessizce basarisiz olabilir
+    });
+  } catch {
+    // yut
+  }
+}
+
+export interface AnalyticsMetrics {
+  total_page_views: number;
+  total_unique_visitors: number;
+  unique_visitors_today: number;
+  unique_visitors_7d: number;
+  unique_visitors_30d: number;
+  total_users: number;
+  total_organizations: number;
+  new_users_in_range: number;
+  new_organizations_in_range: number;
+  successful_logins_in_range: number;
+  unique_login_users_in_range: number;
+  visitor_to_signup_rate: number;
+  signup_to_first_login_rate: number;
+  campaign_referred_visitors: number;
+  campaign_referred_signups: number;
+}
+
+export interface AnalyticsTimeSeriesPoint {
+  day: string;
+  visits: number;
+  signups: number;
+  logins: number;
+}
+
+export interface AnalyticsLabeledCount {
+  label: string;
+  visitors: number;
+  events: number;
+}
+
+export interface AnalyticsCampaignStat {
+  campaign: string;
+  visitors: number;
+  signups: number;
+}
+
+export interface AnalyticsFunnel {
+  visitors: number;
+  signups: number;
+  organizations: number;
+  first_tests: number;
+}
+
+export interface AnalyticsOverviewResponse {
+  range_start: string;
+  range_end: string;
+  metrics: AnalyticsMetrics;
+  timeseries: AnalyticsTimeSeriesPoint[];
+  top_pages: AnalyticsLabeledCount[];
+  top_sources: AnalyticsLabeledCount[];
+  top_campaigns: AnalyticsCampaignStat[];
+  funnel: AnalyticsFunnel;
+}
+
+export interface AnalyticsRangeParams {
+  start?: string;
+  end?: string;
+  source?: string;
+  campaign?: string;
+  organizationId?: string;
+}
+
+function analyticsRangeQuery(params?: AnalyticsRangeParams): URLSearchParams {
+  const query = new URLSearchParams();
+  if (params?.start) query.set("start", params.start);
+  if (params?.end) query.set("end", params.end);
+  if (params?.source) query.set("source", params.source);
+  if (params?.campaign) query.set("campaign", params.campaign);
+  if (params?.organizationId) query.set("organization_id", params.organizationId);
+  return query;
+}
+
+export function getAnalyticsOverview(
+  params?: AnalyticsRangeParams,
+): Promise<AnalyticsOverviewResponse> {
+  const raw = analyticsRangeQuery(params).toString();
+  const suffix = raw ? `?${raw}` : "";
+  return apiFetch<AnalyticsOverviewResponse>(`/api/admin/analytics/overview${suffix}`);
+}
+
+export interface AnalyticsVisitEvent {
+  id: string;
+  event_type: string;
+  occurred_at: string;
+  path: string | null;
+  referrer_domain: string | null;
+  utm_source: string | null;
+  utm_campaign: string | null;
+  referral_code: string | null;
+  device_category: string | null;
+  browser_family: string | null;
+  os_family: string | null;
+  country: string | null;
+}
+
+export interface AnalyticsVisitListResponse {
+  total: number;
+  events: AnalyticsVisitEvent[];
+}
+
+export interface AnalyticsVisitParams extends AnalyticsRangeParams {
+  event_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function listAnalyticsVisits(
+  params?: AnalyticsVisitParams,
+): Promise<AnalyticsVisitListResponse> {
+  const query = analyticsRangeQuery(params);
+  if (params?.event_type) query.set("event_type", params.event_type);
+  if (params?.limit != null) query.set("limit", String(params.limit));
+  if (params?.offset != null) query.set("offset", String(params.offset));
+  const raw = query.toString();
+  const suffix = raw ? `?${raw}` : "";
+  return apiFetch<AnalyticsVisitListResponse>(`/api/admin/analytics/visits${suffix}`);
+}
+
+export interface AnalyticsUserRow {
+  user_id: string;
+  display_name: string | null;
+  email: string;
+  organization_name: string | null;
+  role: string | null;
+  registered_at: string;
+  first_login_at: string | null;
+  last_login_at: string | null;
+  total_logins: number;
+  logins_7d: number;
+  logins_30d: number;
+  last_activity_at: string | null;
+  account_status: string;
+  first_source: string | null;
+  first_campaign: string | null;
+  last_source: string | null;
+  last_campaign: string | null;
+}
+
+export interface AnalyticsUserListResponse {
+  total: number;
+  users: AnalyticsUserRow[];
+}
+
+export interface AnalyticsUserParams {
+  search?: string;
+  status?: string;
+  sort?: "last_login" | "registered" | "total_logins";
+  limit?: number;
+  offset?: number;
+}
+
+function analyticsUserQuery(params?: AnalyticsUserParams): URLSearchParams {
+  const query = new URLSearchParams();
+  if (params?.search) query.set("search", params.search);
+  if (params?.status) query.set("status", params.status);
+  if (params?.sort) query.set("sort", params.sort);
+  if (params?.limit != null) query.set("limit", String(params.limit));
+  if (params?.offset != null) query.set("offset", String(params.offset));
+  return query;
+}
+
+export function listAnalyticsUsers(
+  params?: AnalyticsUserParams,
+): Promise<AnalyticsUserListResponse> {
+  const raw = analyticsUserQuery(params).toString();
+  const suffix = raw ? `?${raw}` : "";
+  return apiFetch<AnalyticsUserListResponse>(`/api/admin/analytics/users${suffix}`);
+}
+
+// CSV export: blob olarak indirilir (SameSite/cross-origin cerez sorunlarindan
+// kacinmak icin `credentials: include`). Yalnizca platform admin erisebilir;
+// yetkisizse ApiError firlatir.
+export async function downloadAnalyticsUsersCsv(params?: {
+  search?: string;
+  status?: string;
+}): Promise<Blob> {
+  const query = new URLSearchParams();
+  if (params?.search) query.set("search", params.search);
+  if (params?.status) query.set("status", params.status);
+  const suffix = query.toString();
+  const response = await fetch(
+    `${API_BASE_URL}/api/admin/analytics/users/export.csv${suffix ? `?${suffix}` : ""}`,
+    { credentials: "include" },
+  );
+  if (!response.ok) {
+    throw new ApiError(response.status, "CSV dışa aktarma başarısız", null);
+  }
+  return response.blob();
+}
+
+export interface AnalyticsOrganizationRow {
+  organization_id: string;
+  name: string;
+  created_at: string;
+  member_count: number;
+  active_users_30d: number;
+  first_login_at: string | null;
+  last_activity_at: string | null;
+  total_logins: number;
+  project_count: number;
+  completed_tests: number;
+  first_source: string | null;
+  first_campaign: string | null;
+  last_source: string | null;
+  last_campaign: string | null;
+}
+
+export interface AnalyticsOrganizationListResponse {
+  total: number;
+  organizations: AnalyticsOrganizationRow[];
+}
+
+export interface AnalyticsOrganizationParams {
+  search?: string;
+  sort?: "last_activity" | "created" | "members";
+  limit?: number;
+  offset?: number;
+}
+
+export function listAnalyticsOrganizations(
+  params?: AnalyticsOrganizationParams,
+): Promise<AnalyticsOrganizationListResponse> {
+  const query = new URLSearchParams();
+  if (params?.search) query.set("search", params.search);
+  if (params?.sort) query.set("sort", params.sort);
+  if (params?.limit != null) query.set("limit", String(params.limit));
+  if (params?.offset != null) query.set("offset", String(params.offset));
+  const raw = query.toString();
+  const suffix = raw ? `?${raw}` : "";
+  return apiFetch<AnalyticsOrganizationListResponse>(`/api/admin/analytics/organizations${suffix}`);
+}
+
+export interface AnalyticsOrganizationMember {
+  user_id: string;
+  display_name: string | null;
+  email: string;
+  role: string;
+  last_login_at: string | null;
+  total_logins: number;
+}
+
+export interface AnalyticsOrganizationDetail {
+  organization_id: string;
+  name: string;
+  created_at: string;
+  member_count: number;
+  project_count: number;
+  completed_tests: number;
+  total_logins: number;
+  first_source: string | null;
+  first_campaign: string | null;
+  last_source: string | null;
+  last_campaign: string | null;
+  members: AnalyticsOrganizationMember[];
+}
+
+export function getAnalyticsOrganizationDetail(
+  organizationId: string,
+): Promise<AnalyticsOrganizationDetail> {
+  return apiFetch<AnalyticsOrganizationDetail>(
+    `/api/admin/analytics/organizations/${encodeURIComponent(organizationId)}`,
+  );
+}
+
+export interface TrackingLinkStats {
+  total_visits: number;
+  unique_visitors: number;
+  signups: number;
+  organizations: number;
+  first_tests: number;
+  conversion_rate: number;
+  first_visit_at: string | null;
+  last_visit_at: string | null;
+}
+
+export interface TrackingLinkResponse {
+  id: string;
+  name: string;
+  destination_path: string;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_content: string | null;
+  referral_code: string;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  tracking_url: string;
+  stats: TrackingLinkStats;
+}
+
+export interface CreateTrackingLinkRequest {
+  name: string;
+  destination_path?: string;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+export interface UpdateTrackingLinkRequest {
+  name?: string;
+  destination_path?: string;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
+  description?: string | null;
+  is_active?: boolean;
+}
+
+export function listTrackingLinks(): Promise<TrackingLinkResponse[]> {
+  return apiFetch<TrackingLinkResponse[]>("/api/admin/analytics/tracking-links");
+}
+
+export function createTrackingLink(body: CreateTrackingLinkRequest): Promise<TrackingLinkResponse> {
+  return apiFetch<TrackingLinkResponse>("/api/admin/analytics/tracking-links", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateTrackingLink(
+  linkId: string,
+  body: UpdateTrackingLinkRequest,
+): Promise<TrackingLinkResponse> {
+  return apiFetch<TrackingLinkResponse>(
+    `/api/admin/analytics/tracking-links/${encodeURIComponent(linkId)}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
 }

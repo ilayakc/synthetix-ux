@@ -192,3 +192,13 @@ export function InfoIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function TrafficIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 19h16" />
+      <path d="m4 15 4.5-4.5 3 3L20 6" />
+      <path d="M20 10V6h-4" />
+    </svg>
+  );
+}

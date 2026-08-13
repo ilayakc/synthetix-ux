@@ -56,7 +56,7 @@ isteğe bağlı bir AI açıklama/raporlama katmanıyla doğal dile çevirir.
   1.000 personaya kadar sentetik kitle tanımlama.
 - **Analiz modülleri kataloğu** — temel UX testi ve erişilebilirlik ön
   kontrolünün yanında Chip gerektiren gelişmiş modüller (ör. cihaz/ağ testi,
-  kampanya CTA testi, sentetik dikkat tahmini).
+  kampanya CTA testi, sentetik dikkat tahmini, AI etkileşim ısı haritası).
 - **Sentetik simülasyon motoru** — deterministik, `deterministic_seed` +
   `model_version` ile tekrarlanabilir; arka planda `arq` worker'ının
   işlettiği bir durum makinesiyle çalışır.
@@ -66,6 +66,11 @@ isteğe bağlı bir AI açıklama/raporlama katmanıyla doğal dile çevirir.
 - **AI destekli açıklama / hızlı rapor özeti** — hesaplanmış metrikleri doğal
   dile çeviren isteğe bağlı katman (varsayılan: yerel/deterministik; isteğe
   bağlı OpenAI Responses API).
+- **AI etkileşim ısı haritası (AI tıklama tahmini)** — hedef görev ve hedef
+  kitle için, yalnızca analyzer'ın doğruladığı gerçek etkileşim adaylarından
+  seçim yapan (koordinat üretmeyen) gerçek OpenAI vision tabanlı, Chip
+  gerektiren isteğe bağlı modül. Gerçek tıklama veya göz takibi verisi
+  değildir; varsayılan olarak kapalıdır.
 - **Pasif URL analiz servisi (analyzer)** — Playwright/Chromium ile SSRF'e
   karşı korumalı, salt-okunur sayfa analizi + axe-core erişilebilirlik ön
   kontrolü.
@@ -75,8 +80,15 @@ isteğe bağlı bir AI açıklama/raporlama katmanıyla doğal dile çevirir.
 - **Chip cüzdanı ve haklar (entitlements)** — ekle-sadece (append-only) Chip
   defteri, ücretsiz haklar, teklif (quote) hesaplama ve Chip yükleme talepleri.
 - **Yönetici paneli** — Chip talepleri, AI işlemleri, denetim (audit)
-  kayıtları ve platform ayarları.
-- **Denetim günlükleri** — ekle-sadece `audit_logs` tablosu.
+  kayıtları, platform ayarları ve **Girişler ve Trafik** analitiği.
+- **Girişler ve Trafik (ziyaretçi/trafik analitiği)** — yalnızca platform
+  yöneticisine açık, KVKK açısından ölçülü, gizlilik dostu bir analitik ekranı:
+  sayfa görüntüleme, benzersiz ziyaretçi, kayıt/giriş, şirket ve UTM/referral
+  kampanya takibi + first/last-touch edinim ilişkilendirmesi. Ham IP, tam
+  user-agent veya parmak izi saklanmaz; anonim ziyaretçi first-party bir çerezle
+  temsil edilir ve izin (consent) mekanizması vardır (bkz.
+  [docs/security.md](docs/security.md#ziyaretçi-ve-trafik-analitiği-kvkk-açısından-ölçülü)).
+- **Denetim günlükleri** — ekle-sadece `audit_logs` tablosu (analitikten ayrı).
 - **Yardım merkezi** — uygulama içi kapsamlı yardım/SSS.
 - **Yapılandırılmış loglama** — backend + frontend genelinde structured log.
 
@@ -164,7 +176,16 @@ açıklanmıştır. `.env` dosyası git'e eklenmez; gerçek sırlar asla
 - **AI rapor / OpenAI:** `AI_REPORT_ENABLED`, `AI_REPORT_PROVIDER`,
   `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_REASONING_EFFORT`,
   `OPENAI_MAX_OUTPUT_TOKENS`.
+- **AI etkileşim ısı haritası:** `AI_INTERACTION_HEATMAP_ENABLED` (varsayılan
+  `false`), `AI_INTERACTION_HEATMAP_PROVIDER` (`disabled`/`mock`/`openai`,
+  varsayılan `disabled`; `openai` seçilirse yukarıdaki `OPENAI_*` kimlik
+  bilgilerini yeniden kullanır, ayrı bir anahtar gerekmez).
 - **AI tasarım varyantı:** `IMAGE_GENERATION_PROVIDER` (varsayılan `none`).
+- **Ziyaretçi/trafik analitiği:** `ANALYTICS_ENABLED` (varsayılan `true`),
+  `ANALYTICS_REQUIRE_CONSENT` (varsayılan `true`; gizlilik öncelikli/opt-in),
+  `ANALYTICS_RETENTION_DAYS` (varsayılan `180`), `ANALYTICS_COOKIE_TTL_DAYS`,
+  `ANALYTICS_COUNTRY_HEADER` (boş bırakılırsa ülke tespiti yapılmaz). Sistemi
+  tamamen kapatmak için `ANALYTICS_ENABLED=false` yeterlidir.
 - **Loglama:** `LOG_LEVEL`, `LOG_FORMAT`, `LOG_EXCLUDE_PATHS`.
 
 Production sırlarının doğrulaması (fail-closed) için bkz.
@@ -230,7 +251,7 @@ limitleri için bkz. [docs/security.md](docs/security.md).
 
 ## AI katmanları
 
-İki **bağımsız**, ayrı yapılandırılan AI özelliği vardır; birinin etkin
+Üç **bağımsız**, ayrı yapılandırılan AI özelliği vardır; birinin etkin
 olması diğerini otomatik açmaz (bkz. [docs/ai-policy.md](docs/ai-policy.md)):
 
 1. **AI destekli açıklama (hızlı rapor özeti)** — zaten hesaplanmış rapor
@@ -242,6 +263,14 @@ olması diğerini otomatik açmaz (bkz. [docs/ai-policy.md](docs/ai-policy.md)):
    için isteğe bağlı bir görsel üretim katmanı (`IMAGE_GENERATION_PROVIDER`).
    Gerçek bir görsel üretim sağlayıcısı yapılandırılmadan kullanıcıya
    sunulmaz; hiçbir placeholder/sahte görsel "AI sonucu" gibi gösterilmez.
+3. **AI etkileşim ısı haritası (AI tıklama tahmini)** — hedef görev ve hedef
+   kitle için sentetik bir tıklama tahmini üretir; Chip gerektiren bir katalog
+   modülüdür (`ai_interaction_heatmap`). Gerçek OpenAI provider'ı worker içinde
+   çağrılır ve **yalnızca analyzer'ın doğruladığı etkileşim adaylarından seçim
+   yapar; koordinat üretmez**. `AI_INTERACTION_HEATMAP_ENABLED=false`
+   (varsayılan) veya `AI_INTERACTION_HEATMAP_PROVIDER=disabled` (varsayılan)
+   iken modül sihirbazda görünmez, hiçbir istemci/ağ çağrısı ve ücret oluşmaz.
+   Gerçek kullanıcı tıklaması veya göz takibi verisi **değildir**.
 
 Hiçbir katman görsel karşılaştırma/analiz motorunun yerini tutmaz. Veri
 işleme kuralları, denetim kaydı ve sınırlamalar için bkz.
@@ -268,10 +297,11 @@ panelinden değerlendirilir.
 
 ## Yönetici paneli
 
-`/yonetim` altında (yalnızca yönetici oturumu): platform genel bakışı, Chip
-yükleme talepleri, AI işlemleri, denetim (audit) kayıtları ve platform
-ayarları. Demo/geliştirme için `BOOTSTRAP_ADMIN_*` ve `BOOTSTRAP_USER_*`
-ortam değişkenleriyle başlangıç hesapları sağlanabilir.
+`/yonetim` altında (yalnızca yönetici oturumu): platform genel bakışı, **Girişler
+ve Trafik** (ziyaretçi/trafik analitiği; `/yonetim/trafik`), Chip yükleme
+talepleri, AI işlemleri, denetim (audit) kayıtları ve platform ayarları.
+Demo/geliştirme için `BOOTSTRAP_ADMIN_*` ve `BOOTSTRAP_USER_*` ortam
+değişkenleriyle başlangıç hesapları sağlanabilir.
 
 ---
 

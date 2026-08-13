@@ -12,12 +12,16 @@ import {
   GearIcon,
   MenuIcon,
   ShieldCheckIcon,
+  TrafficIcon,
+  UsersIcon,
 } from "./icons";
 
 const ADMIN_NAV_ITEMS = [
   { to: "/yonetim", label: "Yönetim Özeti", icon: ShieldCheckIcon, end: true },
+  { to: "/yonetim/trafik", label: "Girişler ve Trafik", icon: TrafficIcon, end: false },
   { to: "/yonetim/chip-talepleri", label: "Chip Talepleri", icon: ChipCoinIcon, end: false },
   { to: "/yonetim/ai-islemleri", label: "AI İşlemleri", icon: ActivityIcon, end: false },
+  { to: "/yonetim/giris-kayitlari", label: "Giriş Kayıtları", icon: UsersIcon, end: false },
   { to: "/yonetim/islem-kayitlari", label: "İşlem Kayıtları", icon: FileTextIcon, end: false },
 ] as const;
 

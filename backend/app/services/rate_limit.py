@@ -61,3 +61,22 @@ async def is_demo_login_rate_limited(redis: Redis, identifier: str) -> bool:
     if count == 1:
         await redis.expire(key, settings.demo_login_rate_limit_window_seconds)
     return count > settings.demo_login_rate_limit_max_attempts
+
+
+def _analytics_ingest_key(identifier: str) -> str:
+    return f"analytics:ingest:{identifier}"
+
+
+async def is_analytics_ingest_rate_limited(redis: Redis, identifier: str) -> bool:
+    """Public analitik olay ingestion'ini IP basina sabit-pencere ile sinirlar.
+
+    Anonim (kimlik dogrulamasi gerektirmeyen) `POST /api/analytics/events` ucunun
+    tek bir IP'den kayit tablosunu sel etmesini engeller. Pencere basi ilk istek
+    sayaci baslatir ve TTL koyar; sayac limiti asarsa True doner (olay reddedilir).
+    """
+
+    key = _analytics_ingest_key(identifier)
+    count = await redis.incr(key)
+    if count == 1:
+        await redis.expire(key, settings.analytics_ingest_rate_limit_window_seconds)
+    return count > settings.analytics_ingest_rate_limit_max_events
