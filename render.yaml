@@ -1,11 +1,21 @@
 # Zero-cost presentation/demo deployment for Render.
 # Every declared resource is explicitly on a free plan. Do not use this
 # topology as a production SLA: see docs/render-free.md for limitations.
+#
+# NOTE: Render's free plan has NO Background Worker instance type, so there is
+# intentionally NO `type: worker` resource here. The single web service below
+# runs the FastAPI API, the ARQ simulation worker AND nginx together in one
+# container via deploy/render_free_start.py (a supervisor that fails the
+# container if any child dies). Do NOT add a separate paid `type: worker` and
+# do NOT duplicate the db/queue/analyzer resources - that breaks the free
+# Blueprint. Only these four resources exist: this web service, the analyzer
+# web service, the Postgres database and the Valkey key-value queue.
 
 previews:
   generation: off
 
 services:
+  # web + API + ARQ simulation worker (single free instance; see file header).
   - type: web
     name: synthetix-ux-ily
     runtime: docker

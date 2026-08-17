@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from collections.abc import MutableMapping
 from datetime import UTC, datetime
@@ -32,6 +33,27 @@ from typing import Any
 from app.logging_context import RequestIdLogFilter
 
 _CONFIGURED_ATTR = "_synthetix_logging_configured"
+
+# Ayni container'da API (uvicorn) ve arq worker birlikte calisirken (Render
+# ucretsiz - bkz. deploy/render_free_start.py) loglarin hangi sürece ait
+# oldugunu ayirt edebilmek icin her satira eklenen surec rolu. Deger yalnizca
+# `SYNTHETIX_PROCESS_ROLE` ortam degiskeni set edilmisse eklenir (launcher
+# alt süreclere "api"/"worker" olarak gecirir); set degilse hicbir sey degismez.
+_PROCESS_ROLE = os.environ.get("SYNTHETIX_PROCESS_ROLE", "").strip()
+
+
+class _ProcessRoleLogFilter(logging.Filter):
+    """Her kayda sabit `role` alanini ekler (JSON'da ust duzey alan, pretty'de
+    kategori onuna eklenir)."""
+
+    def __init__(self, role: str) -> None:
+        super().__init__()
+        self._role = role
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.role = self._role
+        return True
+
 
 # Uvicorn kendi `uvicorn.access` logger'i uzerinden HER istek icin ayrica
 # bir satir uretir (ornegin `INFO: 127.0.0.1 - "GET /api/health HTTP/1.1"
@@ -110,6 +132,9 @@ class JsonLogFormatter(logging.Formatter):
         request_id = getattr(record, "request_id", None)
         if request_id:
             payload["request_id"] = request_id
+        role = getattr(record, "role", None)
+        if role:
+            payload["role"] = role
         payload.update(_extra_fields(record))
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
@@ -204,6 +229,8 @@ def configure_logging(
 
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(RequestIdLogFilter())
+    if _PROCESS_ROLE:
+        handler.addFilter(_ProcessRoleLogFilter(_PROCESS_ROLE))
     if resolved_format == "json":
         handler.setFormatter(JsonLogFormatter())
     else:

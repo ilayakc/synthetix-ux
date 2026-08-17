@@ -2,9 +2,11 @@ import logging
 
 from arq import cron
 from arq.connections import RedisSettings
+from sqlalchemy import text
 
 from app.config import settings
 from app.config_security import validate_production_secrets
+from app.db import async_session_maker
 from app.logging_config import configure_logging
 from app.services import analytics as analytics_service
 from app.services import design_assets as design_assets_service
@@ -32,6 +34,7 @@ from app.services.ai_pipeline.scheduling import (
 )
 from app.services.simulation_worker import run_fail_blocked_cycle, run_queue_cycle, run_reap_cycle
 from app.worker_constants import ARQ_JOB_TIMEOUT_SECONDS
+from app.worker_heartbeat import record_worker_heartbeat
 
 configure_logging(
     settings.environment,
@@ -42,9 +45,13 @@ logger = logging.getLogger("synthetix.worker")
 
 
 async def ping_redis(ctx: dict) -> bool:
-    """Zararsiz dogrulama gorevi: worker'in Redis kuyruguna baglandigini kanitlar."""
+    """Zararsiz dogrulama gorevi: worker'in Redis kuyruguna baglandigini kanitlar
+    VE canlilik heartbeat'ini paylasilan Redis'e yazar (bkz. app.worker_heartbeat)
+    - API tarafi (`/api/health`) worker'in canliligini bu heartbeat'ten dogrular
+    (Render ucretsiz planinda API ile worker AYNI container'da calisir)."""
     redis = ctx["redis"]
     pong = await redis.ping()
+    await record_worker_heartbeat()
     logger.info("worker redis ping: %s", pong)
     return bool(pong)
 
@@ -167,10 +174,61 @@ async def settle_interaction_heatmap_reservations_job(ctx: dict) -> dict:
     return await run_interaction_heatmap_settlement_cycle()
 
 
+async def _verify_worker_dependencies(ctx: dict) -> None:
+    """Worker baslangicinda kuyruk (Valkey/Redis) ve DB baglantisini dogrular.
+
+    Gecici bir kesinti worker'i CRASH-LOOP'a sokmamalidir (cron gorevleri kendi
+    oturumlarini acar ve yeniden dener); bu yuzden hata ACIK bicimde loglanir
+    ama exception firlatilmaz. Gizli veri (DSN/parola) loglanmaz."""
+
+    try:
+        redis = ctx.get("redis")
+        pong = await redis.ping() if redis is not None else None
+        logger.info("worker baglanti kontrolu: kuyruk (valkey/redis) OK (pong=%s)", pong)
+    except Exception:
+        logger.error("worker baglanti kontrolu: kuyruk (valkey/redis) ERISILEMEZ", exc_info=True)
+
+    try:
+        async with async_session_maker() as session:
+            await session.execute(text("SELECT 1"))
+        logger.info("worker baglanti kontrolu: postgres OK")
+    except Exception:
+        logger.error("worker baglanti kontrolu: postgres ERISILEMEZ", exc_info=True)
+
+
+def _assert_critical_tasks_registered() -> None:
+    """Simulasyon islemcisi + stale-run reaper'in gercekten kayitli oldugunu
+    dogrular (bkz. gorev talimati madde 8). Eksikse bu bir PROGRAMLAMA hatasidir
+    (gecici degil) - fail-fast: exception firlatir ki container yeniden baslasin
+    ve sorun gorunur olsun; sessizce "consumer yok" durumunda kalinmaz."""
+
+    fn_names = {f.__name__ for f in WorkerSettings.functions}
+    cron_coros = {getattr(c, "coroutine", None) for c in WorkerSettings.cron_jobs}
+    cron_names = {getattr(fn, "__name__", "") for fn in cron_coros if fn is not None}
+    required = {"process_queued_simulations", "reap_stale_simulations"}
+
+    missing = required - fn_names
+    if missing:
+        raise RuntimeError(f"Kritik worker gorevleri WorkerSettings.functions'ta kayitli degil: {missing}")
+    not_scheduled = required - cron_names
+    if not_scheduled:
+        raise RuntimeError(f"Kritik worker gorevleri cron ile zamanlanmamis: {not_scheduled}")
+    logger.info(
+        "worker kritik gorevleri kayitli ve zamanlanmis: process_queued_simulations, reap_stale_simulations"
+    )
+
+
 async def on_startup(ctx: dict) -> None:
     # Fail-closed: backend ile ayni dogrulama (bkz. app.config_security) -
     # production'da eksik/zayif/placeholder secret'la worker gorev almaya baslamaz.
     validate_production_secrets()
+    # Tek in-process worker modeli (Render ucretsiz: tek web instance, launcher
+    # TEK bir `arq` sureci baslatir - bkz. deploy/render_free_start.py). Ayni job'i
+    # iki worker'in almasi mimari olarak zaten guvenlidir (SELECT ... FOR UPDATE
+    # SKIP LOCKED + DB advisory lock; bkz. app.services.simulation_worker) -
+    # idempotency KORUNUR.
+    _assert_critical_tasks_registered()
+    await _verify_worker_dependencies(ctx)
     # AI pipeline provider context sozlesmesi (Faz 3D.1 / 3D.2-LOCAL):
     # readiness FALSE ise (varsayilan) hicbir client OLUSTURULMAZ, hicbir
     # ag/health-check/model-pull cagrisi YAPILMAZ - yalnizca yapilandirma

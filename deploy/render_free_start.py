@@ -1,111 +1,23 @@
-"""Start the zero-cost Render demo processes in a single web instance.
+"""Entry-point shim for the zero-cost Render demo container.
 
-Render's free plan has no background-worker instance type. For the demo only,
-nginx, FastAPI and ARQ therefore share one container. Any child exiting stops
-the container so Render can restart it instead of leaving a partly working app.
+Render runs `python /opt/synthetix/render_free_start.py` (see
+Dockerfile.render-free). The real, unit-testable supervisor logic lives in the
+backend package at `app.render_free_launcher` so the backend test suite can
+import it directly. This file only ensures the backend working directory (the
+image WORKDIR, `/app`) is importable and then delegates to `main()`.
 """
 
 from __future__ import annotations
 
 import os
-import signal
-import subprocess
 import sys
-import time
 
+# The script runs from /opt/synthetix, so /app is not on sys.path by default;
+# the image WORKDIR is /app (the backend package root). Add the current working
+# directory so `import app.render_free_launcher` resolves.
+sys.path.insert(0, os.getcwd())
 
-def _configure_render_origin() -> None:
-    hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
-    if not hostname:
-        raise RuntimeError("RENDER_EXTERNAL_HOSTNAME bulunamadi")
-
-    # Frontend and API are served by the same nginx origin. Deriving these
-    # values at runtime avoids hard-coding a generated onrender.com hostname.
-    os.environ.setdefault("ALLOWED_HOSTS", hostname)
-    os.environ.setdefault("CORS_ALLOWED_ORIGIN", f"https://{hostname}")
-
-
-def _run_migrations() -> None:
-    print("render-free: veritabani migration'i calistiriliyor", flush=True)
-    subprocess.run(["alembic", "upgrade", "head"], check=True)
-
-
-def _bootstrap_admin() -> None:
-    print("render-free: sunum yoneticisi hazirlaniyor", flush=True)
-    subprocess.run([sys.executable, "-m", "app.bootstrap_admin"], check=True)
-
-
-def _bootstrap_user() -> None:
-    print("render-free: sunum kullanicisi hazirlaniyor", flush=True)
-    subprocess.run([sys.executable, "-m", "app.bootstrap_user"], check=True)
-
-
-def _bootstrap_public_demo() -> None:
-    # Herkese acik "Canli demo" hesabi yalnizca ortam degiskeni verildiginde
-    # hazirlanir; verilmeyen kurulumlari kirmamak icin kosula baglidir.
-    if not os.environ.get("DEMO_ACCOUNT_EMAIL"):
-        return
-    print("render-free: canli demo hesabi hazirlaniyor", flush=True)
-    subprocess.run([sys.executable, "-m", "app.bootstrap_public_demo"], check=True)
-
-
-def main() -> int:
-    _configure_render_origin()
-    _run_migrations()
-    _bootstrap_admin()
-    _bootstrap_user()
-    _bootstrap_public_demo()
-
-    commands = {
-        "backend": ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
-        "worker": ["arq", "app.worker.WorkerSettings"],
-        "frontend": ["nginx", "-g", "daemon off;"],
-    }
-    children = {
-        name: subprocess.Popen(command)  # noqa: S603 - commands are fixed constants
-        for name, command in commands.items()
-    }
-    stopping = False
-
-    def stop_children(signum: int, _frame: object) -> None:
-        nonlocal stopping
-        if stopping:
-            return
-        stopping = True
-        print(f"render-free: signal={signum}; servisler kapatiliyor", flush=True)
-        for process in children.values():
-            if process.poll() is None:
-                process.terminate()
-
-    signal.signal(signal.SIGTERM, stop_children)
-    signal.signal(signal.SIGINT, stop_children)
-
-    exit_code = 0
-    while not stopping:
-        for name, process in children.items():
-            return_code = process.poll()
-            if return_code is not None:
-                print(
-                    f"render-free: {name} beklenmedik sekilde kapandi (code={return_code})",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                exit_code = return_code or 1
-                stop_children(signal.SIGTERM, None)
-                break
-        time.sleep(0.5)
-
-    deadline = time.monotonic() + 20
-    for process in children.values():
-        remaining = max(0.0, deadline - time.monotonic())
-        try:
-            process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-
-    return exit_code
-
+from app.render_free_launcher import main  # noqa: E402 - must follow the sys.path fix above
 
 if __name__ == "__main__":
     raise SystemExit(main())

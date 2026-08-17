@@ -33,6 +33,7 @@ from app.routers.settings import router as settings_router
 from app.routers.simulations import router as simulations_router
 from app.routers.test_wizard import router as test_wizard_router
 from app.security import InvalidAccessTokenError, decode_access_token
+from app.worker_heartbeat import STALE_THRESHOLD_SECONDS, read_worker_heartbeat_age
 
 # Modul importunda BIR KEZ yapilandirilir (gercek calisma zamani ortamina
 # gore) - `create_app()`'in kendisi degil, cunku bu fabrika testlerde farkli
@@ -194,9 +195,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(test_wizard_router)
 
     @app.get("/api/health")
-    async def health() -> dict:
-        """Liveness kontrolu: sadece sürecin ayakta oldugunu dogrular."""
-        return {"status": "ok"}
+    async def health() -> JSONResponse:
+        """Liveness kontrolu: HTTP sürecinin ayakta oldugunu VE (mümkün oldugunca)
+        arq worker'in canli oldugunu dogrular.
+
+        Render ücretsiz planinda API ile worker AYNI web container'inda calisir
+        (bkz. deploy/render_free_start.py); worker sürecinin ÖLMESI durumunda
+        launcher zaten container'i düsürür. Bu uc nokta ek olarak worker'in
+        CANLIYKEN TAKILMASINI (heartbeat PRESENT ama STALE) yakalar ve 503
+        dönerek Render'in container'i yeniden baslatmasini saglar - "API açik,
+        worker sessizce ölü" durumunda kalinmaz. Heartbeat henüz hic yazilmamissa
+        (taze baslangic veya worker'in ayri oldugu topoloji) `unknown` raporlanir
+        ama liveness düsürülmez (yanlis-pozitif restart olmaz)."""
+        age = await read_worker_heartbeat_age()
+        if age is None:
+            worker_status = "unknown"
+        elif age <= STALE_THRESHOLD_SECONDS:
+            worker_status = "ok"
+        else:
+            worker_status = "stale"
+        healthy = worker_status != "stale"
+        return JSONResponse(
+            status_code=200 if healthy else 503,
+            content={"status": "ok" if healthy else "degraded", "worker": worker_status},
+        )
 
     async def _check_db_session(session: AsyncSession) -> bool:
         try:

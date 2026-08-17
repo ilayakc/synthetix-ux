@@ -1,0 +1,36 @@
+# Keep the Docker build context small and reproducible (esp. the free Render
+# image built from Dockerfile.render-free, dockerContext: "."). Without this,
+# the host's frontend/node_modules (~320MB) is copied into the build context,
+# which both bloats/slows the build and can break `COPY frontend/ ./` (it would
+# overwrite the image's clean `npm ci` node_modules). Render clones fresh so it
+# lacks these, but excluding them keeps local and CI builds identical.
+
+# Version control / tooling
+.git
+.gitignore
+.claude
+.vscode
+.idea
+
+# Secrets / local env - MUST NOT be baked into any image
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# Python caches / virtualenvs
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+.venv
+venv
+
+# Node build inputs/outputs (npm ci re-creates node_modules inside the image)
+**/node_modules/
+frontend/dist
+
+# Local scratch / logs / stray copies
+*.log
+.local
+"frontend;C"

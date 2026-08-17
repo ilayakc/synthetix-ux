@@ -10,7 +10,13 @@ pytestmark = pytest.mark.integration
 def test_health_returns_ok(client: TestClient):
     response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    # Worker heartbeat henüz yazilmadigi (test ortaminda arq calismiyor) icin
+    # worker durumu "unknown" olur ama liveness DUSMEZ (yanlis-pozitif restart
+    # olmaz). PRESENT+STALE heartbeat senaryosu ayrica test edilir (bkz.
+    # test_worker_heartbeat_health.py).
+    assert body["worker"] in ("ok", "unknown")
 
 
 def test_ready_reports_dependencies_independently(client: TestClient):
