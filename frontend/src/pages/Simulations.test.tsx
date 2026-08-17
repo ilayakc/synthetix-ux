@@ -591,3 +591,48 @@ describe("Simulations - 'Kimler simüle edildi?' persona paneli", () => {
     expect(screen.getByRole("button", { name: "Kimler simüle edildi?" })).toBeInTheDocument();
   });
 });
+
+describe("Simulations - retry aksiyonu devam ederken", () => {
+  const runId = "44444444-4444-4444-4444-444444444444";
+
+  it("retry sürerken butonu devre disi birakir ve yukleme etiketi gosterir (cift tiklama korumasi)", async () => {
+    let resolveRetry: (value: unknown) => void = () => {};
+    const retryPending = new Promise((resolve) => {
+      resolveRetry = resolve;
+    });
+    let retryCalls = 0;
+    const failedRun = baseRun({
+      id: runId,
+      status: "failed",
+      retryable: true,
+      failure_code: null,
+      error: "gecici hata",
+    });
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (url.includes(`/api/simulations/runs/${runId}/retry`) && method === "POST") {
+        retryCalls += 1;
+        return retryPending;
+      }
+      if (url.includes("/api/simulations/runs")) return jsonResponse(200, [failedRun]);
+      throw new Error(`Beklenmeyen istek: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderSimulations();
+    await waitFor(() => expect(screen.getByText(/Çalıştırma 44444444/)).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: "Yeniden dene" }));
+
+    // Istek surerken buton devre disi + yukleme etiketi gosterir; devre disi
+    // buton yapisal olarak ikinci bir POST /retry gonderilmesini engeller.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Yeniden deneniyor…" })).toBeDisabled(),
+    );
+    expect(retryCalls).toBe(1);
+
+    // Cozulunce buton normale doner (liste tazelenir; run hala failed doner).
+    resolveRetry(jsonResponse(200, { ...failedRun, status: "queued", error: null }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Yeniden dene" })).toBeEnabled());
+  });
+});

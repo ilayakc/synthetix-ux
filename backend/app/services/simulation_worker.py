@@ -439,8 +439,22 @@ async def _load_page_feature_input(session: AsyncSession, run: SimulationRun) ->
 
     analysis = await session.get(PageAnalysis, run.page_analysis_id)
     if analysis is None or analysis.organization_id != run.organization_id:
+        logger.warning(
+            "run icin bagli PageAnalysis bulunamadi/baska organizasyona ait "
+            "(run_id=%s page_analysis_id=%s)",
+            run.id,
+            run.page_analysis_id,
+        )
         raise PageAnalysisDependencyError(_PAGE_ANALYSIS_FAILED_MESSAGE)
     if analysis.status != PageAnalysisStatus.SUCCEEDED:
+        logger.warning(
+            "run bagli PageAnalysis SUCCEEDED degil (run_id=%s page_analysis_id=%s "
+            "analysis_status=%s analysis_error_code=%s)",
+            run.id,
+            analysis.id,
+            analysis.status.value,
+            analysis.error_code,
+        )
         raise PageAnalysisDependencyError(_PAGE_ANALYSIS_FAILED_MESSAGE)
 
     role = run.input_snapshot.get("role", "primary")
@@ -687,6 +701,13 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
     # hesaplanmaz).
     retryable, _failure_code = classify_run_failure(run)
     if not retryable:
+        logger.info(
+            "retry reddedildi (yapisal olarak yeniden denenemez): run_id=%s launch_run_id=%s "
+            "failure_code=%s",
+            run.id,
+            run.launch_run_id,
+            _failure_code,
+        )
         raise InvalidSimulationStateError(NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE)
 
     # URL analizi basarisizsa yalnizca SimulationRun'i QUEUED yapmak yeterli
@@ -696,12 +717,27 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
     # analizine taze uc deneme hakki verir. DesignAsset kaynaklarindaki kalici
     # hatalar bu yola girmez (onlar URL disi/yapisal hata olarak ayrica ele
     # alinir).
+    requeued_page_analysis = False
     if run.page_analysis_id is not None:
         analysis = (
             await session.execute(
                 select(PageAnalysis).where(PageAnalysis.id == run.page_analysis_id).with_for_update()
             )
         ).scalar_one_or_none()
+        # Teshis icin bagli analizin durumunu (varsa) yapilandirilmis bicimde
+        # logla - gizli veri (token/cookie/ham govde) icermez; yalnizca id,
+        # kaynak turu, durum ve allowlist'li error_code.
+        logger.info(
+            "retry: run_id=%s launch_run_id=%s page_analysis_id=%s analysis_source=%s "
+            "analysis_status=%s analysis_error_code=%s cause=%r",
+            run.id,
+            run.launch_run_id,
+            run.page_analysis_id,
+            getattr(getattr(analysis, "source_kind", None), "value", None),
+            getattr(getattr(analysis, "status", None), "value", None),
+            getattr(analysis, "error_code", None),
+            run.error,
+        )
         if (
             analysis is not None
             and analysis.organization_id == organization_id
@@ -711,8 +747,10 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
             analysis.status = PageAnalysisStatus.QUEUED
             analysis.attempt_count = 0
             analysis.error = None
+            analysis.error_code = None
             analysis.started_at = None
             analysis.finished_at = None
+            requeued_page_analysis = True
 
     # NOT: bagimsiz `if`ler (elif degil) - bkz. `_resolve_launch_group` ve
     # app.services.test_wizard.launch_draft: bir run hem ucretsiz hak hem de
@@ -829,6 +867,14 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
     run.finished_at = None
     run.cancel_requested = False
     await session.flush()
+    logger.info(
+        "retry: run yeniden kuyruga alindi run_id=%s launch_run_id=%s "
+        "page_analysis_id=%s page_analysis_requeued=%s",
+        run.id,
+        run.launch_run_id,
+        run.page_analysis_id,
+        requeued_page_analysis,
+    )
     return run
 
 

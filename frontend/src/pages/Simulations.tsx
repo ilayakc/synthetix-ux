@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ApiError,
@@ -32,7 +32,12 @@ const STATUS_LABELS: Record<SimulationRunStatus, string> = {
   cancelled: "İptal edildi",
 };
 
-const POLL_INTERVAL_MS = 2500;
+// Devam eden (queued/running) calistirma varken sik, aksi halde seyrek yoklama
+// yapilir; sekme gorunur degilken yoklama tamamen durur (bkz. Simulations
+// bileseni icindeki self-scheduling setTimeout dongusu). Boylece bos ekranda
+// backend'e saniyede bir istek atilmaz ("slow" uyarilarinin kaynagi).
+const POLL_ACTIVE_MS = 3000;
+const POLL_IDLE_MS = 20000;
 
 function StatusBadge({ status }: { status: SimulationRunStatus }) {
   return <span className={`status-badge status-badge--${status}`}>{STATUS_LABELS[status]}</span>;
@@ -356,11 +361,16 @@ function SimulationCard({
   onCancel,
   onRetry,
   readOnly,
+  pendingAction,
 }: {
   run: SimulationRunResponse;
   onCancel: (runId: string) => void;
   onRetry: (runId: string) => void;
   readOnly: boolean;
+  // Bu run icin su an devam eden kullanici aksiyonu (varsa). Ilgili butonu
+  // devre disi birakip yukleme etiketi gostererek cift tiklamayi (dolayisiyla
+  // yinelenen retry/iptal isteklerini) engeller.
+  pendingAction?: "retry" | "cancel";
 }) {
   const isActive = run.status === "queued" || run.status === "running";
   const isFailed = run.status === "failed";
@@ -396,13 +406,25 @@ function SimulationCard({
         <div className="simulation-card__actions">
           <StatusBadge status={run.status} />
           {isActive && !readOnly && (
-            <button type="button" className="btn-secondary" onClick={() => onCancel(run.id)}>
-              İptal et
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => onCancel(run.id)}
+              disabled={pendingAction !== undefined}
+              aria-busy={pendingAction === "cancel"}
+            >
+              {pendingAction === "cancel" ? "İptal ediliyor…" : "İptal et"}
             </button>
           )}
           {isFailed && run.retryable && !readOnly && (
-            <button type="button" className="auth-submit" onClick={() => onRetry(run.id)}>
-              Yeniden dene
+            <button
+              type="button"
+              className="auth-submit"
+              onClick={() => onRetry(run.id)}
+              disabled={pendingAction !== undefined}
+              aria-busy={pendingAction === "retry"}
+            >
+              {pendingAction === "retry" ? "Yeniden deneniyor…" : "Yeniden dene"}
             </button>
           )}
           {isNonRetryableFailure && !readOnly && (
@@ -451,6 +473,10 @@ function SimulationCard({
   );
 }
 
+function hasActiveRuns(list: SimulationRunResponse[] | null): boolean {
+  return list?.some((run) => run.status === "queued" || run.status === "running") ?? false;
+}
+
 export default function Simulations() {
   const isDemo = Boolean(useOptionalAuth()?.session?.is_demo);
   const [runs, setRuns] = useState<SimulationRunResponse[] | null>(null);
@@ -458,42 +484,111 @@ export default function Simulations() {
     "all",
   );
   const [error, setError] = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Run basina devam eden kullanici aksiyonu (retry/cancel); butonu devre disi
+  // birakip cift tiklamayi (yinelenen istekleri) engellemek icin.
+  const [pendingActions, setPendingActions] = useState<Record<string, "retry" | "cancel">>({});
 
-  const load = () => {
-    listSimulationRuns()
-      .then((data) => {
+  // Yoklama dongusunun en guncel `poll`una handler'lardan (retry/iptal sonrasi
+  // aninda tazeleme) erismek icin; her render'da yeni kapanis olusturmadan.
+  const pollRef = useRef<(() => void) | null>(null);
+
+  // Tek bir self-scheduling setTimeout dongusu: ayni anda birden fazla timer
+  // olusmaz, istekler ust uste binmez (in-flight kilidi), devam eden calistirma
+  // yoksa seyrek (POLL_IDLE_MS) - varsa sik (POLL_ACTIVE_MS) yoklar, sekme
+  // gizliyken durur, gorunur olunca hemen tazeler ve unmount'ta temizlenir.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let inFlight = false;
+    let latestRuns: SimulationRunResponse[] | null = null;
+
+    const clearTimer = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const schedule = () => {
+      clearTimer();
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) return; // gizliyken duraklat
+      timer = setTimeout(poll, hasActiveRuns(latestRuns) ? POLL_ACTIVE_MS : POLL_IDLE_MS);
+    };
+
+    const poll = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const data = await listSimulationRuns();
+        if (cancelled) return;
+        latestRuns = data;
         setRuns(data);
         setError(null);
-      })
-      .catch(() => setError("Simülasyonlar yüklenemedi."));
-  };
+      } catch {
+        if (!cancelled) setError("Simülasyonlar yüklenemedi.");
+      } finally {
+        inFlight = false;
+        schedule();
+      }
+    };
 
-  useEffect(() => {
-    load();
-    timerRef.current = setInterval(load, POLL_INTERVAL_MS);
+    const handleVisibility = () => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        clearTimer();
+      } else {
+        poll(); // gorunur olur olmaz taze veri + dongyu yeniden baslat
+      }
+    };
+
+    pollRef.current = () => {
+      void poll();
+    };
+    void poll(); // ilk yukleme
+    document.addEventListener("visibilitychange", handleVisibility);
+
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      cancelled = true;
+      clearTimer();
+      pollRef.current = null;
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, []);
 
-  const handleCancel = async (runId: string) => {
+  const runAction = async (
+    runId: string,
+    action: "retry" | "cancel",
+    call: (id: string) => Promise<unknown>,
+    fallbackMessage: string,
+  ) => {
+    // Zaten bu run icin bir aksiyon sürüyorsa yok say (cift tiklama koruması).
+    if (pendingActions[runId]) return;
+    setPendingActions((prev) => ({ ...prev, [runId]: action }));
     try {
-      await cancelSimulationRun(runId);
-      load();
+      await call(runId);
+      setError(null);
+      pollRef.current?.();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "İptal işlemi başarısız oldu.");
+      setError(err instanceof ApiError ? err.message : fallbackMessage);
+    } finally {
+      setPendingActions((prev) => {
+        const next = { ...prev };
+        delete next[runId];
+        return next;
+      });
     }
   };
 
-  const handleRetry = async (runId: string) => {
-    try {
-      await retrySimulationRun(runId);
-      load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Yeniden deneme başarısız oldu.");
-    }
-  };
+  const handleCancel = useCallback((runId: string) => {
+    void runAction(runId, "cancel", cancelSimulationRun, "İptal işlemi başarısız oldu.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleRetry = useCallback((runId: string) => {
+    void runAction(runId, "retry", retrySimulationRun, "Yeniden deneme başarısız oldu.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const displayedRuns = isDemo
     ? selectPublicDemoItems(runs?.filter((run) => run.status === "succeeded") ?? [])
@@ -575,6 +670,7 @@ export default function Simulations() {
               onCancel={handleCancel}
               onRetry={handleRetry}
               readOnly={isDemo}
+              pendingAction={pendingActions[run.id]}
             />
           ))}
         </div>

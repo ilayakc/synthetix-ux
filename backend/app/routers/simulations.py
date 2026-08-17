@@ -239,6 +239,14 @@ async def cancel_run(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     await session.commit()
+    # `run` bu istekte UPDATE edilmis olabilir; server-side `onupdate=func.now()`
+    # olan `updated_at` (bkz. app.models.base.TimestampMixin) flush sonrasi ORM
+    # tarafinda EXPIRED kalir. `_to_response`, `updated_at`i duz attribute
+    # erisimiyle okur; expired bir alan async engine'de senkron lazy-load
+    # denenmesine ve `MissingGreenlet` (-> 500) hatasina yol acar. `refresh`,
+    # degeri awaited baglamda yeniden yukleyerek bunu engeller (salt-okur
+    # get_run/list_runs bu sorunu yasamaz - run'i DEGISTIRMEZLER).
+    await session.refresh(run)
     return await _to_response(run)
 
 
@@ -269,6 +277,11 @@ async def retry_run(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     await session.commit()
+    # Bkz. cancel_run icindeki ayni not: retry, `run`u HER ZAMAN UPDATE eder
+    # (status=QUEUED vb.), bu yuzden `updated_at` flush sonrasi expired'dir ve
+    # `_to_response` senkron lazy-load tetikleyip `MissingGreenlet` (-> 500)
+    # uretirdi. `refresh` degeri awaited baglamda yeniden yukler.
+    await session.refresh(run)
     return await _to_response(run)
 
 
