@@ -178,40 +178,60 @@ async def on_startup(ctx: dict) -> None:
     # `ai_report_provider`e gore TEK bir provider olusturulup ctx'e enjekte
     # edilir; baska bir provider'a OTOMATIK DUSULMEZ (bkz.
     # app.services.ai_pipeline.scheduling).
+    # Fail-safe: provider baslatma (ozellikle `openai` SDK'sinin lazy import'u -
+    # bkz. openai_provider modul basi notu) BASARISIZ olsa bile TUM worker
+    # DUSMEMELIDIR. Aksi halde eksik/eski bir imajda (ornegin `openai` kurulu
+    # degil) worker crash-loop'a girer, simulasyon islemcisi + reaper hic
+    # calismaz ve run'lar sonsuza kadar RUNNING'de takili kalir (gozlemlenen
+    # production hatasi). Provider baslatilamazsa ACIK bir ERROR loglanir
+    # (gizli veri icermez), AI raporu devre disi kalir ve simulasyon isleme
+    # ETKILENMEDEN devam eder.
     if settings.ai_report_provider_ready:
-        if settings.ai_report_provider == "openai" and settings.openai_api_key is not None:
-            ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = OpenAIProvider(
-                api_key=settings.openai_api_key.get_secret_value(),
-                model=settings.openai_model,
-                reasoning_effort=settings.openai_reasoning_effort,
-                timeout_seconds=settings.openai_timeout_seconds,
-                max_output_tokens=settings.openai_max_output_tokens,
+        try:
+            if settings.ai_report_provider == "openai" and settings.openai_api_key is not None:
+                ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = OpenAIProvider(
+                    api_key=settings.openai_api_key.get_secret_value(),
+                    model=settings.openai_model,
+                    reasoning_effort=settings.openai_reasoning_effort,
+                    timeout_seconds=settings.openai_timeout_seconds,
+                    max_output_tokens=settings.openai_max_output_tokens,
+                )
+                logger.info(
+                    "worker basladi: OpenAI AI pipeline provider'i hazir (model=%s)",
+                    settings.openai_model,
+                )
+            elif settings.ai_report_provider == "ollama":
+                ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = OllamaProvider(
+                    base_url=settings.ollama_base_url,
+                    model=settings.ollama_model,
+                    timeout_seconds=settings.ollama_timeout_seconds,
+                    temperature=settings.ollama_temperature,
+                    keep_alive=settings.ollama_keep_alive,
+                    num_ctx=settings.ollama_num_ctx,
+                    max_output_tokens=settings.ollama_max_output_tokens,
+                    max_concurrency=settings.ollama_max_concurrency,
+                    allow_remote_host=settings.ollama_allow_remote_host,
+                    structured_output_mode=settings.ollama_structured_output_mode,
+                )
+                logger.info(
+                    "worker basladi: Ollama AI pipeline provider'i hazir (model=%s)",
+                    settings.ollama_model,
+                )
+            elif settings.ai_report_provider == "mock":
+                ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = MockAIProvider()
+                logger.info("worker basladi: Mock AI pipeline provider'i hazir")
+            else:
+                ctx.setdefault(AI_PIPELINE_PROVIDER_CTX_KEY, None)
+                logger.info("worker basladi (redis_url=%s)", settings.redis_url)
+        except Exception:  # noqa: BLE001 - provider hatasi worker'i DUSURMEMELI
+            ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = None
+            logger.error(
+                "AI pipeline provider'i (%s) baslatilamadi; AI raporu DEVRE DISI, "
+                "simulasyon isleme + reaper ETKILENMEDEN devam eder. Gerekli "
+                "runtime bagimligi (ornegin 'openai') imajda kurulu mu?",
+                settings.ai_report_provider,
+                exc_info=True,
             )
-            logger.info(
-                "worker basladi: OpenAI AI pipeline provider'i hazir (model=%s)", settings.openai_model
-            )
-        elif settings.ai_report_provider == "ollama":
-            ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = OllamaProvider(
-                base_url=settings.ollama_base_url,
-                model=settings.ollama_model,
-                timeout_seconds=settings.ollama_timeout_seconds,
-                temperature=settings.ollama_temperature,
-                keep_alive=settings.ollama_keep_alive,
-                num_ctx=settings.ollama_num_ctx,
-                max_output_tokens=settings.ollama_max_output_tokens,
-                max_concurrency=settings.ollama_max_concurrency,
-                allow_remote_host=settings.ollama_allow_remote_host,
-                structured_output_mode=settings.ollama_structured_output_mode,
-            )
-            logger.info(
-                "worker basladi: Ollama AI pipeline provider'i hazir (model=%s)", settings.ollama_model
-            )
-        elif settings.ai_report_provider == "mock":
-            ctx[AI_PIPELINE_PROVIDER_CTX_KEY] = MockAIProvider()
-            logger.info("worker basladi: Mock AI pipeline provider'i hazir")
-        else:
-            ctx.setdefault(AI_PIPELINE_PROVIDER_CTX_KEY, None)
-            logger.info("worker basladi (redis_url=%s)", settings.redis_url)
     else:
         ctx.setdefault(AI_PIPELINE_PROVIDER_CTX_KEY, None)
         logger.info("worker basladi (redis_url=%s)", settings.redis_url)
@@ -221,23 +241,36 @@ async def on_startup(ctx: dict) -> None:
     # cagrisi YAPILMAZ (bkz. Settings.interaction_heatmap_provider_ready). readiness
     # TRUE ise `ai_interaction_heatmap_provider`e gore TEK bir secici enjekte edilir;
     # baska bir seciciye OTOMATIK DUSULMEZ.
+    # Ayni fail-safe (bkz. yukaridaki AI pipeline provider notu): heatmap
+    # secicisi baslatilamazsa worker DUSMEZ - heatmap devre disi kalir,
+    # simulasyon isleme etkilenmez.
     if settings.interaction_heatmap_provider_ready:
-        if settings.ai_interaction_heatmap_provider == "openai" and settings.openai_api_key is not None:
-            ctx[INTERACTION_HEATMAP_SELECTOR_CTX_KEY] = InteractionHeatmapOpenAISelector(
-                api_key=settings.openai_api_key.get_secret_value(),
-                model=settings.openai_model,
-                reasoning_effort=settings.openai_reasoning_effort,
-                timeout_seconds=settings.openai_timeout_seconds,
-                max_output_tokens=settings.openai_max_output_tokens,
+        try:
+            if settings.ai_interaction_heatmap_provider == "openai" and settings.openai_api_key is not None:
+                ctx[INTERACTION_HEATMAP_SELECTOR_CTX_KEY] = InteractionHeatmapOpenAISelector(
+                    api_key=settings.openai_api_key.get_secret_value(),
+                    model=settings.openai_model,
+                    reasoning_effort=settings.openai_reasoning_effort,
+                    timeout_seconds=settings.openai_timeout_seconds,
+                    max_output_tokens=settings.openai_max_output_tokens,
+                )
+                logger.info(
+                    "worker: OpenAI etkilesim isi haritasi secicisi hazir (model=%s)",
+                    settings.openai_model,
+                )
+            elif settings.ai_interaction_heatmap_provider == "mock":
+                ctx[INTERACTION_HEATMAP_SELECTOR_CTX_KEY] = MockInteractionHeatmapSelector()
+                logger.info("worker: Mock etkilesim isi haritasi secicisi hazir")
+            else:
+                ctx.setdefault(INTERACTION_HEATMAP_SELECTOR_CTX_KEY, None)
+        except Exception:  # noqa: BLE001 - secici hatasi worker'i DUSURMEMELI
+            ctx[INTERACTION_HEATMAP_SELECTOR_CTX_KEY] = None
+            logger.error(
+                "Etkilesim isi haritasi secicisi (%s) baslatilamadi; heatmap DEVRE DISI, "
+                "simulasyon isleme etkilenmez",
+                settings.ai_interaction_heatmap_provider,
+                exc_info=True,
             )
-            logger.info(
-                "worker: OpenAI etkilesim isi haritasi secicisi hazir (model=%s)", settings.openai_model
-            )
-        elif settings.ai_interaction_heatmap_provider == "mock":
-            ctx[INTERACTION_HEATMAP_SELECTOR_CTX_KEY] = MockInteractionHeatmapSelector()
-            logger.info("worker: Mock etkilesim isi haritasi secicisi hazir")
-        else:
-            ctx.setdefault(INTERACTION_HEATMAP_SELECTOR_CTX_KEY, None)
     else:
         ctx.setdefault(INTERACTION_HEATMAP_SELECTOR_CTX_KEY, None)
 

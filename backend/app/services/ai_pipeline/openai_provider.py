@@ -22,19 +22,14 @@ import json
 import time
 from typing import Any, cast
 
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AsyncOpenAI,
-    AuthenticationError,
-    BadRequestError,
-    InternalServerError,
-    NotFoundError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
-)
+# NOT: `openai` SDK'si YALNIZCA gercek `OpenAIProvider` instantiate/kullanildiginda
+# gereklidir. Modul, `app.worker` tarafindan (ai_report kapali olsa bile) her zaman
+# import edilir; ayrica analyzer container'inda da openai KURULU DEGILDIR. Bu yuzden
+# `import openai` MODUL SEVIYESINDE YAPILMAZ - aksi halde openai eksik bir imajda
+# `import app.worker` cokup TUM worker'i (simulasyon islemcisi + reaper dahil)
+# dusururdu ve run'lar sonsuza kadar RUNNING kalirdi. `openai_selector.py` ile AYNI
+# desen (bkz. o modulun basindaki not) - openai yalnizca `__init__` ve
+# `_map_openai_error` icinde lazy import edilir.
 from pydantic import BaseModel
 
 from app.models.ai_pipeline import AIPipelineStageType
@@ -93,7 +88,21 @@ def _derive_safety_identifier(input_payload: BaseModel) -> str:
 
 def _map_openai_error(exc: Exception) -> AIProviderError:
     """OpenAI SDK exception TIPINDEN (asla mesaj/string arama ile DEGIL) typed
-    domain hatasina cevirir (bkz. gorev talimati madde 10)."""
+    domain hatasina cevirir (bkz. gorev talimati madde 10). `openai` LAZILY
+    import edilir (bkz. modul basi notu)."""
+
+    from openai import (
+        APIConnectionError,
+        APIStatusError,
+        APITimeoutError,
+        AuthenticationError,
+        BadRequestError,
+        InternalServerError,
+        NotFoundError,
+        PermissionDeniedError,
+        RateLimitError,
+        UnprocessableEntityError,
+    )
 
     if isinstance(exc, APITimeoutError):
         return AIProviderTimeoutError("openai istegi zaman asimina ugradi")
@@ -146,7 +155,11 @@ class OpenAIProvider:
         # SDK otomatik retry KAPALI (max_retries=0) - retry otoritesi mevcut
         # Synthetix worker'idir (bkz. modul dokstring'i). `timeout` SDK'nin
         # resmi timeout mekanizmasidir; ikinci bir `asyncio.wait_for` katmani
-        # EKLENMEZ.
+        # EKLENMEZ. `openai` LAZILY import edilir (bkz. modul basi notu) -
+        # eksikse burada acik `ModuleNotFoundError` firlar ve cagiran (worker
+        # on_startup) bunu yakalayip provider'i devre disi birakir.
+        from openai import AsyncOpenAI
+
         self._client = AsyncOpenAI(api_key=api_key, timeout=float(timeout_seconds), max_retries=0)
 
     async def aclose(self) -> None:

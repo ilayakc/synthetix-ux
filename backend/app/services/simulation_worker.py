@@ -39,6 +39,7 @@ tuketim/cift serbest birakma olusmaz.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -482,27 +483,62 @@ async def _process_selected_modules(run: SimulationRun, dom_input: DomAdaptedInp
     snapshot = dom_input.snapshot if dom_input is not None else None
     cta_evidence = dom_input.cta_evidence if dom_input is not None else None
 
+    # Her modul icin baslangic/bitis/sure/hata teshis amacli loglanir (bkz.
+    # gorev talimati madde 6/12). Boylece "Gelismis moduller isleniyor"
+    # asamasinda HANGI modulde ne kadar sure gectigi ve hangisinde takilindigi
+    # loglardan net gorulur. Gizli veri (token/cookie/ham govde) loglanmaz -
+    # yalnizca run_id, launch_run_id ve modul anahtari.
     for module_key in modules:
-        if module_key == "campaign_cta_test":
-            module_results[module_key] = run_campaign_cta_analysis(
-                run.input_snapshot,
-                run.deterministic_seed,
-                rules_version=CURRENT_RULES_VERSION,
-                page_feature_snapshot=snapshot,
-                cta_evidence=cta_evidence,
+        started = time.monotonic()
+        logger.info(
+            "modul basladi: module=%s run_id=%s launch_run_id=%s",
+            module_key,
+            run.id,
+            run.launch_run_id,
+        )
+        try:
+            if module_key == "campaign_cta_test":
+                module_results[module_key] = run_campaign_cta_analysis(
+                    run.input_snapshot,
+                    run.deterministic_seed,
+                    rules_version=CURRENT_RULES_VERSION,
+                    page_feature_snapshot=snapshot,
+                    cta_evidence=cta_evidence,
+                )
+            elif module_key == "synthetic_attention_estimate":
+                module_results[module_key] = run_synthetic_attention_estimate(
+                    run.input_snapshot,
+                    run.deterministic_seed,
+                    rules_version=CURRENT_RULES_VERSION,
+                    page_feature_snapshot=snapshot,
+                )
+            elif module_key == "network_device_test":
+                url = run.input_snapshot.get("url")
+                if not url or not isinstance(url, str):
+                    raise ModuleInputError("input_snapshot.url gereklidir (network_device_test)")
+                module_results[module_key] = await device_network_analysis.run_network_device_test(url)
+            else:
+                # Bilinmeyen modul anahtari (teoride olusmamali) sessizce atlanir.
+                logger.warning("bilinmeyen modul anahtari atlandi: module=%s run_id=%s", module_key, run.id)
+                continue
+        except (ModuleInputError, ModuleProcessingError) as exc:
+            # Modulun kendi (kontrollu) hatasi: cagiran process_run bunu yakalayip
+            # run'i FAILED yapar; burada yalnizca teshis icin, sure ile loglanir.
+            logger.warning(
+                "modul basarisiz: module=%s run_id=%s launch_run_id=%s sure=%.1fms hata=%s",
+                module_key,
+                run.id,
+                run.launch_run_id,
+                (time.monotonic() - started) * 1000,
+                exc,
             )
-        elif module_key == "synthetic_attention_estimate":
-            module_results[module_key] = run_synthetic_attention_estimate(
-                run.input_snapshot,
-                run.deterministic_seed,
-                rules_version=CURRENT_RULES_VERSION,
-                page_feature_snapshot=snapshot,
-            )
-        elif module_key == "network_device_test":
-            url = run.input_snapshot.get("url")
-            if not url or not isinstance(url, str):
-                raise ModuleInputError("input_snapshot.url gereklidir (network_device_test)")
-            module_results[module_key] = await device_network_analysis.run_network_device_test(url)
+            raise
+        logger.info(
+            "modul tamamlandi: module=%s run_id=%s sure=%.1fms",
+            module_key,
+            run.id,
+            (time.monotonic() - started) * 1000,
+        )
 
     return module_results
 
