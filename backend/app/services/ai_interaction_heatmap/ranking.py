@@ -110,6 +110,28 @@ _INTENT_PHRASES: dict[str, tuple[str, ...]] = {
         "alisveris yap",
     ),
     "add_to_cart": ("sepete ekle", "satin al", "hemen al", "siparis ver", "siparis olustur"),
+    # Sepeti GORUNTULEME / sepete gitme niyeti (ekleme'den ayri). "sepet" ve
+    # "cart"/"basket" alt-dizileri; "sepete eklenen urunu goruntule" gorevi VE
+    # ikon-only sepet kontrolunun ("Sepet"/"Sepetim" etiketi, bkz. candidates.
+    # _SEMANTIC_LABELS) ORTAK niyete dusmesini saglar - boylece gecerli bir sepet
+    # gorevi artik "no strong match" uretmez.
+    "view_cart": (
+        "sepet",
+        "sepetim",
+        "sepeti goruntule",
+        "sepete git",
+        "sepeti gor",
+        "sepeti ac",
+        "sepete bak",
+        "alisveris sepeti",
+        "alisveris cantasi",
+        "cart",
+        "basket",
+        "view cart",
+        "go to cart",
+        "my cart",
+        "view basket",
+    ),
     "contact": ("iletisim", "bize ulasin", "destek al", "contact"),
     "subscribe": ("abone ol", "bulten", "newsletter", "subscribe"),
 }

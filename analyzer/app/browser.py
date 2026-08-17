@@ -203,8 +203,39 @@ _FEATURE_EXTRACTION_JS = """
     return hasBackground || borderWidth > 0 || padding >= 18 || /(btn|button|cta|primary|secondary)/.test(hint);
   }
 
+  function controlSemantic(el) {
+    // Ikon-only kontroller (sepet/hesap/arama/menu...) icin GUVENLI, sabit bir
+    // semantik anahtar cikarir - yalnizca ZATEN var olan guvenli ipuclarindan
+    // (aria-label/title/data-testid/name/id/class + nested img alt / svg title);
+    // gorunur sayfa metni okunmaz. Eslesme yoksa null (uydurma yapilmaz).
+    const attrs = [
+      el.getAttribute('aria-label'), el.getAttribute('title'),
+      el.getAttribute('data-testid'), el.getAttribute('data-test'),
+      el.getAttribute('name'), el.id,
+      typeof el.className === 'string' ? el.className : '',
+    ];
+    const nestedAlt = Array.from(el.querySelectorAll ? el.querySelectorAll('img[alt]') : [])
+      .map((img) => img.getAttribute('alt') || '');
+    const svgHints = Array.from(el.querySelectorAll ? el.querySelectorAll('svg title, use') : [])
+      .map((n) => (n.textContent || '') + ' ' + ((n.getAttribute && (n.getAttribute('href') || n.getAttribute('xlink:href'))) || ''));
+    const hint = attrs.concat(nestedAlt).concat(svgHints)
+      .filter((v) => typeof v === 'string').join(' ').toLowerCase();
+    if (!hint) return null;
+    if (/(sepet|cart|basket)/.test(hint)) return 'cart';
+    if (/(canta|shopping-bag|shoppingbag)/.test(hint)) return 'bag';
+    if (/(favori|wishlist|wish-list)/.test(hint)) return 'wishlist';
+    if (/(hesab|hesap|account|profil|kullanici)/.test(hint)) return 'account';
+    if (/(giris|oturum|login|sign-in|signin)/.test(hint)) return 'login';
+    if (/(arama|search)/.test(hint)) return 'search';
+    if (/(menu|hamburger)/.test(hint)) return 'menu';
+    return null;
+  }
+
   function isMeaningfulInteractive(el) {
-    return isInsideCapture(el) && accessibleName(el).length >= 2;
+    // Metin/accessible name (>=2) YA DA ikon-only kontroller icin cikarilabilen
+    // guvenli bir semantik varsa aday kabul edilir - boylece etiketsiz sepet/
+    // hesap/arama ikonlari veri disinda kalmaz (onceki davranista kaliyordu).
+    return isInsideCapture(el) && (accessibleName(el).length >= 2 || controlSemantic(el) !== null);
   }
 
   function interactionKind(el, role) {
@@ -346,6 +377,7 @@ _FEATURE_EXTRACTION_JS = """
       role,
       interaction_kind: role === 'button' || role === 'link' ? interactionKind(el, role) : null,
       label: role === 'button' || role === 'link' ? safeInteractiveLabel(el) : null,
+      control_semantic: role === 'button' || role === 'link' ? controlSemantic(el) : null,
       x: rect.x,
       y: rect.y,
       width: rect.width,

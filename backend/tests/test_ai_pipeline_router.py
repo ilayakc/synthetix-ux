@@ -811,6 +811,34 @@ async def test_persona_behavior_ordered_by_batch_index(session: AsyncSession):
     assert behavior_batches == [0, 1, 2]
 
 
+async def test_failed_init_pipeline_without_personas_returns_controlled_status(session: AsyncSession):
+    """Regresyon (gorev talimati Part 1): kalici init hatasi sonrasi kaydedilen
+    FAILED pipeline'in (Persona satiri YOK) DURUM sorgusu, 500 (integrity)
+    YERINE kontrollu bir "failed" durumu + guvenli stage error_code dondurur -
+    boylece frontend infinite `ai_pipeline_not_found` yerine gercek durumu gorur.
+    (bkz. orchestration.record_initialization_failure)."""
+
+    _org, run = await _make_run(session, num_personas=0)
+    await _seed_pipeline_in_session(
+        session,
+        run,
+        pipeline_status=AIPipelineStatus.FAILED,
+        stages=[
+            StageSpec(
+                AIPipelineStageType.EVIDENCE_PREPARATION,
+                AIPipelineStageStatus.FAILED,
+                error_code="missing_report",
+            )
+        ],
+    )
+    result = await queries.get_ai_pipeline_status(
+        session, organization_id=run.organization_id, simulation_run_id=run.id
+    )
+    assert result.status == "failed"
+    assert result.report_available is False
+    assert result.stages[0].error_code == "missing_report"
+
+
 def test_status_response_omits_validated_output_and_hashes(client: TestClient):
     run_id = _launch_single(client)
     _arun(

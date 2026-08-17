@@ -83,6 +83,15 @@ _STAGE_ORDER_INDEX: dict[AIPipelineStageType, int] = {
 # eklenir (bkz. `expected_stage_count`).
 FIXED_STAGE_COUNT = 5
 
+# Terminal BASARISIZ pipeline durumlari - bu durumlarda durum sorgusu, eksik
+# Persona/manifest butunlugu nedeniyle 500 YERINE kontrollu bir ozet dondurur
+# (bkz. `get_ai_pipeline_status`).
+_TERMINAL_FAILED_STATUSES: tuple[AIPipelineStatus, ...] = (
+    AIPipelineStatus.FAILED,
+    AIPipelineStatus.PARTIAL,
+    AIPipelineStatus.CANCELLED,
+)
+
 
 # --- Domain hatalari (madde 10) --------------------------------------------------
 
@@ -353,7 +362,22 @@ async def get_ai_pipeline_status(
     queued = sum(1 for s in stages if s.status == AIPipelineStageStatus.QUEUED)
     failed = sum(1 for s in stages if s.status == AIPipelineStageStatus.FAILED)
 
-    behavior_batches = await _behavior_batch_count(session, run.id, stages)
+    try:
+        behavior_batches = await _behavior_batch_count(session, run.id, stages)
+    except PipelineIntegrityError:
+        # Terminal BASARISIZ (FAILED/PARTIAL/CANCELLED) bir pipeline - ozellikle
+        # kalici initialization hatasi (bkz. orchestration.
+        # record_initialization_failure: Persona/Report eksik oldugu icin FAILED
+        # kaydedilmis) - Persona satiri OLMAYABILIR. Boyle bir pipeline'in DURUM
+        # sorgusu 500 (integrity) YERINE, mevcut stage'lerden turetilen kontrollu
+        # bir ozet dondurmelidir; aksi halde frontend "basarisiz" durumu hic
+        # goremezdi. Terminal olmayan (QUEUED/RUNNING) pipeline'larda gercek bir
+        # butunluk hatasi hala yukari firlatilir.
+        if pipeline.status not in _TERMINAL_FAILED_STATUSES:
+            raise
+        behavior_batches = sum(
+            1 for s in stages if s.stage_type == AIPipelineStageType.PERSONA_BEHAVIOR
+        )
     expected_total = expected_stage_count(behavior_batches)
     progress = compute_progress_percent(
         succeeded_stage_count=succeeded,

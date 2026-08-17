@@ -26,9 +26,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.models.billing import Entitlement, EntitlementStatus
 from app.models.page_analysis import PageAnalysis, PageAnalysisStatus
-from app.models.simulations import SimulationRun
+from app.models.simulations import SimulationRun, SimulationStatus
+from app.services import entitlements as entitlements_service
 from app.services import simulation_worker
+from app.services.exceptions import EntitlementUnavailableError
+from app.services.pricing import FEATURE_BASIC_UX_TEST
 from tests.conftest import TEST_DATABASE_URL
 
 pytestmark = pytest.mark.integration
@@ -205,6 +209,107 @@ def test_retry_twice_rejects_second_without_duplicate_run(client):
 
     runs_after = anyio.run(_count_runs_for_variant, run_id)
     assert runs_after == runs_before  # ayni satir yeniden kuyruga alindi, yeni satir yok
+
+
+async def _consume_free_entitlement_and_fail_run(run_id: str) -> tuple[str, str, str]:
+    """Ucretsiz hakki (basic_ux_test) run'in `launch_run_id`i altinda TUKETIR
+    (CONSUMED, reserved_run_id == launch_run_id) ve run'i FAILED yapar - yani
+    tam da retry idempotency kontrolunun karsilastirdigi GERCEK kimlikle. Boylece
+    HTTP retry yolu, "ayni launch'in tuketilmis hakki" senaryosunda test edilir.
+
+    (org_id, launch_run_id, feature_key) dondurur."""
+
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            run = await session.get(SimulationRun, uuid.UUID(run_id))
+            assert run is not None
+            assert run.free_entitlement_feature_key == FEATURE_BASIC_UX_TEST
+            assert run.launch_run_id is not None
+            # `_launch_failed_url_run` hakki RELEASE etmis (AVAILABLE) olabilir;
+            # once `launch_run_id` altinda yeniden RESERVED edip sonra CONSUMED'a
+            # geciriyoruz - boylece reserved_run_id == launch_run_id ve CONSUMED.
+            await entitlements_service.reserve_entitlement(
+                session, run.organization_id, run.free_entitlement_feature_key, run.launch_run_id
+            )
+            await entitlements_service.consume_entitlement(
+                session, run.organization_id, run.free_entitlement_feature_key, run.launch_run_id
+            )
+            run.status = SimulationStatus.FAILED
+            run.error = "worker crash (simule edilmis sistem hatasi)"
+            run.finished_at = datetime.now(UTC)
+            await session.commit()
+            return str(run.organization_id), str(run.launch_run_id), run.free_entitlement_feature_key
+    finally:
+        await engine.dispose()
+
+
+async def _entitlement_snapshot(org_id: str, feature_key: str) -> tuple[str, str | None]:
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            row = (
+                await session.execute(
+                    select(Entitlement).where(
+                        Entitlement.organization_id == uuid.UUID(org_id),
+                        Entitlement.feature_key == feature_key,
+                    )
+                )
+            ).scalar_one()
+            return row.status.value, (str(row.reserved_run_id) if row.reserved_run_id else None)
+    finally:
+        await engine.dispose()
+
+
+async def _reserve_for_other_launch_raises(org_id: str, feature_key: str) -> bool:
+    """Baska bir launch (farkli run_id) ayni TUKETILMIS hakki rezerve edemez."""
+
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            try:
+                await entitlements_service.reserve_entitlement(
+                    session, uuid.UUID(org_id), feature_key, uuid.uuid4()
+                )
+                return False
+            except EntitlementUnavailableError:
+                return True
+    finally:
+        await engine.dispose()
+
+
+def test_retry_consumed_free_entitlement_same_launch_is_idempotent(client):
+    """REGRESYON (gorev talimati Part 3/4): sistem/worker hatasiyla FAILED olan bir
+    run'in retry'i, hak ZATEN AYNI launch (`launch_run_id`) altinda CONSUMED ise
+    409 URETMEZ; yeni ucretsiz hak yaratmaz ve hakki ikinci kez tuketmez.
+
+    Gercek HTTP retry endpoint'i uzerinden calisir; reserved_run_id ==
+    launch_run_id gercek kimligiyle idempotency kontrolunu dogrular."""
+
+    import anyio
+
+    _register(client)
+    run_id = _launch_failed_url_run(client)  # basic_ux_test, ucretsiz hak
+    # NOT: _launch_failed_url_run hakki RELEASE eder; burada onu tekrar CONSUMED
+    # duruma cekip run'i (ayni sekilde) FAILED yapiyoruz - boylece "ayni launch'in
+    # tuketilmis hakki" senaryosunu kesin olarak kuruyoruz.
+    org_id, launch_run_id, feature_key = anyio.run(_consume_free_entitlement_and_fail_run, run_id)
+
+    status_before, reserved_before = anyio.run(_entitlement_snapshot, org_id, feature_key)
+    assert status_before == EntitlementStatus.CONSUMED.value
+    assert reserved_before == launch_run_id  # reserved_run_id == launch_run_id
+
+    response = client.post(f"/api/simulations/runs/{run_id}/retry", headers=_csrf_headers(client))
+    assert response.status_code == 200, response.text  # 409 DEGIL
+    assert response.json()["status"] == "queued"
+
+    # Hak hala CONSUMED (ikinci kez tuketilmedi / yeni ucretsiz hak yaratilmadi).
+    status_after, reserved_after = anyio.run(_entitlement_snapshot, org_id, feature_key)
+    assert status_after == EntitlementStatus.CONSUMED.value
+    assert reserved_after == launch_run_id
+
+    # Baska bir launch ayni tuketilmis hakki KULLANAMAZ (tek kullanim korunur).
+    assert anyio.run(_reserve_for_other_launch_raises, org_id, feature_key) is True
 
 
 def test_cancel_queued_run_returns_200(client):

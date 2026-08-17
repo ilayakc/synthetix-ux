@@ -123,6 +123,16 @@ async def reserve_entitlement(
         raise EntitlementUnavailableError(f"'{feature_key}' hakki baska bir is icin rezerve edilmis durumda")
 
     if entitlement.status == EntitlementStatus.CONSUMED:
+        # Idempotent yeniden kullanim: hak ZATEN bu is (run_id) tarafindan
+        # tuketilmisse, bu bir yeniden-rezervasyon (ornegin sistem/worker hatasi
+        # sonrasi ayni run'in `retry_run`i) yeni bir ucretsiz kullanim YARATMAZ -
+        # mevcut tuketimi (CONSUMED) degistirmeden dondurur. Boylece ayni run'in
+        # retry'si "daha once kullanildi" (409) ile ikinci kez hak talep etmez ve
+        # entitlement iki kez tuketilmez (bkz. app.services.simulation_worker.
+        # retry_run). BASKA bir is tarafindan tuketildiyse hala reddedilir (tek
+        # kullanim kurali - hak gercekten tukenmistir).
+        if entitlement.reserved_run_id == run_id:
+            return entitlement
         raise EntitlementUnavailableError(f"'{feature_key}' hakki daha once kullanildi")
 
     entitlement.status = EntitlementStatus.RESERVED

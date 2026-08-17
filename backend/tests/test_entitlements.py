@@ -321,6 +321,41 @@ async def test_reserve_entitlement_is_idempotent_for_same_run_id(
     assert second.status == EntitlementStatus.RESERVED
 
 
+async def test_reserve_entitlement_after_consume_by_same_run_is_idempotent(
+    session: AsyncSession, organization: Organization
+):
+    """Regresyon (retry / ucretsiz hak): ayni is (run_id) tarafindan ZATEN
+    tuketilmis bir hakki yeniden rezerve etmek (ornegin sistem/worker hatasi
+    sonrasi `retry_run`) YENI bir ucretsiz kullanim yaratmaz ve 409 firlatmaz -
+    mevcut CONSUMED durumu degistirmeden idempotent olarak doner (hak iki kez
+    tuketilmez)."""
+
+    run_id = uuid.uuid4()
+    await entitlements.reserve_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST, run_id)
+    await entitlements.consume_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST, run_id)
+
+    reused = await entitlements.reserve_entitlement(
+        session, organization.id, FEATURE_BASIC_UX_TEST, run_id
+    )
+    assert reused.status == EntitlementStatus.CONSUMED  # ikinci kez tuketim/rezervasyon YOK
+    assert reused.reserved_run_id == run_id
+
+
+@pytest.mark.security
+async def test_reserve_entitlement_consumed_by_another_run_still_rejected(
+    session: AsyncSession, organization: Organization
+):
+    """Tek kullanim kurali korunur: hak BASKA bir is tarafindan tuketildiyse,
+    farkli bir run icin yeniden rezerve edilemez (gercekten tukenmistir)."""
+
+    consuming_run = uuid.uuid4()
+    await entitlements.reserve_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST, consuming_run)
+    await entitlements.consume_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST, consuming_run)
+
+    with pytest.raises(EntitlementUnavailableError):
+        await entitlements.reserve_entitlement(session, organization.id, FEATURE_BASIC_UX_TEST, uuid.uuid4())
+
+
 @pytest.mark.security
 async def test_reserve_entitlement_held_by_another_run_is_rejected(
     session: AsyncSession, organization: Organization

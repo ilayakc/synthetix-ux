@@ -43,6 +43,12 @@ class ElementBox(BaseModel):
     role: str
     interaction_kind: str | None = None
     label: str | None = Field(default=None, max_length=120)
+    # Ikon-only kontroller icin GUVENLI, sabit bir semantik anahtar (cart/bag/
+    # account/search/menu/...). Yalnizca aria-label/title/alt/class/id/data-testid
+    # gibi zaten var olan GUVENLI ipuclarindan cikarilir - hassas sayfa metni
+    # DEGIL. Rapor katmani bunu insan-okur bir etikete cevirir (bkz. backend
+    # app.services.ai_interaction_heatmap.candidates._SEMANTIC_LABELS).
+    control_semantic: str | None = Field(default=None, max_length=40)
     x: float
     y: float
     width: float

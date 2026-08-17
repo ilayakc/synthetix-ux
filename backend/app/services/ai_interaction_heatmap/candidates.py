@@ -15,8 +15,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from app.logging_config import get_logger
 from app.models.page_analysis import PageAnalysisSourceKind
 from app.services.ai_interaction_heatmap.schemas import InteractionCandidate
+
+logger = get_logger("ai_interaction_candidates")
 
 # Ilk ekran ("above the fold") esigi: viewport yuksekligi rapor katmaninda
 # kesin bilinmedigi icin, standart bir masaustu en-boy oranindan (16:9)
@@ -28,6 +31,74 @@ _FOLD_ASPECT = 9.0 / 16.0
 # `container_link` (dev sarmalayici baglantilar) haritada anlamli bir tiki
 # temsil etmez - `_build_cta_overlay` ile ayni sekilde disarida birakilir.
 _EXCLUDED_KINDS = {"container_link"}
+
+# DOM'da bir elemanin ADAY olabilmesi icin "tiklanabilir" kabul edilen ARIA/HTML
+# rolleri. `<button>`/`<a href>` disinda `role=button|link` (ikon-only kontroller
+# cogu zaman boyle isaretlenir) de kabul edilir.
+_CLICKABLE_ROLES = {"button", "link"}
+
+# Ikon-only kontrollerin (metin etiketi olmayan; SVG/ikon iceren) GUVENLI,
+# insan-okur Turkce etiketleri. `control_semantic`, analyzer tarafindan yalnizca
+# GUVENLI ipuclarindan (aria-label/title/alt/class/id/data-testid) cikarilan
+# sabit bir anahtardir (hassas sayfa metni DEGIL). Bu etiketler, ranking niyet
+# gruplariyla (bkz. ai_interaction_heatmap.ranking._INTENT_PHRASES) eslesecek
+# sekilde secilir - boylece "sepeti goruntule" gorevi GERCEK sepet ikonuyla
+# eslesebilir (aksi halde ikon-only sepet kontrolu adaylara HIC girmiyordu).
+_SEMANTIC_LABELS: dict[str, str] = {
+    "cart": "Sepet",
+    "basket": "Sepet",
+    "bag": "Alisveris cantasi",
+    "account": "Hesap",
+    "user": "Hesap",
+    "profile": "Hesap",
+    "login": "Giris",
+    "search": "Arama",
+    "menu": "Menu",
+    "wishlist": "Favoriler",
+    "favorite": "Favoriler",
+}
+
+
+def _is_clickable_dom_element(element: Mapping) -> bool:
+    """Bir DOM `element_box`unun GUVENLI biçimde "tiklanabilir" olup olmadigini
+    belirler. `<button>`/`<a href>`/`role=button|link` DISINDA, analyzer'in
+    isaretledigi `clickable` bayragi, gecerli bir `href` veya `tabindex>=0` +
+    interaction_kind ipucu da kabul edilir (ikon-only kontroller)."""
+
+    role = element.get("role")
+    if isinstance(role, str) and role.strip().lower() in _CLICKABLE_ROLES:
+        return True
+    if element.get("clickable") is True:
+        return True
+    href = element.get("href")
+    if isinstance(href, str) and href.strip():
+        return True
+    tabindex = element.get("tabindex")
+    if isinstance(tabindex, int) and not isinstance(tabindex, bool) and tabindex >= 0:
+        # tabindex tek basina yeterli degildir (dekoratif odaklanabilir kutular
+        # olabilir); yalnizca bir etkilesim turu de belirlenebiliyorsa aday olur.
+        if isinstance(element.get("interaction_kind"), str) and element["interaction_kind"]:
+            return True
+    return False
+
+
+def _dom_label(element: Mapping) -> str | None:
+    """Bir DOM adayinin GUVENLI etiketini oncelik sirasiyla turetir: gorunur
+    metin / accessible name / aria-label / title / alt / ikon semantigi.
+
+    Hicbiri yoksa `None` doner (cagiran genel bir yedek etiket kullanir).
+    Rastgele/uydurma metin URETILMEZ - yalnizca zaten cikarilmis alanlar."""
+
+    for key in ("label", "accessible_name", "aria_label", "aria-label", "title", "alt", "text"):
+        raw = element.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()[:120]
+    semantic = element.get("control_semantic")
+    if isinstance(semantic, str):
+        mapped = _SEMANTIC_LABELS.get(semantic.strip().lower())
+        if mapped:
+            return mapped
+    return None
 
 
 def _fold_ratio(image_width: int | None, image_height: int | None) -> float:
@@ -286,9 +357,14 @@ def build_interaction_candidates(
     element_boxes = features.get("element_boxes") or []
     width = image_width
     height = image_height
+    # Nested/yinelenen kutulari (ornegin ayni parent butonun birden fazla
+    # temsili) TEK aday olarak birlestirmek icin gorulen kutulari izle - SVG/
+    # path'ler ZATEN bagimsiz aday yapilmaz (analyzer parent'i emit eder); bu,
+    # ek bir savunma katmanidir (duplicate aday uretilmez).
+    seen_boxes: set[tuple[int, int, int, int]] = set()
     if isinstance(element_boxes, list) and width and height:
         for element in element_boxes:
-            if not isinstance(element, Mapping) or element.get("role") not in ("button", "link"):
+            if not isinstance(element, Mapping) or not _is_clickable_dom_element(element):
                 continue
             try:
                 x = float(element["x"]) / width
@@ -296,19 +372,31 @@ def build_interaction_candidates(
                 w = float(element["width"]) / width
                 h = float(element["height"]) / height
             except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                # Gorselde gorunse bile GERCEK bir DOM bounding box'i olmayan
+                # nesne icin koordinat UYDURULMAZ - aday atlanir.
                 continue
             if w <= 0 or h <= 0:
+                continue
+            box_key = (round(x * 1000), round(y * 1000), round(w * 1000), round(h * 1000))
+            if box_key in seen_boxes:
                 continue
             enriched = {**element, "y_frac": y}
             interaction_kind = _infer_dom_interaction_kind(enriched, w, h)
             if interaction_kind in _EXCLUDED_KINDS:
                 continue
+            seen_boxes.add(box_key)
+            role_raw = element.get("role")
+            role = (
+                role_raw.strip()
+                if isinstance(role_raw, str) and role_raw.strip()
+                else ("button" if interaction_kind == "button" else "link")
+            )
             candidates.append(
                 InteractionCandidate(
                     candidate_id=_next_id(),
-                    label=_safe_label(element.get("label"), "Etkilesim alani"),
+                    label=_dom_label(element) or "Etkilesim alani",
                     interaction_kind=interaction_kind,
-                    role=str(element.get("role")),
+                    role=role,
                     x=x,
                     y=y,
                     w=w,
@@ -317,6 +405,17 @@ def build_interaction_candidates(
                 )
             )
 
+    # Guvenli teshis logu: yalnizca sayim + normalize edilmis rol/tur/etiket
+    # uzunlugu - hassas sayfa metni LOGLANMAZ.
+    logger.info(
+        "etkilesim adaylari cikarildi",
+        extra={
+            "source_kind": getattr(source_kind, "value", str(source_kind)),
+            "candidate_count": len(candidates),
+            "roles": sorted({c.role for c in candidates}),
+            "kinds": sorted({c.interaction_kind for c in candidates}),
+        },
+    )
     return candidates, confirmed_candidate_id
 
 

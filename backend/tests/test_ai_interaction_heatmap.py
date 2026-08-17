@@ -348,3 +348,112 @@ def test_build_candidates_from_dom_features_assigns_stable_ids() -> None:
     assert labels == [("candidate-1", "Uye ol"), ("candidate-2", "Cok Satanlar")]
     # Fraksiyon koordinatlar [0,1] araliginda.
     assert all(0.0 <= c.x <= 1.0 and 0.0 <= c.w <= 1.0 for c in candidates)
+
+
+def test_icon_only_cart_button_becomes_candidate_via_semantic() -> None:
+    """Regresyon (gorev talimati Part 2): metin etiketi OLMAYAN ikon-only sepet
+    kontrolu (analyzer `control_semantic="cart"` uretir) aday listesine GIRER ve
+    insan-okur "Sepet" etiketini alir - boylece hedef gorevle eslesebilir."""
+
+    features = {
+        "element_boxes": [
+            # Ikon-only sepet: gorunur metin/label yok, yalnizca semantik ipucu.
+            {
+                "role": "button",
+                "label": None,
+                "interaction_kind": "button",
+                "control_semantic": "cart",
+                "x": 1180,
+                "y": 20,
+                "width": 40,
+                "height": 40,
+            },
+        ]
+    }
+    candidates, _ = build_interaction_candidates(
+        features=features,
+        image_width=1280,
+        image_height=1600,
+        source_kind=PageAnalysisSourceKind.URL,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].label == "Sepet"
+
+
+def test_clickable_element_without_role_but_with_href_is_candidate() -> None:
+    """role alani cikmasa bile gecerli `href` (veya `clickable`) tasiyan gercek
+    tiklanabilir eleman aday olur; etiketi aria-label/title'dan tasinir."""
+
+    features = {
+        "element_boxes": [
+            {
+                "clickable": True,
+                "href": "/sepet",
+                "aria_label": "Sepetim",
+                "interaction_kind": "navigation_link",
+                "x": 1100,
+                "y": 18,
+                "width": 44,
+                "height": 44,
+            },
+        ]
+    }
+    candidates, _ = build_interaction_candidates(
+        features=features,
+        image_width=1280,
+        image_height=1600,
+        source_kind=PageAnalysisSourceKind.URL,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].label == "Sepetim"
+
+
+def test_duplicate_boxes_merge_into_single_candidate() -> None:
+    """Nested/yinelenen ayni kutu (ornegin SVG parent butonun iki temsili) TEK
+    aday olur - duplicate uretilmez."""
+
+    box = {"role": "button", "label": "Sepet", "interaction_kind": "button", "x": 1180, "y": 20, "width": 40, "height": 40}
+    features = {"element_boxes": [dict(box), dict(box)]}
+    candidates, _ = build_interaction_candidates(
+        features=features,
+        image_width=1280,
+        image_height=1600,
+        source_kind=PageAnalysisSourceKind.URL,
+    )
+    assert len(candidates) == 1
+
+
+def test_dom_candidate_without_valid_box_is_skipped_no_fabricated_coords() -> None:
+    """Gorselde gorunse bile GERCEK bir DOM bounding box'i olmayan nesne icin
+    koordinat UYDURULMAZ - aday atlanir."""
+
+    features = {
+        "element_boxes": [
+            {"role": "button", "label": "Sepet", "control_semantic": "cart", "x": None, "y": 20, "width": 40, "height": 40},
+            {"role": "button", "label": "Gecerli", "x": 100, "y": 40, "width": 120, "height": 36},
+        ]
+    }
+    candidates, _ = build_interaction_candidates(
+        features=features,
+        image_width=1280,
+        image_height=1600,
+        source_kind=PageAnalysisSourceKind.URL,
+    )
+    assert [c.label for c in candidates] == ["Gecerli"]
+
+
+def test_valid_cart_task_matches_cart_candidate_no_strong_match() -> None:
+    """Regresyon (gorev talimati Part 2): gecerli bir sepet gorevi ("Sepete
+    eklenen urunu goruntule"), uygun bir sepet adayi (label "Sepet") varken
+    "no strong match" URETMEZ - sepet adayi hotspot olarak listelenir."""
+
+    candidates = [
+        _candidate("candidate-1", "Sepet", kind="button", role="button", x=0.9, y=0.02, w=0.03, h=0.03),
+        _candidate("candidate-2", "Cok Satanlar", kind="content_link"),
+    ]
+    output = rank_interaction_hotspots(candidates, target_task="Sepete eklenen urunu goruntule")
+
+    assert output.unmatched_task_warning is None
+    assert output.hotspots
+    assert output.hotspots[0].candidate_id == "candidate-1"
+    assert output.hotspots[0].task_relevance in ("direct", "related")

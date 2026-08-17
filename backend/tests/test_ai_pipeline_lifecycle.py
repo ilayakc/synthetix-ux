@@ -318,7 +318,14 @@ async def test_ab_variants_created_in_one_transaction(maker, monkeypatch):
 
     await lifecycle.run_ai_pipeline_initialization_cycle(maker)
 
-    assert await _pipeline_count(maker) == 0
+    # Ikinci varyant basarisiz oldugunda BIRINCININ QUEUED (yari) pipeline'i
+    # rollback edilir - hicbir CANLI (QUEUED) pipeline kalmaz. Bunun yerine
+    # gruptaki her run icin GORUNUR bir FAILED kayit birakilir (infinite 404
+    # yerine) ve rezervasyon serbest birakilir.
+    async with maker() as session:
+        pipelines = (await session.execute(select(AIPipelineRun))).scalars().all()
+    assert len(pipelines) == 2
+    assert all(p.status == AIPipelineStatus.FAILED for p in pipelines)
     reservation = await _get_reservation(maker, seed["ai_reservation_id"])
     assert reservation.status == ChipReservationStatus.RELEASED
 
@@ -348,7 +355,26 @@ async def test_missing_report_is_permanent_error_and_releases_reservation(maker)
     result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
 
     assert result.groups_permanent_error == 1
-    assert await _pipeline_count(maker) == 0
+    # Kalici init hatasi artik ACIKLAMASIZ/sonsuz 404 birakmaz: GORUNUR bir
+    # FAILED pipeline (+ guvenli stage error_code) kaydedilir; rezervasyon yine
+    # serbest birakilir (bkz. orchestration.record_initialization_failure).
+    assert await _pipeline_count(maker) == 1
+    async with maker() as session:
+        pipeline = (
+            await session.execute(
+                select(AIPipelineRun).where(
+                    AIPipelineRun.simulation_run_id == seed["run_ids"][0]
+                )
+            )
+        ).scalar_one()
+        assert pipeline.status == AIPipelineStatus.FAILED
+        stage = (
+            await session.execute(
+                select(AIPipelineStage).where(AIPipelineStage.ai_pipeline_run_id == pipeline.id)
+            )
+        ).scalar_one()
+        assert stage.status == AIPipelineStageStatus.FAILED
+        assert stage.error_code == orchestration.ERROR_MISSING_REPORT
     reservation = await _get_reservation(maker, seed["ai_reservation_id"])
     assert reservation.status == ChipReservationStatus.RELEASED
     run = await _get_run(maker, seed["run_ids"][0])
@@ -360,9 +386,143 @@ async def test_missing_personas_is_permanent_error_and_releases_reservation(make
     result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
 
     assert result.groups_permanent_error == 1
-    assert await _pipeline_count(maker) == 0
+    # FAILED pipeline kaydedilir (Persona olmasa bile) - infinite 404 yerine
+    # kontrollu basarisiz durum.
+    assert await _pipeline_count(maker) == 1
+    async with maker() as session:
+        pipeline = (
+            await session.execute(
+                select(AIPipelineRun).where(
+                    AIPipelineRun.simulation_run_id == seed["run_ids"][0]
+                )
+            )
+        ).scalar_one()
+        assert pipeline.status == AIPipelineStatus.FAILED
+        stage = (
+            await session.execute(
+                select(AIPipelineStage).where(AIPipelineStage.ai_pipeline_run_id == pipeline.id)
+            )
+        ).scalar_one()
+        assert stage.error_code == orchestration.ERROR_INVALID_PERSONA_SET
     reservation = await _get_reservation(maker, seed["ai_reservation_id"])
     assert reservation.status == ChipReservationStatus.RELEASED
+
+
+async def test_permanent_init_failure_is_visible_and_not_reprocessed(maker):
+    """Regresyon (gorev talimati Part 1): `ai_report` secilmis, SUCCEEDED bir run
+    icin kalici init hatasi olustugunda frontend SONSUZA kadar
+    `ai_pipeline_not_found` gormemeli. Cycle, GORUNUR bir FAILED pipeline birakir
+    ve ikinci cycle ayni grubu YENIDEN islemez (pipeline artik mevcut)."""
+
+    await _seed_group(maker, count=2, with_report=[True, False])
+    first = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+    assert first.groups_permanent_error == 1
+    # Gruptaki HER run icin bir FAILED pipeline (frontend her run'i ayri sondalar).
+    assert await _pipeline_count(maker) == 2
+    async with maker() as session:
+        pipelines = (await session.execute(select(AIPipelineRun))).scalars().all()
+        assert all(p.status == AIPipelineStatus.FAILED for p in pipelines)
+
+    # Ikinci cycle: grup artik "pipeline yok" on-filtresine takilmaz -> islenmez.
+    second = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+    assert second.groups_scanned == 0
+    assert await _pipeline_count(maker) == 2
+
+
+# =================================================================================
+# PART 2: LEGACY RECONCILIATION / BACKFILL (RELEASED rezervasyonlu 404 kayitlari)
+# =================================================================================
+
+
+async def _release_ai_reservation(maker, seed) -> None:
+    """Eski bozuk permanent-init davranisini simule eder: pipeline OLUSMADAN AI
+    rezervasyonu RELEASED edilir (ve pipeline kaydi YOKTUR)."""
+
+    async with maker() as session:
+        await chip_ledger.release_reservation(
+            session, seed["organization_id"], seed["ai_reservation_id"], "legacy bozuk davranis"
+        )
+        await session.commit()
+
+
+async def test_legacy_released_reservation_with_valid_data_is_recovered(maker):
+    """RELEASED rezervasyon + pipeline yok + veri gecerli => pipeline RECOVER
+    edilir; rezervasyon RELEASED KALIR (ikinci kez ucret/Chip ALINMAZ)."""
+
+    seed = await _seed_group(maker, count=1)
+    await _release_ai_reservation(maker, seed)
+
+    result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+
+    assert result.groups_initialized == 1
+    assert await _pipeline_count(maker) == 1
+    async with maker() as session:
+        pipeline = (await session.execute(select(AIPipelineRun))).scalar_one()
+        assert pipeline.status == AIPipelineStatus.QUEUED  # normal init (recover)
+    reservation = await _get_reservation(maker, seed["ai_reservation_id"])
+    assert reservation.status == ChipReservationStatus.RELEASED  # dokunulmadi
+    assert await _release_count(maker, seed["ai_reservation_id"]) == 1  # ek release yok
+    assert await _consume_count(maker, seed["ai_reservation_id"]) == 0  # consume yok
+
+
+async def test_legacy_released_reservation_with_invalid_data_records_failed(maker):
+    """RELEASED rezervasyon + pipeline yok + veri KALICI gecersiz (Report yok) =>
+    GORUNUR FAILED pipeline; sonsuz 404 yok, rezervasyon tekrar release edilmez."""
+
+    seed = await _seed_group(maker, count=1, with_report=[False])
+    await _release_ai_reservation(maker, seed)
+
+    result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+
+    assert result.groups_permanent_error == 1
+    async with maker() as session:
+        pipeline = (await session.execute(select(AIPipelineRun))).scalar_one()
+        assert pipeline.status == AIPipelineStatus.FAILED
+    assert await _release_count(maker, seed["ai_reservation_id"]) == 1  # tekrar release YOK
+
+
+async def test_legacy_recovery_is_idempotent_no_duplicates(maker):
+    """Ayni reconciliation tekrar calisinca duplicate pipeline/stage olusmaz."""
+
+    seed = await _seed_group(maker, count=1)
+    await _release_ai_reservation(maker, seed)
+
+    await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+    second = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+
+    assert second.groups_scanned == 0  # pipeline artik var -> yeniden taranmaz
+    assert await _pipeline_count(maker) == 1
+    assert await _stage_count(maker) == 1
+
+
+async def test_legacy_released_without_ai_report_is_not_recovered(maker):
+    """`ai_report` istenmemis (modules'da yok) RELEASED-rezervasyonlu run,
+    recovery'den ETKILENMEZ - hicbir pipeline olusturulmaz."""
+
+    seed = await _seed_group(maker, count=1, modules=["network_device_test"])
+    await _release_ai_reservation(maker, seed)
+
+    result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+
+    assert result.groups_initialized == 0
+    assert await _pipeline_count(maker) == 0
+
+
+async def test_consumed_reservation_without_pipeline_is_not_recovered(maker):
+    """CONSUMED (mesru sekilde sonuclanmis) rezervasyon RELEASED'ten AYRIDIR:
+    recovery YAPILMAZ (spec test 11 davranisi korunur)."""
+
+    seed = await _seed_group(maker, count=1)
+    async with maker() as session:
+        await chip_ledger.consume_reservation(
+            session, seed["organization_id"], seed["ai_reservation_id"], "onceden tuketildi"
+        )
+        await session.commit()
+
+    result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
+
+    assert result.groups_initialized == 0
+    assert await _pipeline_count(maker) == 0
 
 
 async def test_missing_ai_reservation_on_one_run_is_permanent_error(maker):
@@ -377,7 +537,11 @@ async def test_missing_ai_reservation_on_one_run_is_permanent_error(maker):
     result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
 
     assert result.groups_permanent_error == 1
-    assert await _pipeline_count(maker) == 0
+    # Butunluk hatasi da artik GORUNUR FAILED kayit birakir (infinite 404 yok).
+    assert await _pipeline_count(maker) == 2
+    async with maker() as session:
+        pipelines = (await session.execute(select(AIPipelineRun))).scalars().all()
+        assert all(p.status == AIPipelineStatus.FAILED for p in pipelines)
     reservation = await _get_reservation(maker, seed["ai_reservation_id"])
     assert reservation.status == ChipReservationStatus.RELEASED
 
@@ -399,7 +563,11 @@ async def test_different_reservation_ids_across_variants_rejected(maker):
     result = await lifecycle.run_ai_pipeline_initialization_cycle(maker)
 
     assert result.groups_permanent_error == 1
-    assert await _pipeline_count(maker) == 0
+    # Farkli rezervasyon id'leri de artik GORUNUR FAILED kayit birakir.
+    assert await _pipeline_count(maker) == 2
+    async with maker() as session:
+        pipelines = (await session.execute(select(AIPipelineRun))).scalars().all()
+        assert all(p.status == AIPipelineStatus.FAILED for p in pipelines)
 
 
 async def test_reservation_not_reserved_skips_initialization(maker):

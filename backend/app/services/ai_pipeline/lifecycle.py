@@ -85,6 +85,12 @@ DEFAULT_SETTLEMENT_GROUP_LIMIT: Final = 20
 _INIT_LOCK_SALT: Final = 1
 _SETTLEMENT_LOCK_SALT: Final = 2
 
+# Kalici init hatalarinda FAILED pipeline stage'ine yazilan, guvenli/sabit hata
+# kodlari (rezervasyon butunluk hatalari - `orchestration` domain kodlarindan
+# AYRI). Frontend bunlari kontrollu bir "basarisiz" durumu olarak gosterir.
+_ERROR_INCONSISTENT_AI_RESERVATION: Final = "inconsistent_ai_reservation"
+_ERROR_AI_RESERVATION_NOT_FOUND: Final = "ai_reservation_not_found"
+
 # AI pipeline sonucunun rezervasyonu RELEASE etmesini gerektiren terminal
 # "basarisiz" durumlar (gorev talimati Part 7.B).
 _RELEASE_TRIGGERING_STATUSES: Final = (
@@ -203,6 +209,40 @@ async def _release_for_permanent_error(
             )
 
 
+async def _record_group_initialization_failure(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    organization_id: uuid.UUID,
+    run_ids: list[uuid.UUID],
+    error_code: str,
+) -> None:
+    """Kalici init hatasi sonrasi, gruptaki HER run icin AYRI/taze bir
+    transaction'da status=FAILED bir pipeline kaydi olusturur (idempotent).
+
+    Boylece `ai_report` secilmis basarili bir run, initialization kalici olarak
+    basarisiz oldugunda ACIKLAMASIZ ve SONSUZ `ai_pipeline_not_found` (404)
+    durumunda kalmaz - GET /ai-pipeline artik kontrollu bir FAILED durumu +
+    guvenli stage error_code dondurur. Kayit basarisiz olsa BILE (beklenmeyen)
+    rezervasyon serbest birakma adimi bloke edilmez - yalnizca guvenli loglanir."""
+
+    async with session_maker() as session:
+        try:
+            for run_id in run_ids:
+                await orchestration.record_initialization_failure(
+                    session,
+                    organization_id=organization_id,
+                    simulation_run_id=run_id,
+                    error_code=error_code,
+                )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "ai pipeline init: kalici hata kaydi (FAILED pipeline) olusturulamadi",
+                extra={"error_code": error_code},
+            )
+
+
 async def _process_one_init_group(
     session_maker: async_sessionmaker[AsyncSession], launch_run_id: uuid.UUID
 ) -> _InitGroupOutcome:
@@ -242,12 +282,19 @@ async def _process_one_init_group(
             await session.rollback()
             return _InitGroupOutcome(kind=_InitOutcomeKind.NOT_READY)
 
+        # Rollback SONRASI ORM attribute'lari expire olacagi icin run id'leri
+        # SIMDI (duz bir liste olarak) yakalanir - kalici hata/backfill kaydinda
+        # lazy-load (MissingGreenlet) riski olmadan kullanilir.
+        group_run_ids = [r.id for r in runs]
+
         reservation_ids = {r.ai_chip_reservation_id for r in runs}
         if None in reservation_ids or len(reservation_ids) != 1:
             # Bir/birden fazla varyantta rezervasyon eksik VEYA varyantlar
             # FARKLI rezervasyon id'leri tasiyor (spec test 9/10) - kalici
             # integrity hatasi: bulunabilen TUM (non-null) id'ler serbest
-            # birakilir, hicbir pipeline olusturulmaz.
+            # birakilir. Ayrica gruba GORUNUR bir FAILED pipeline kaydi yazilir
+            # ki bu run'lar da sonsuza kadar `ai_pipeline_not_found` (404)
+            # kalmasin (Part 2).
             await session.rollback()
             concrete_ids = {rid for rid in reservation_ids if rid is not None}
             for concrete_reservation_id in concrete_ids:
@@ -257,7 +304,15 @@ async def _process_one_init_group(
                     reservation_id=concrete_reservation_id,
                     reason="ai pipeline init: tutarsiz/eksik AI rezervasyon id'si",
                 )
-            return _InitGroupOutcome(kind=_InitOutcomeKind.PERMANENT_ERROR)
+            await _record_group_initialization_failure(
+                session_maker,
+                organization_id=organization_id,
+                run_ids=group_run_ids,
+                error_code=_ERROR_INCONSISTENT_AI_RESERVATION,
+            )
+            return _InitGroupOutcome(
+                kind=_InitOutcomeKind.PERMANENT_ERROR, error_code=_ERROR_INCONSISTENT_AI_RESERVATION
+            )
         (maybe_reservation_id,) = reservation_ids
         assert maybe_reservation_id is not None
         reservation_id: uuid.UUID = maybe_reservation_id
@@ -266,14 +321,39 @@ async def _process_one_init_group(
         if reservation is None or reservation.organization_id != organization_id:
             await session.rollback()
             logger.warning(
-                "ai pipeline init: AI rezervasyonu bulunamadi/organizasyon uyumsuz, atlaniyor",
+                "ai pipeline init: AI rezervasyonu bulunamadi/organizasyon uyumsuz",
                 extra={"launch_group_id": str(launch_run_id)},
             )
-            return _InitGroupOutcome(kind=_InitOutcomeKind.PERMANENT_ERROR)
+            await _record_group_initialization_failure(
+                session_maker,
+                organization_id=organization_id,
+                run_ids=group_run_ids,
+                error_code=_ERROR_AI_RESERVATION_NOT_FOUND,
+            )
+            return _InitGroupOutcome(
+                kind=_InitOutcomeKind.PERMANENT_ERROR, error_code=_ERROR_AI_RESERVATION_NOT_FOUND
+            )
 
-        if reservation.status != ChipReservationStatus.RESERVED:
-            # Zaten CONSUMED/RELEASED (ornegin baska bir cycle/baseline
-            # tarafindan) - initialization YAPILMAZ (spec test 11).
+        # Rezervasyon durumuna gore uc yol:
+        #  - RESERVED: normal (henuz sonuclanmamis) grup -> standart init.
+        #  - RELEASED + pipeline YOK (on-filtre `no_pipeline_yet`) + TUM run'lar
+        #    SUCCEEDED + `ai_report` secili => bu, ESKI bozuk permanent-init
+        #    davranisindan (rezervasyonu release edip pipeline kaydi olusturmayan)
+        #    KALMIS bir kayittir (Part 2 legacy reconciliation). Init YENIDEN
+        #    degerlendirilir; veri artik uygunsa pipeline RECOVER edilir
+        #    (rezervasyona DOKUNULMAZ -> ikinci kez ucret/Chip ALINMAZ), hala
+        #    gecersizse GORUNUR bir FAILED kayit yazilir. Boylece run sonsuza kadar
+        #    NOT_READY/404 kalmaz.
+        #  - CONSUMED (veya beklenmeyen diger): mesru sekilde sonuclanmis kabul
+        #    edilir - init YAPILMAZ (spec test 11 davranisi korunur).
+        reservation_status_value = reservation.status.value
+        if reservation.status == ChipReservationStatus.RESERVED:
+            reservation_is_reserved = True
+            is_legacy_recovery = False
+        elif reservation.status == ChipReservationStatus.RELEASED:
+            reservation_is_reserved = False
+            is_legacy_recovery = True
+        else:
             await session.rollback()
             return _InitGroupOutcome(kind=_InitOutcomeKind.NOT_READY)
 
@@ -293,18 +373,40 @@ async def _process_one_init_group(
             # pipeline satirlari DAHIL) geri alinir - yarim pipeline KALMAZ.
             await session.rollback()
             logger.warning(
-                "ai pipeline init: kalici init hatasi, grup icin pipeline olusturulmadi",
-                extra={"launch_group_id": str(launch_run_id), "error_code": exc.code},
+                "ai pipeline init: kalici init hatasi, grup icin FAILED pipeline kaydediliyor",
+                extra={
+                    "launch_group_id": str(launch_run_id),
+                    "error_code": exc.code,
+                    "legacy_recovery": is_legacy_recovery,
+                },
             )
-            await _release_for_permanent_error(
+            # ONCE kalici hatayi GORUNUR/DURDURULABILIR bir FAILED pipeline olarak
+            # persist et (aksi halde frontend sonsuza kadar `ai_pipeline_not_found`
+            # gorurdu ve gercek error_code kaybolurdu).
+            await _record_group_initialization_failure(
                 session_maker,
                 organization_id=organization_id,
-                reservation_id=reservation_id,
-                reason=f"ai pipeline init: kalici hata ({exc.code})",
+                run_ids=group_run_ids,
+                error_code=exc.code,
             )
+            # Rezervasyonu YALNIZCA hala RESERVED ise serbest birak. Legacy
+            # recovery'de rezervasyon ZATEN terminal (RELEASED/CONSUMED) - tekrar
+            # dokunulmaz (idempotency + cift muhasebe onlenir).
+            if reservation_is_reserved:
+                await _release_for_permanent_error(
+                    session_maker,
+                    organization_id=organization_id,
+                    reservation_id=reservation_id,
+                    reason=f"ai pipeline init: kalici hata ({exc.code})",
+                )
             return _InitGroupOutcome(kind=_InitOutcomeKind.PERMANENT_ERROR, error_code=exc.code)
 
         await session.commit()
+        if is_legacy_recovery:
+            logger.info(
+                "ai pipeline init: legacy grup recover edildi (rezervasyon terminal, yeni ucret yok)",
+                extra={"launch_group_id": str(launch_run_id), "reservation_status": reservation_status_value},
+            )
         return _InitGroupOutcome(
             kind=_InitOutcomeKind.INITIALIZED, pipeline_count=len(runs), reservation_id=reservation_id
         )

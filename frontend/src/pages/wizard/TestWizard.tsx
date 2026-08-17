@@ -20,6 +20,7 @@ import {
   AI_REPORT_PERSONA_REQUIRED_MESSAGE,
   aiReportRequiresPersonaSelection,
 } from "./aiReportPersona";
+import { isValidHttpUrl, sanitizeDraftForAutosave } from "./autosave";
 import { incompatibleSelectedModuleKeys } from "./moduleCompatibility";
 import { targetTaskRejectionReason } from "./targetTaskValidation";
 import Step1Details from "./Step1Details";
@@ -41,15 +42,6 @@ const QUOTE_TEST_TYPE_BY_WIZARD_TYPE: Record<string, string> = {
 // adima geri yonlendirilir (bkz. handleNext / handleLaunch).
 const PERSONA_STEP = 3;
 const PERSONA_DEPENDENT_STEP = 4;
-
-function isValidHttpUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
 
 function validateStep(step: number, payload: WizardDraftPayload): Record<string, string> {
   const errors: Record<string, string> = {};
@@ -270,11 +262,26 @@ export default function TestWizard() {
     if (!hydrated.current || !draftId || draftStatus === "launched") return;
 
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
+    // Yerel olarak gecersiz alanlari (bos/gecersiz hedef gorev, gecersiz URL)
+    // backend'e GONDERME - beklenen validation yaniti (422/400) konsol/banner
+    // gurultusu uretmesin; bu alanlar inline dogrulanir (bkz. validateStep).
+    const sanitized = sanitizeDraftForAutosave(payload);
     saveTimeout.current = setTimeout(() => {
-      patchWizardDraft(draftId, payload)
+      patchWizardDraft(draftId, sanitized)
         .then(() => showSavedNotice())
         .catch((err) => {
-          setBanner(err instanceof ApiError ? err.message : "Taslak kaydedilemedi.");
+          // Beklenmedik bir alan-validation yaniti gelirse (savunma) genel
+          // banner yerine inline alan hatasina yonlendir; digger hatalar banner.
+          if (err instanceof ApiError) {
+            const detail = (err.body as { detail?: { field?: string } } | null)?.detail;
+            if (err.status === 422 && detail?.field) {
+              setFieldErrors((current) => ({ ...current, [detail.field as string]: err.message }));
+              return;
+            }
+            setBanner(err.message);
+            return;
+          }
+          setBanner("Taslak kaydedilemedi.");
         });
     }, 500);
 
