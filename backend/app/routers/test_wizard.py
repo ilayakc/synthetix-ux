@@ -13,6 +13,7 @@ from app.models.analytics import AnalyticsEventType
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
 from app.services import analytics as analytics_service
 from app.services import settings as settings_service
+from app.services import target_task as target_task_service
 from app.services import test_wizard as wizard_service
 from app.services import url_safety
 from app.services.exceptions import InsufficientChipBalanceError, UnauthorizedPageAnalysisError
@@ -22,6 +23,21 @@ router = APIRouter(prefix="/api/tests/drafts", tags=["test-wizard"])
 # Taslak olusturma/guncelleme/baslatma: viewer haric tum roller (bkz.
 # docs/architecture.md#roller-ve-yetkiler, "Proje/test/simulasyon olustur").
 WRITE_ROLES = ("analyst", "admin", "owner")
+
+
+def _invalid_target_task_http_exc(
+    exc: target_task_service.InvalidTargetTaskError,
+) -> HTTPException:
+    """Anlamsal olarak gecersiz `target_task` icin urun API standardina uygun,
+    ALAN BAZLI 422 yaniti uretir. FastAPI govdesi `{"detail": {...}}` sarmalar;
+    frontend `detail.code`/`detail.field` ile hatayi ilgili alanin altinda
+    gosterir (genel "bir hata olustu" mesajina indirgemez, bkz.
+    frontend/src/api/client.ts)."""
+
+    return HTTPException(
+        status_code=422,
+        detail={"code": exc.code, "detail": exc.message, "field": exc.field},
+    )
 
 
 class DraftResponse(BaseModel):
@@ -163,6 +179,8 @@ async def patch_draft(
             draft.payload, merged_payload, body.payload
         )
         wizard_service.validate_source_type_for_test_type(merged_payload)
+    except target_task_service.InvalidTargetTaskError as exc:
+        raise _invalid_target_task_http_exc(exc) from exc
     except wizard_service.DraftValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -286,6 +304,11 @@ async def launch_draft(
             requested_by_user_id=principal.user_id,
             draft=draft,
         )
+    except target_task_service.InvalidTargetTaskError as exc:
+        # Gecersiz hedef gorevle (ör. `.` gibi eski bir taslak) baslatma denemesi:
+        # `launch_draft` bu kontrolu TUM yan etkilerden once yapar - hicbir Chip
+        # rezerve/harcanmaz, hicbir SimulationRun olusmaz.
+        raise _invalid_target_task_http_exc(exc) from exc
     except wizard_service.DraftValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except InsufficientChipBalanceError as exc:

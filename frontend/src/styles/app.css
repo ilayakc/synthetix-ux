@@ -2168,6 +2168,19 @@
   font-family: inherit;
 }
 
+.wizard-field input[aria-invalid="true"],
+.wizard-field textarea[aria-invalid="true"],
+.wizard-field select[aria-invalid="true"] {
+  border-color: var(--color-warning-border);
+  background: var(--color-warning-bg);
+}
+
+.wizard-field input[aria-invalid="true"]:focus,
+.wizard-field textarea[aria-invalid="true"]:focus,
+.wizard-field select[aria-invalid="true"]:focus {
+  outline-color: var(--color-warning-border);
+}
+
 .wizard-field-hint {
   font-size: 0.75rem;
   color: var(--color-text-muted);

@@ -192,6 +192,48 @@ describe("TestWizard", () => {
     expect(screen.getByText("3. Persona")).toBeInTheDocument();
   });
 
+  it("hedef gorev yalnizca nokta ise inline hata gosterir ve bir sonraki adima gecisi engeller", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "GET") {
+          return jsonResponse(200, emptyDraft);
+        }
+        if (url.includes("/api/tests/drafts/draft-1") && init?.method === "PATCH") {
+          return jsonResponse(200, emptyDraft);
+        }
+        if (url.includes("/api/projects")) return jsonResponse(200, [project]);
+        if (url.includes("/api/analysis-modules")) return jsonResponse(200, moduleCatalogResponse);
+        if (url.includes("/api/personas/presets")) return jsonResponse(200, []);
+        if (url.includes("/api/billing/usage-summary")) {
+          return jsonResponse(200, {
+            organization_id: "org-1",
+            chip_balance: 0,
+            entitlements: [],
+            pricing_version: "2026.1",
+          });
+        }
+        throw new Error(`Beklenmeyen istek: ${String(init?.method)} ${url}`);
+      }),
+    );
+
+    renderWizard("/tests/new?draft=draft-1");
+
+    await waitFor(() => expect(screen.getByText("1. Test Detayları")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Hedef görev"), { target: { value: "." } });
+    fireEvent.click(screen.getByText("İleri"));
+
+    // Alan altinda inline hata gorunur ve alan aria-invalid isaretlenir.
+    const error = await screen.findByText(
+      "Hedef görev yalnızca noktalama işaretlerinden veya sembollerden oluşamaz.",
+    );
+    expect(error).toBeInTheDocument();
+    expect(screen.getByLabelText("Hedef görev")).toHaveAttribute("aria-invalid", "true");
+    // Hala 1. adimda kalinmis olmali (2. adima gecilmemis).
+    expect(screen.getByText("1. Test Detayları")).toBeInTheDocument();
+  });
+
   it("var olan bir taslagi (sayfa yenileme sonrasi) dolu alanlarla devam ettirir", async () => {
     const resumedDraft = {
       ...emptyDraft,

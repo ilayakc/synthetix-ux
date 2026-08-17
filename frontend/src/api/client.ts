@@ -99,6 +99,13 @@ function describeErrorDetail(detail: unknown): string | null {
     return messages.length > 0 ? messages.join("; ") : GENERIC_ERROR_MESSAGE;
   }
   if (detail && typeof detail === "object") {
+    // Alan bazli, yapilandirilmis hata sozlesmesi (ör. 422 INVALID_TARGET_TASK):
+    // `{code, detail, field}`. Kullaniciya gosterilecek metin `detail`tedir;
+    // `code`/`field` cagiran tarafta (bkz. TestWizard.handleLaunch) alan
+    // esleme icin `ApiError.body` uzerinden okunur.
+    if ("detail" in detail && typeof (detail as { detail?: unknown }).detail === "string") {
+      return normalizeTurkishErrorCopy((detail as { detail: string }).detail);
+    }
     return GENERIC_ERROR_MESSAGE;
   }
   return null;

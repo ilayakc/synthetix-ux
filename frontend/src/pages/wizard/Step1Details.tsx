@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type EntitlementStatus, type ProjectResponse, listProjects } from "../../api/client";
+import { TARGET_TASK_EXAMPLE_HINT } from "./targetTaskValidation";
 import { TEST_TYPE_DESCRIPTIONS, TEST_TYPE_LABELS, type StepProps } from "./types";
 
 const TEST_TYPES = Object.keys(TEST_TYPE_LABELS);
@@ -58,12 +59,21 @@ export default function Step1Details({
   entitlementStatuses,
 }: Step1DetailsProps) {
   const [projects, setProjects] = useState<ProjectResponse[] | null>(null);
+  const targetTaskRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     listProjects()
       .then(setProjects)
       .catch(() => setProjects([]));
   }, []);
+
+  // Hedef gorev hatasi olustugunda (İleri'ye basildiginda veya launch 422'si
+  // alanla eslendiginde) odagi hatali alana tasi - kullanici hatayi hemen
+  // gorur ve duzeltebilir.
+  const targetTaskError = fieldErrors.target_task;
+  useEffect(() => {
+    if (targetTaskError) targetTaskRef.current?.focus();
+  }, [targetTaskError]);
 
   return (
     <div>
@@ -106,12 +116,25 @@ export default function Step1Details({
         <label htmlFor="wizard-target-task">Hedef görev</label>
         <textarea
           id="wizard-target-task"
+          ref={targetTaskRef}
           rows={3}
           value={payload.target_task ?? ""}
           onChange={(event) => onChange("target_task", event.target.value)}
           placeholder="Örn. Kullanıcının sepete ürün ekleyip ödemeyi tamamlaması"
+          aria-invalid={targetTaskError ? true : undefined}
+          aria-describedby={
+            targetTaskError ? "wizard-target-task-error" : "wizard-target-task-hint"
+          }
         />
-        {fieldErrors.target_task && <p className="auth-error">{fieldErrors.target_task}</p>}
+        {targetTaskError ? (
+          <p id="wizard-target-task-error" className="auth-error">
+            {targetTaskError}
+          </p>
+        ) : (
+          <p id="wizard-target-task-hint" className="wizard-field-hint">
+            {TARGET_TASK_EXAMPLE_HINT}
+          </p>
+        )}
       </div>
 
       <div className="wizard-field">

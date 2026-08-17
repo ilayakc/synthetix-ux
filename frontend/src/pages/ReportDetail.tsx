@@ -1372,7 +1372,8 @@ type AiHeatmapState =
   | "empty"
   | "failed"
   | "provider_unavailable"
-  | "invalid_provider_output";
+  | "invalid_provider_output"
+  | "invalid_target_task";
 
 const AI_PROVIDER_UNAVAILABLE_CODES = new Set([
   "provider_unavailable",
@@ -1392,6 +1393,8 @@ function resolveAiHeatmapState(section: ReportInteractionHeatmapSection | undefi
   }
   if (section.status === "failed") {
     const code = section.error_code ?? "";
+    if (code === "invalid_target_task" || code === "missing_target_task")
+      return "invalid_target_task";
     if (AI_INVALID_OUTPUT_CODES.has(code)) return "invalid_provider_output";
     if (AI_PROVIDER_UNAVAILABLE_CODES.has(code)) return "provider_unavailable";
     return "failed";
@@ -1527,6 +1530,14 @@ function AiInteractionHeatmapPanel({
           AI tıklama tahmini üretilemedi: sağlayıcı çıktısı doğrulama kurallarını karşılamadı
           (yalnızca gerçek aday alanları kabul edilir). Deterministik bir sonuç AI çıktısı gibi
           gösterilmedi.
+        </p>
+      )}
+
+      {state === "invalid_target_task" && (
+        <p className="auth-error" role="alert">
+          AI tıklama tahmini üretilemedi: bu test için tanımlı hedef görev, kullanıcının ne
+          yapacağını açıklayan anlamlı bir ifade değil. Testi düzenleyip hedef görevi netleştirin
+          (örn. “Kırmızı spor ayakkabıyı bul ve sepete ekle”), ardından yeniden başlatın.
         </p>
       )}
 

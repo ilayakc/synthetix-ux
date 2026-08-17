@@ -45,6 +45,7 @@ from app.models.interaction_heatmap import InteractionHeatmap, InteractionHeatma
 from app.models.page_analysis import PageAnalysis
 from app.models.simulations import SimulationRun, SimulationStatus
 from app.services import chip_ledger
+from app.services import target_task as target_task_service
 from app.services.ai_interaction_heatmap.candidates import build_interaction_candidates
 from app.services.ai_interaction_heatmap.openai_selector import (
     INTERACTION_HEATMAP_SELECTOR_CTX_KEY,
@@ -85,6 +86,12 @@ _SETTLEMENT_LOCK_SALT: Final = 12
 # TYPED, guvenli hata kodlari (provider_errors'takilere EK - domain hatalari).
 ERROR_CODE_PAGE_ANALYSIS_UNAVAILABLE: Final = "page_analysis_unavailable"
 ERROR_CODE_MISSING_TARGET_TASK: Final = "missing_target_task"
+# Hedef gorev BOS degil ama anlamsal olarak gecersiz (`.`, `test`, tekrarlanan
+# karakter ...). Launch dogrulamasi bunu normalde engeller; bu, PATCH
+# dogrulamasi eklenmeden once olusmus eski (legacy) run'lar ve savunma icindir.
+# Provider CAGRILMADAN kontrollu, terminal bir FAILED sonucu uretilir - modul
+# belirsiz/bos bir cikti (ör. "kullanici niyeti belirlenemiyor") URETMEZ.
+ERROR_CODE_INVALID_TARGET_TASK: Final = "invalid_target_task"
 ERROR_CODE_OUTPUT_VALIDATION_FAILED: Final = "output_validation_failed"
 ERROR_CODE_MAX_ATTEMPTS: Final = "max_attempts_exhausted"
 ERROR_CODE_STALE_TIMEOUT: Final = "stale_timeout"
@@ -345,6 +352,26 @@ async def _claim_run(
             return _ClaimResult(
                 kind="resolved",
                 process=ProcessResult(True, "failed", hm.id, ERROR_CODE_MISSING_TARGET_TASK),
+            )
+        # Hedef gorev bos degil ama anlamsal olarak gecersizse (eski/legacy run)
+        # provider CAGRILMADAN kontrollu bir FAILED uretilir - aksi halde model
+        # cagirilir ve belirsiz/bos ("guclu eslesme yok") bir sonuc uretirdi.
+        if target_task_service.target_task_rejection_reason(evidence.target_task):
+            hm.status = InteractionHeatmapStatus.FAILED
+            hm.error_code = ERROR_CODE_INVALID_TARGET_TASK
+            hm.finished_at = _now()
+            await session.commit()
+            logger.info(
+                "interaction heatmap: gecersiz hedef gorev (provider cagrilmadi)",
+                extra={
+                    "heatmap_id": str(hm.id),
+                    "simulation_run_id": str(run.id),
+                    "error_code": ERROR_CODE_INVALID_TARGET_TASK,
+                },
+            )
+            return _ClaimResult(
+                kind="resolved",
+                process=ProcessResult(True, "failed", hm.id, ERROR_CODE_INVALID_TARGET_TASK),
             )
 
         fingerprint = compute_interaction_heatmap_fingerprint(

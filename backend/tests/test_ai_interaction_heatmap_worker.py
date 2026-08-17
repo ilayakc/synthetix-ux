@@ -257,6 +257,30 @@ async def test_no_candidates_yields_empty_result_without_provider_call(maker):
     assert hm.result["unmatched_task_warning"]
 
 
+async def test_semantically_invalid_target_task_fails_without_provider_call(maker):
+    """Bos DEGIL ama anlamsal olarak gecersiz bir hedef gorev (`.`) worker'a
+    ulasirsa (eski/legacy run) provider CAGRILMADAN kontrollu bir FAILED +
+    error_code=invalid_target_task uretilir - belirsiz/bos bir cikti URETMEZ."""
+
+    org_id = await _make_org(maker)
+    launch = uuid.uuid4()
+    reservation_id = await _reserve(maker, org_id, launch_run_id=launch)
+    run_id = await _seed_run(
+        maker, org_id, target_task=".", launch_run_id=launch,
+        heatmap_reservation_id=reservation_id,
+    )
+    selector = CountingSelector()
+    result = await hm_worker.process_one_interaction_heatmap(maker, selector=selector)
+
+    assert result.outcome == "failed"
+    assert result.error_code == hm_worker.ERROR_CODE_INVALID_TARGET_TASK
+    assert selector.calls == 0  # gecersiz gorev -> provider CAGRILMAZ
+    hm = await _load_heatmap(maker, run_id)
+    assert hm.status == InteractionHeatmapStatus.FAILED
+    assert hm.error_code == hm_worker.ERROR_CODE_INVALID_TARGET_TASK
+    assert hm.finished_at is not None  # terminal duruma gecti
+
+
 async def test_same_fingerprint_does_not_call_provider_twice(maker):
     org_id = await _make_org(maker)
     launch = uuid.uuid4()

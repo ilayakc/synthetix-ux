@@ -21,6 +21,7 @@ import {
   aiReportRequiresPersonaSelection,
 } from "./aiReportPersona";
 import { incompatibleSelectedModuleKeys } from "./moduleCompatibility";
+import { targetTaskRejectionReason } from "./targetTaskValidation";
 import Step1Details from "./Step1Details";
 import Step2Urls from "./Step2Urls";
 import Step3Personas from "./Step3Personas";
@@ -56,7 +57,8 @@ function validateStep(step: number, payload: WizardDraftPayload): Record<string,
   if (step === 1) {
     if (!payload.project_id) errors.project_id = "Proje seçmelisiniz.";
     if (!payload.name?.trim()) errors.name = "Test adı gereklidir.";
-    if (!payload.target_task?.trim()) errors.target_task = "Hedef görev gereklidir.";
+    const targetTaskError = targetTaskRejectionReason(payload.target_task);
+    if (targetTaskError) errors.target_task = targetTaskError;
     if (!payload.test_type) errors.test_type = "Test türü seçmelisiniz.";
   }
 
@@ -463,6 +465,21 @@ export default function TestWizard() {
       // sessizce "Test baslatilamadi" mesajina indirgeniyordu - kullanici
       // gercek nedeni (ör. "asset artik kullanilamiyor") hic goremiyordu.
       if (err instanceof ApiError) {
+        // Gecersiz hedef gorev (ör. PATCH dogrulamasi eklenmeden once `.` ile
+        // kaydedilmis eski bir taslak): backend 422 INVALID_TARGET_TASK doner,
+        // Chip harcanmaz/rezerve edilmez. Hatayi genel banner'a degil, ilgili
+        // alanin altina tasi ve kullaniciyi duzenleme adimina (1. adim)
+        // yonlendir - draft yine duzenlenebilir.
+        const detail = (err.body as { detail?: { code?: string; field?: string } } | null)?.detail;
+        if (detail?.code === "INVALID_TARGET_TASK") {
+          setFieldErrors((current) => ({
+            ...current,
+            [detail.field ?? "target_task"]: err.message,
+          }));
+          setBanner("Hedef görevi düzeltip testi yeniden başlatın.");
+          void goToStep(1);
+          return;
+        }
         setBanner(err.message);
         console.error("Test baslatma basarisiz (status=%s):", err.status, err.message, err.body);
       } else {

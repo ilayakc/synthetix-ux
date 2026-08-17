@@ -29,6 +29,7 @@ from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import entitlements as entitlements_service
 from app.services import page_analysis as page_analysis_service
+from app.services import target_task as target_task_service
 from app.services.ai_pipeline import stage_sources as ai_context
 from app.services.exceptions import (
     DesignAssetNotFoundError,
@@ -368,10 +369,17 @@ def validate_patch_fields(patch: dict) -> None:
         except personas.PersonaValidationError as exc:
             raise DraftValidationError(f"persona_distribution gecersiz: {exc}") from exc
 
-    for field in ("name", "target_task", "target_audience"):
+    for field in ("name", "target_audience"):
         if field in patch and patch[field] is not None:
             if not isinstance(patch[field], str) or not patch[field].strip():
                 raise DraftValidationError(f"'{field}' bos olamaz")
+
+    # `target_task` icin yalnizca "bos degil" YETMEZ - kullanici niyeti tasidigi
+    # icin ANLAMSAL olarak dogrulanir (bkz. app.services.target_task). Gecersizse
+    # `InvalidTargetTaskError` firlatilir (DraftValidationError DEGIL) - router
+    # bunu urun API standardina uygun bir 422 alan hatasina cevirir.
+    if "target_task" in patch and patch["target_task"] is not None:
+        target_task_service.validate_target_task(patch["target_task"])
 
     if "project_id" in patch and patch["project_id"] is not None:
         try:
@@ -701,13 +709,19 @@ def missing_fields_for_launch(payload: dict) -> list[str]:
     for field in (
         "project_id",
         "name",
-        "target_task",
         "test_type",
         "persona_count",
         "target_audience",
     ):
         if payload.get(field) in (None, ""):
             missing.append(field)
+
+    # `target_task` bos DEGIL ama anlamsal olarak gecersiz (`.`, `test`, ...)
+    # olabilir; bu durumda da "eksik/gecersiz" sayilir (bkz. `target_task_
+    # rejection_reason`). Kesin, alan bazli 422 mesaji launch aninda
+    # `target_task_service.validate_target_task` tarafindan uretilir.
+    if not target_task_service.is_valid_target_task(payload.get("target_task")):
+        missing.append("target_task")
 
     # Aktif olmayan kaynak alani (secilmeyen kaynak turune ait) launch
     # dogrulamasinda HIC KULLANILMAZ - yalnizca etkin kaynak turune gore
@@ -1036,6 +1050,15 @@ async def launch_draft(
             reserved_chips=result["reserved_chips"],
             warnings=tuple(result.get("warnings") or ()),
         )
+
+    # Hedef gorev, launch aninda ANLAMSAL olarak yeniden dogrulanir - PATCH
+    # dogrulamasi eklenmeden ONCE `.` gibi degerlerle kaydedilmis eski (legacy)
+    # taslaklar da olabilir (bkz. gorev talimati 5. madde). Gecersizse launch
+    # BU NOKTADA, HICBIR yan etki (quote, Chip/entitlement rezervasyonu,
+    # SimulationRun, PageAnalysis, pipeline) uretilmeden reddedilir; router bunu
+    # 422 INVALID_TARGET_TASK yanitina cevirir ve kullaniciyi taslak duzenleme
+    # ekranina yonlendirir - Chip harcanmaz/rezerve edilmez.
+    target_task_service.validate_target_task(draft.payload.get("target_task"))
 
     missing = missing_fields_for_launch(draft.payload)
     if missing:

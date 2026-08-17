@@ -115,6 +115,36 @@ async def _credit_chips(organization_id: str, amount: int) -> None:
         await engine.dispose()
 
 
+async def _org_chip_balance(organization_id: str) -> int:
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            return await chip_ledger.get_chip_balance(session, uuid.UUID(organization_id))
+    finally:
+        await engine.dispose()
+
+
+async def _force_draft_target_task(draft_id: str, value: str) -> None:
+    """Taslagin `payload["target_task"]`ini dogrulamayi ATLAYARAK dogrudan DB'de
+    degistirir - PATCH dogrulamasi eklenmeden once `.` gibi bir degerle
+    kaydedilmis eski (legacy) bir kaydi simule eder."""
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.models.test_wizard import TestWizardDraft
+
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            draft = await session.get(TestWizardDraft, uuid.UUID(draft_id))
+            assert draft is not None
+            draft.payload = {**draft.payload, "target_task": value}
+            flag_modified(draft, "payload")
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
 async def _create_report_for_run(organization_id: str, run_id: str) -> None:
     """Proje silme korumasini izole bicimde test etmek icin tamamlanmis rapor izi ekler."""
 
@@ -451,6 +481,87 @@ def test_wizard_ab_comparison_requires_new_url_before_launch(client):
 
     launch = client.post(f"/api/tests/drafts/{draft['id']}/launch", headers=_csrf_headers(client))
     assert launch.status_code == 400
+
+
+# --- Sihirbaz taslagi: anlamsal hedef gorev dogrulamasi ----------------------
+
+
+@pytest.mark.parametrize("bad_value", [".", "...", "!", "???", "-", "   ", "😀", "aaa", "test", "asdf"])
+def test_wizard_patch_rejects_semantically_invalid_target_task(client, bad_value):
+    """Anlamsal olarak gecersiz bir hedef gorev PATCH ile kaydedilemez: 422
+    INVALID_TARGET_TASK + alan bazli sozlesme doner (bkz. app.services.
+    target_task)."""
+
+    _register(client)
+    project = _create_project(client)
+    draft = _create_draft(client)
+
+    response = client.patch(
+        f"/api/tests/drafts/{draft['id']}",
+        json={"payload": {"project_id": project["id"], "target_task": bad_value}},
+        headers=_csrf_headers(client),
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "INVALID_TARGET_TASK"
+    assert detail["field"] == "target_task"
+    assert isinstance(detail["detail"], str) and detail["detail"]
+
+    # Gecersiz deger taslaga YAZILMAMIS olmali.
+    reloaded = client.get(f"/api/tests/drafts/{draft['id']}").json()
+    assert reloaded["payload"].get("target_task") != bad_value
+
+
+@pytest.mark.parametrize(
+    "good_value",
+    ["Ürünü bul", "Giriş yap", "Kırmızı spor ayakkabıyı sepete ekle", "İletişim formunu doldur"],
+)
+def test_wizard_patch_accepts_valid_short_turkish_target_task(client, good_value):
+    """Kisa ama anlamli Turkce gorevler yanlislikla reddedilmez."""
+
+    _register(client)
+    project = _create_project(client)
+    draft = _create_draft(client)
+
+    updated = _patch_draft(
+        client, draft["id"], {"project_id": project["id"], "target_task": good_value}
+    )
+    assert updated["payload"]["target_task"] == good_value
+
+
+def test_wizard_launch_rejects_legacy_invalid_target_task_without_spending_chips(client):
+    """PATCH dogrulamasi eklenmeden ONCE `.` gibi bir degerle kaydedilmis eski
+    (legacy) bir taslak, launch aninda yeniden dogrulanir: 422 doner, HICBIR
+    Chip harcanmaz/rezerve edilmez, hicbir test/simulasyon olusmaz ve taslak
+    duzenlenebilir (draft) kalir (bkz. gorev talimati 5. madde)."""
+
+    import anyio
+
+    session = _register(client)
+    project = _create_project(client)
+    draft = _create_draft(client)
+
+    # Once gecerli, tam bir payload kaydet (launch icin diger tum alanlar hazir).
+    payload = _basic_ux_payload(project["id"], persona_count=1500)
+    payload["authorization_confirmed"] = True
+    _patch_draft(client, draft["id"], payload)
+
+    anyio.run(_credit_chips, session["organization_id"], 5000)
+    balance_before = anyio.run(_org_chip_balance, session["organization_id"])
+
+    # Dogrulamayi atlayarak (gercek eski kayit gibi) hedef gorevi bozarak DB'ye yaz.
+    anyio.run(_force_draft_target_task, draft["id"], ".")
+
+    launch = client.post(f"/api/tests/drafts/{draft['id']}/launch", headers=_csrf_headers(client))
+    assert launch.status_code == 422, launch.text
+    assert launch.json()["detail"]["code"] == "INVALID_TARGET_TASK"
+
+    # Chip harcanmamis/rezerve edilmemis olmali (bakiye degismedi).
+    assert anyio.run(_org_chip_balance, session["organization_id"]) == balance_before
+
+    # Test olusturulmamis, taslak hala duzenlenebilir.
+    assert client.get(f"/api/projects/{project['id']}").json()["test_count"] == 0
+    assert client.get(f"/api/tests/drafts/{draft['id']}").json()["status"] == "draft"
 
 
 # --- Sihirbaz baslatma: ucretsiz hak / Chip / yetersiz bakiye -----------------

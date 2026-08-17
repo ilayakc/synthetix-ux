@@ -69,6 +69,34 @@ describe("rawFetch hata mesaji cikarimi", () => {
     } satisfies Partial<ApiError>);
   });
 
+  it("alan bazli yapilandirilmis hata (code/detail/field) icin detail metnini kullanir ve body'yi korur", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        jsonResponse(422, {
+          detail: {
+            code: "INVALID_TARGET_TASK",
+            detail: "Hedef görev boş bırakılamaz.",
+            field: "target_task",
+          },
+        }),
+      ),
+    );
+
+    let error: ApiError | undefined;
+    try {
+      await getHealth();
+    } catch (err) {
+      error = err as ApiError;
+    }
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error!.message).toBe("Hedef görev boş bırakılamaz.");
+    // Cagiran taraf alan eslemesi icin code/field'e body uzerinden erisebilmeli.
+    const detail = (error!.body as { detail?: { code?: string; field?: string } }).detail;
+    expect(detail?.code).toBe("INVALID_TARGET_TASK");
+    expect(detail?.field).toBe("target_task");
+  });
+
   it("detail bir nesne ise guvenli genel bir hata metni kullanir", async () => {
     vi.stubGlobal(
       "fetch",
