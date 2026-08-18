@@ -460,7 +460,13 @@ async def test_process_analysis_marks_failed_when_analyzer_rejects_oversized_res
     analysis.status = PageAnalysisStatus.RUNNING
 
     client = _mock_client(
-        status_code=502, json_body={"detail": "Yanit boyutu sinirini asti (>10485760 bayt)"}
+        status_code=502,
+        json_body={
+            "detail": {
+                "code": "response_too_large",
+                "message": "Yanit boyutu sinirini asti (>10485760 bayt)",
+            }
+        },
     )
     try:
         await page_analysis_service.process_analysis(session, analysis, client=client)
@@ -468,6 +474,7 @@ async def test_process_analysis_marks_failed_when_analyzer_rejects_oversized_res
         await client.aclose()
 
     assert analysis.status == PageAnalysisStatus.FAILED
+    assert analysis.error_code == "response_too_large"
     assert "boyutu" in analysis.error.lower()
 
 

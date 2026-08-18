@@ -18,9 +18,11 @@ Guvenlik modeli (bkz. docs/security.md "SSRF tehdit modeli"):
    penceresi kalir - bu, bilinen ve dokumante edilmis bir kalan risktir.
 4. Redirect (yeni hostname'e navigasyon) sayisi `max_redirects` ile
    sinirlanir.
-5. Yanit boyutu, `Content-Length` basligi uzerinden `max_response_bytes`
-   ile sinirlanir (en iyi caba: `Content-Length` gondermeyen "chunked"
-   yanitlar yalnizca navigasyon zaman asimiyla sinirlanir).
+5. Ana belge yanit boyutu, `Content-Length` basligi uzerinden
+   `max_response_bytes` ile sinirlanir. Buyuk alt kaynaklar temel DOM
+   analizini dusurmez; medya istekleri ise gereksiz ag/bellek tuketimini
+   onlemek icin bastan engellenir (en iyi caba: `Content-Length`
+   gondermeyen "chunked" yanitlar navigasyon zaman asimiyla sinirlanir).
 6. Form gonderme, giris yapma veya herhangi bir tiklama/etkilesim
    **yapilmaz**; yalnizca navigasyon + pasif okuma (DOM, screenshot,
    performance, axe-core) gerceklestirilir.
@@ -51,6 +53,7 @@ logger = logging.getLogger("analyzer.browser")
 
 _semaphore = asyncio.Semaphore(settings.max_concurrent_analyses)
 EMPTY_PAGE_SNAPSHOT_CODE = "empty_page_snapshot"
+RESPONSE_TOO_LARGE_CODE = "response_too_large"
 EMPTY_PAGE_SNAPSHOT_MESSAGE = (
     "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
     "Site otomatik tarayicilara bos icerik donduruyor olabilir."
@@ -115,7 +118,36 @@ async def _validate_and_cache_host(hostname: str, validated_hosts: dict[str, boo
     validated_hosts[hostname] = True
 
 
-def _make_route_handler(pinned_hostname: str, validated_hosts: dict[str, bool], redirect_state: dict[str, int]):
+def _oversized_response_details(response, page) -> tuple[str, str, str, int] | None:
+    """Boyut sinirini asan yaniti guvenli log bilgisiyle siniflandir.
+
+    Yalnizca ana cercevenin belgesi terminal hatadir. Iframe ve diger alt
+    kaynaklar sayfanin temel DOM analizini kullanilamaz hale getirmemelidir.
+    """
+
+    length_header = response.headers.get("content-length")
+    if not length_header:
+        return None
+    length = int(length_header)
+    if length <= settings.max_response_bytes:
+        return None
+
+    resource_type = response.request.resource_type or "other"
+    try:
+        _, response_host = validate_url_syntax(response.url)
+    except UnsafeUrlError:
+        response_host = "invalid"
+    is_main_document = resource_type == "document" and response.request.frame == page.main_frame
+    action = "fail" if is_main_document else "continue"
+    return action, response_host, resource_type, length
+
+
+def _make_route_handler(
+    pinned_hostname: str,
+    validated_hosts: dict[str, bool],
+    redirect_state: dict[str, int],
+    blocked_resource_state: dict[str, int] | None = None,
+):
     async def handler(route: Route) -> None:
         request = route.request
         url = request.url
@@ -123,6 +155,16 @@ def _make_route_handler(pinned_hostname: str, validated_hosts: dict[str, bool], 
             _, hostname = validate_url_syntax(url)
         except UnsafeUrlError as exc:
             logger.warning("istek engellendi (sema/hostname gecersiz): %s", exc.reason)
+            await route.abort()
+            return
+
+        # Video/ses kaynaklari DOM, erisilebilirlik ve tiklanabilir alan
+        # analizine katkida bulunmaz. Buyuk medya dosyalarinin tek basina
+        # tum analizi dusurmesini ve gereksiz bellek/ag tuketimini engelle.
+        if request.resource_type == "media":
+            if blocked_resource_state is not None:
+                blocked_resource_state["media"] = blocked_resource_state.get("media", 0) + 1
+            logger.info("pasif analiz icin medya kaynagi engellendi: host=%s", hostname)
             await route.abort()
             return
 
@@ -590,32 +632,63 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
 
     validated_hosts: dict[str, bool] = {validated.hostname: True}
     redirect_state = {"count": 0}
-    oversized = {"flag": False}
+    oversized_document = {"flag": False}
+    oversized_subresources: dict[str, int] = {}
+    blocked_resources: dict[str, int] = {}
     warnings: list[str] = []
 
     async def _on_response(response) -> None:
         try:
-            length = response.headers.get("content-length")
-            if length and int(length) > settings.max_response_bytes:
-                oversized["flag"] = True
+            details = _oversized_response_details(response, page)
+            if details is None:
+                return
+            action, response_host, resource_type, length = details
+            if action == "fail":
+                oversized_document["flag"] = True
+                logger.warning(
+                    "ana belge yanit boyutu sinirini asti: host=%s bytes=%s limit=%s action=fail",
+                    response_host,
+                    length,
+                    settings.max_response_bytes,
+                )
                 await context.close()
+                return
+
+            oversized_subresources[resource_type] = oversized_subresources.get(resource_type, 0) + 1
+            logger.warning(
+                "buyuk alt kaynak boyut sinirina ragmen temel analiz surduruldu: "
+                "host=%s resource_type=%s bytes=%s limit=%s action=continue",
+                response_host,
+                resource_type,
+                length,
+                settings.max_response_bytes,
+            )
         except Exception:  # yanit basligi ayristirma hatalari analiz basarisizligina donusmemeli
             logger.debug("content-length kontrolu basarisiz oldu", exc_info=True)
 
     page.on("response", _on_response)
-    await page.route("**/*", _make_route_handler(validated.hostname, validated_hosts, redirect_state))
+    await page.route(
+        "**/*",
+        _make_route_handler(validated.hostname, validated_hosts, redirect_state, blocked_resources),
+    )
 
     try:
         await page.goto(validated.url, wait_until="load")
     except PlaywrightTimeoutError as exc:
         raise AnalysisError(f"Sayfa zaman asimina ugradi ({settings.navigation_timeout_seconds}s)") from exc
     except PlaywrightError as exc:
-        if oversized["flag"]:
-            raise AnalysisError(f"Yanit boyutu sinirini asti (>{settings.max_response_bytes} bayt)") from exc
+        if oversized_document["flag"]:
+            raise AnalysisError(
+                f"Yanit boyutu sinirini asti (>{settings.max_response_bytes} bayt)",
+                code=RESPONSE_TOO_LARGE_CODE,
+            ) from exc
         raise AnalysisError(f"Sayfa yuklenemedi: {exc}") from exc
 
-    if oversized["flag"]:
-        raise AnalysisError(f"Yanit boyutu sinirini asti (>{settings.max_response_bytes} bayt)")
+    if oversized_document["flag"]:
+        raise AnalysisError(
+            f"Yanit boyutu sinirini asti (>{settings.max_response_bytes} bayt)",
+            code=RESPONSE_TOO_LARGE_CODE,
+        )
 
     final_url = page.url
     try:
@@ -627,6 +700,16 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
 
     if redirect_state["count"] > 0:
         warnings.append(f"{redirect_state['count']} yonlendirme takip edildi")
+    if blocked_resources.get("media", 0) > 0:
+        warnings.append(
+            f"{blocked_resources['media']} medya kaynagi pasif analiz icin yuklenmeden atlandi"
+        )
+    if oversized_subresources:
+        total = sum(oversized_subresources.values())
+        kinds = ", ".join(sorted(oversized_subresources))
+        warnings.append(
+            f"{total} buyuk alt kaynak ({kinds}) boyut sinirini asti; temel sayfa analizi korundu"
+        )
 
     # SPA ve tembel yuklenen bolumlerin yerlesmesi icin sinirli bir bekleme
     # ve pasif kaydirma yapilir; tiklama/form gonderme yapilmaz.

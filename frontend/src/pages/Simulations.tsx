@@ -24,6 +24,9 @@ const NON_RETRYABLE_ERROR_MESSAGE =
 const EMPTY_PAGE_SNAPSHOT_ERROR_MESSAGE =
   "Sayfa açıldı ancak analiz edilebilir metin veya etkileşim alanı yüklenmedi. Site otomatik analiz tarayıcısına boş içerik döndürüyor olabilir. Bu siteyi ekran görüntüsü kaynağıyla deneyin.";
 
+const RESPONSE_TOO_LARGE_ERROR_MESSAGE =
+  "Sayfanın ana belgesi analiz sınırından büyük. Aynı URL'yi yeniden denemek sonucu değiştirmez; bu siteyi ekran görüntüsü kaynağıyla deneyin.";
+
 const STATUS_LABELS: Record<SimulationRunStatus, string> = {
   queued: "Kuyrukta",
   running: "Çalışıyor",
@@ -383,7 +386,9 @@ function SimulationCard({
   const nonRetryableMessage =
     run.failure_code === "page_analysis_empty_snapshot"
       ? EMPTY_PAGE_SNAPSHOT_ERROR_MESSAGE
-      : NON_RETRYABLE_ERROR_MESSAGE;
+      : run.failure_code === "page_analysis_response_too_large"
+        ? RESPONSE_TOO_LARGE_ERROR_MESSAGE
+        : NON_RETRYABLE_ERROR_MESSAGE;
   const normalizedProgressMessage = run.progress_message
     ? normalizeTurkishSystemCopy(run.progress_message)
     : null;

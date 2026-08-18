@@ -5,6 +5,104 @@ import pytest
 from app import browser
 
 
+class _Request:
+    def __init__(self, *, url: str, resource_type: str):
+        self.url = url
+        self.resource_type = resource_type
+
+
+class _Route:
+    def __init__(self, request: _Request):
+        self.request = request
+        self.aborted = False
+        self.continued = False
+
+    async def abort(self):
+        self.aborted = True
+
+    async def continue_(self):
+        self.continued = True
+
+
+class _ResponseRequest:
+    def __init__(self, *, resource_type: str, frame):
+        self.resource_type = resource_type
+        self.frame = frame
+
+
+class _Response:
+    def __init__(self, *, resource_type: str, frame, length: int):
+        self.headers = {"content-length": str(length)}
+        self.request = _ResponseRequest(resource_type=resource_type, frame=frame)
+        self.url = "https://cdn.example.com/assets/large-resource"
+
+
+class _Page:
+    def __init__(self):
+        self.main_frame = object()
+
+
+def test_oversized_main_document_is_terminal(monkeypatch):
+    monkeypatch.setattr(browser.settings, "max_response_bytes", 100)
+    page = _Page()
+    response = _Response(resource_type="document", frame=page.main_frame, length=101)
+
+    details = browser._oversized_response_details(response, page)
+
+    assert details == ("fail", "cdn.example.com", "document", 101)
+
+
+@pytest.mark.parametrize("resource_type", ["image", "script", "font", "xhr"])
+def test_oversized_subresource_keeps_basic_analysis(monkeypatch, resource_type):
+    monkeypatch.setattr(browser.settings, "max_response_bytes", 100)
+    page = _Page()
+    response = _Response(resource_type=resource_type, frame=page.main_frame, length=101)
+
+    details = browser._oversized_response_details(response, page)
+
+    assert details == ("continue", "cdn.example.com", resource_type, 101)
+
+
+def test_oversized_iframe_document_keeps_basic_analysis(monkeypatch):
+    monkeypatch.setattr(browser.settings, "max_response_bytes", 100)
+    page = _Page()
+    response = _Response(resource_type="document", frame=object(), length=101)
+
+    details = browser._oversized_response_details(response, page)
+
+    assert details == ("continue", "cdn.example.com", "document", 101)
+
+
+@pytest.mark.asyncio
+async def test_route_handler_blocks_media_without_failing_page():
+    state: dict[str, int] = {}
+    route = _Route(_Request(url="https://example.com/hero.mp4", resource_type="media"))
+    handler = browser._make_route_handler(
+        "example.com", {"example.com": True}, {"count": 0}, state
+    )
+
+    await handler(route)
+
+    assert route.aborted is True
+    assert route.continued is False
+    assert state == {"media": 1}
+
+
+@pytest.mark.asyncio
+async def test_route_handler_keeps_non_media_resources():
+    state: dict[str, int] = {}
+    route = _Route(_Request(url="https://example.com/app.js", resource_type="script"))
+    handler = browser._make_route_handler(
+        "example.com", {"example.com": True}, {"count": 0}, state
+    )
+
+    await handler(route)
+
+    assert route.aborted is False
+    assert route.continued is True
+    assert state == {}
+
+
 class _AxeResult:
     response = {
         "violations": [{"id": "color-contrast", "nodes": []}],

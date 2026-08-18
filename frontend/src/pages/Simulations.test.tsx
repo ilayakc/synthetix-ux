@@ -160,6 +160,21 @@ describe("Simulations", () => {
     expect(screen.queryByText(/ic hata ayrintisi/)).not.toBeInTheDocument();
   });
 
+  it("buyuk ana belge hatasinda yeniden denemek yerine ekran goruntusune yonlendirir", async () => {
+    stubRuns([
+      baseRun({
+        failure_code: "page_analysis_response_too_large",
+        error: "ic hata ayrintisi",
+      }),
+    ]);
+    renderSimulations();
+
+    await waitFor(() => expect(screen.getByText(/Çalıştırma 11111111/)).toBeInTheDocument());
+    expect(screen.queryByText("Yeniden dene")).not.toBeInTheDocument();
+    expect(screen.getByText(/ana belgesi analiz sınırından büyük/)).toBeInTheDocument();
+    expect(screen.queryByText(/ic hata ayrintisi/)).not.toBeInTheDocument();
+  });
+
   it("retryable=true olan gecici hatada 'Yeniden dene' gosterir ve 'Yeni test oluştur' gostermez", async () => {
     stubRuns([
       baseRun({

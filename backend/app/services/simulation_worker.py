@@ -101,6 +101,7 @@ TERMINAL_STATUSES = (SimulationStatus.SUCCEEDED, SimulationStatus.FAILED, Simula
 # durum icin `retryable=False` dondurulur.
 NETWORK_DEVICE_TEST_REQUIRES_URL_CODE = "network_device_test_requires_url"
 PAGE_ANALYSIS_EMPTY_SNAPSHOT_CODE = "page_analysis_empty_snapshot"
+PAGE_ANALYSIS_RESPONSE_TOO_LARGE_CODE = "page_analysis_response_too_large"
 
 NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE = (
     "Bu çalışma ekran görüntüsüyle Ağ ve cihaz testi seçildiği için yeniden denenemez. "
@@ -133,6 +134,9 @@ def classify_run_failure(run: SimulationRun) -> tuple[bool, str | None]:
 
     if run.error == _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE:
         return False, PAGE_ANALYSIS_EMPTY_SNAPSHOT_CODE
+
+    if run.error == _PAGE_ANALYSIS_RESPONSE_TOO_LARGE_MESSAGE:
+        return False, PAGE_ANALYSIS_RESPONSE_TOO_LARGE_CODE
 
     return True, None
 
@@ -191,6 +195,10 @@ _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE = (
     "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
     "Bu site otomatik analiz tarayicisina bos icerik donduruyor olabilir."
 )
+_PAGE_ANALYSIS_RESPONSE_TOO_LARGE_MESSAGE = (
+    "Sayfadaki ana belge izin verilen boyut sinirini astigi icin analiz tamamlanamadi. "
+    "Bu siteyi ekran goruntusu kaynagiyla deneyin."
+)
 
 
 async def fail_runs_blocked_by_failed_page_analysis(
@@ -221,11 +229,12 @@ async def fail_runs_blocked_by_failed_page_analysis(
     )
     rows = list(result.all())
     for run, page_analysis_error_code in rows:
-        message = (
-            _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE
-            if page_analysis_error_code == "empty_page_snapshot"
-            else _PAGE_ANALYSIS_FAILED_MESSAGE
-        )
+        if page_analysis_error_code == "empty_page_snapshot":
+            message = _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE
+        elif page_analysis_error_code == "response_too_large":
+            message = _PAGE_ANALYSIS_RESPONSE_TOO_LARGE_MESSAGE
+        else:
+            message = _PAGE_ANALYSIS_FAILED_MESSAGE
         await _finalize_failed(session, run, error=message)
     return len(rows)
 

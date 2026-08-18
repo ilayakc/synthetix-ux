@@ -127,6 +127,24 @@ def test_empty_snapshot_returns_typed_safe_502(monkeypatch):
     }
 
 
+def test_oversized_main_document_returns_typed_502(monkeypatch):
+    async def _raise_oversized(_url: str):
+        raise AnalysisError("Yanit boyutu sinirini asti", code="response_too_large")
+
+    monkeypatch.setattr(main, "analyze_url", _raise_oversized)
+    response = client.post(
+        "/internal/analyze",
+        json={"url": "https://example.com/", "authorization_confirmed": True},
+        headers=VALID_HEADERS,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "code": "response_too_large",
+        "message": "Yanit boyutu sinirini asti",
+    }
+
+
 def test_successful_analysis_returns_versioned_snapshot(monkeypatch):
     async def _fake_analyze(_url: str):
         return _fixture_snapshot()

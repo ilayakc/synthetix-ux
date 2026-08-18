@@ -71,9 +71,10 @@ _DESIGN_ASSET_ALLOWED_FORMATS = image_safety.STANDARD_IMAGE_FORMATS
 # dogrudan yansitilmaz; yalnizca WARNING seviyeli log'da tutulur.
 _SCREENSHOT_VALIDATION_FAILED_MESSAGE = "Ekran goruntusu guvenlik dogrulamasindan gecemedi"
 EMPTY_PAGE_SNAPSHOT_CODE = "empty_page_snapshot"
+RESPONSE_TOO_LARGE_CODE = "response_too_large"
 ANALYZER_UNAVAILABLE_CODE = "analyzer_unavailable"
 ANALYZER_REJECTED_CODE = "analyzer_rejected"
-_ALLOWED_ANALYZER_ERROR_CODES = {EMPTY_PAGE_SNAPSHOT_CODE}
+_ALLOWED_ANALYZER_ERROR_CODES = {EMPTY_PAGE_SNAPSHOT_CODE, RESPONSE_TOO_LARGE_CODE}
 EMPTY_PAGE_SNAPSHOT_MESSAGE = (
     "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
     "Site otomatik tarayicilara bos icerik donduruyor olabilir."
@@ -275,7 +276,7 @@ def _is_retryable_analyzer_failure(exc: Exception) -> bool:
         return True
     if not isinstance(exc, AnalyzerResponseError):
         return False
-    if "yanit boyutu sinirini asti" in exc.detail.lower():
+    if exc.code == RESPONSE_TOO_LARGE_CODE or "yanit boyutu sinirini asti" in exc.detail.lower():
         return False
     return exc.status_code in (408, 429) or exc.status_code >= 500
 
