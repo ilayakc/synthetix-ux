@@ -813,13 +813,22 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
         if not already_reserved:
             amount = previous.amount if previous is not None else 0
             if amount > 0:
+                # Sayfa analizi, SimulationRun worker tarafindan claim edilmeden
+                # once basarisiz olabilir. Bu durumda run.attempt_count artmaz;
+                # attempt_count tabanli bir idempotency key ise onceki retry'da
+                # RELEASED olmus rezervasyonu geri dondurur ve sonraki basarili
+                # calisma Chip tuketemez. Rezervasyon zincirindeki onceki kaydin
+                # kimligi her retry nesli icin hem tekil hem de idempotenttir.
+                previous_reservation_id = (
+                    previous.id if previous is not None else run.chip_reservation_id
+                )
                 new_reservation = await chip_ledger.reserve_chips(
                     session,
                     run.organization_id,
                     amount,
                     f"simulasyon yeniden deneme: {run.id}",
                     run_id=run.launch_run_id,
-                    idempotency_key=f"simulation-retry:{run.id}:{run.attempt_count + 1}",
+                    idempotency_key=f"simulation-retry:{run.id}:after:{previous_reservation_id}",
                 )
                 run.chip_reservation_id = new_reservation.id
 
@@ -840,7 +849,7 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
                 f"AI raporu baseline yeniden deneme: {run.id}",
                 run_id=run.launch_run_id or run.id,
                 idempotency_key=(
-                    f"ai-report-baseline-retry:{run.launch_run_id or run.id}:{run.attempt_count + 1}"
+                    f"ai-report-baseline-retry:{run.launch_run_id or run.id}:after:{previous_ai.id}"
                 ),
             )
             if run.launch_run_id is not None:
@@ -875,7 +884,7 @@ async def retry_run(session: AsyncSession, organization_id: uuid.UUID, run_id: u
                 f"AI etkilesim isi haritasi baseline yeniden deneme: {run.id}",
                 run_id=run.launch_run_id or run.id,
                 idempotency_key=(
-                    f"ai-heatmap-baseline-retry:{run.launch_run_id or run.id}:{run.attempt_count + 1}"
+                    f"ai-heatmap-baseline-retry:{run.launch_run_id or run.id}:after:{previous_hm.id}"
                 ),
             )
             if run.launch_run_id is not None:

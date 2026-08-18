@@ -523,6 +523,112 @@ async def test_retry_recreates_released_ai_reservation(
     assert await chip_ledger.get_chip_balance(session, organization.id) == 50
 
 
+@pytest.mark.security
+async def test_second_retry_after_page_analysis_failure_uses_fresh_reservations_and_charges(
+    session: AsyncSession, organization: Organization
+):
+    """Analyzer run'i claim etmeden iki kez basarisiz olsa bile basari ucretlenir.
+
+    PageAnalysis hatalari `SimulationRun.attempt_count` degerini arttirmaz. Eski
+    retry anahtari bu sayaca bagli oldugu icin ikinci retry, ilk retry'da iade
+    edilmis rezervasyonu tekrar kullaniyor ve basarili sonuc Chip tuketemiyordu.
+    """
+
+    await chip_ledger.credit(session, organization.id, 300, "test credit")
+    launch_run_id = uuid.uuid4()
+    old_baseline = await chip_ledger.reserve_chips(
+        session, organization.id, 100, "baseline", run_id=launch_run_id
+    )
+    old_ai = await chip_ledger.reserve_chips(
+        session, organization.id, 50, "AI report", run_id=launch_run_id
+    )
+    old_heatmap = await chip_ledger.reserve_chips(
+        session, organization.id, 25, "AI heatmap", run_id=launch_run_id
+    )
+
+    analysis = PageAnalysis(
+        organization_id=organization.id,
+        source_kind=PageAnalysisSourceKind.URL,
+        url="https://example.com/",
+        authorization_confirmed=True,
+        status=PageAnalysisStatus.FAILED,
+        attempt_count=3,
+        error="analyzer hatasi (429): Too Many Requests",
+        error_code="analyzer_rejected",
+    )
+    session.add(analysis)
+    await session.flush()
+
+    run = await _make_queued_run(
+        session,
+        organization,
+        launch_run_id=launch_run_id,
+        chip_reservation_id=old_baseline.id,
+    )
+    run.ai_chip_reservation_id = old_ai.id
+    run.heatmap_chip_reservation_id = old_heatmap.id
+    run.page_analysis_id = analysis.id
+    run.status = SimulationStatus.FAILED
+    await session.flush()
+
+    # Ilk terminal hata tum kalemleri iade eder.
+    await simulation_worker._resolve_launch_group(session, run)
+    assert await chip_ledger.get_chip_balance(session, organization.id) == 300
+
+    # Ilk manuel retry yeni rezervasyonlar acar.
+    await simulation_worker.retry_run(session, organization.id, run.id)
+    first_retry_ids = (
+        run.chip_reservation_id,
+        run.ai_chip_reservation_id,
+        run.heatmap_chip_reservation_id,
+    )
+    assert await chip_ledger.get_chip_balance(session, organization.id) == 125
+    assert run.attempt_count == 0
+
+    # Analyzer tekrar 429 ile terminal olur; run hic claim edilmedigi icin
+    # attempt_count hala sifirdir ve ilk retry rezervasyonlari iade edilir.
+    analysis.status = PageAnalysisStatus.FAILED
+    analysis.attempt_count = 3
+    analysis.error = "analyzer hatasi (429): Too Many Requests"
+    analysis.error_code = "analyzer_rejected"
+    await session.flush()
+    assert await simulation_worker.fail_runs_blocked_by_failed_page_analysis(session) == 1
+    assert run.status == SimulationStatus.FAILED
+    assert run.attempt_count == 0
+    assert await chip_ledger.get_chip_balance(session, organization.id) == 300
+
+    # Ikinci retry, RELEASED ilk-retry kayitlarini tekrar kullanmamalidir.
+    await simulation_worker.retry_run(session, organization.id, run.id)
+    second_retry_ids = (
+        run.chip_reservation_id,
+        run.ai_chip_reservation_id,
+        run.heatmap_chip_reservation_id,
+    )
+    assert second_retry_ids != first_retry_ids
+    for reservation_id in second_retry_ids:
+        reservation = await session.get(chip_ledger.ChipReservation, reservation_id)
+        assert reservation is not None
+        assert reservation.status == ChipReservationStatus.RESERVED
+    assert await chip_ledger.get_chip_balance(session, organization.id) == 125
+
+    # Baseline ve iki AI kalemi basarili oldugunda her biri tam bir kez
+    # tuketilir; bakiye ikinci kez dusmez ve iade de edilmez.
+    run.status = SimulationStatus.SUCCEEDED
+    await session.flush()
+    await simulation_worker._resolve_launch_group(session, run)
+    await chip_ledger.consume_reservation(
+        session, organization.id, run.ai_chip_reservation_id, "AI report succeeded"
+    )
+    await chip_ledger.consume_reservation(
+        session, organization.id, run.heatmap_chip_reservation_id, "AI heatmap succeeded"
+    )
+    for reservation_id in second_retry_ids:
+        reservation = await session.get(chip_ledger.ChipReservation, reservation_id)
+        assert reservation is not None
+        assert reservation.status == ChipReservationStatus.CONSUMED
+    assert await chip_ledger.get_chip_balance(session, organization.id) == 125
+
+
 async def test_retry_on_non_failed_run_is_rejected(session: AsyncSession, organization: Organization):
     run = await _make_queued_run(session, organization)
     with pytest.raises(InvalidSimulationStateError):
