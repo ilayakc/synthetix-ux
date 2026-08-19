@@ -1,5 +1,6 @@
 import hmac
 import logging
+import uuid
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -71,6 +72,21 @@ async def analyze(
                 else exc.reason
             ),
         ) from exc
+    except Exception as exc:  # noqa: BLE001 - son care: beklenmeyen hata 500+traceback SIZDIRMAZ
+        # Beklenmeyen calisma zamani hatasi (ör. Playwright/driver dahili hatasi,
+        # bellek baskisi). Correlation ID ile SUNUCU tarafinda loglanir; istemciye
+        # yalnizca genel, GECICI (yeniden-denenebilir) bir 502 doner - ham
+        # traceback/PII/URL ASLA yansitilmaz (bkz. gorev talimati F).
+        correlation_id = uuid.uuid4().hex
+        logger.exception("analiz beklenmeyen hatayla basarisiz (correlation_id=%s)", correlation_id)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "analyzer_internal_error",
+                "message": "Analiz beklenmeyen bir hatayla tamamlanamadi",
+                "correlation_id": correlation_id,
+            },
+        ) from exc
 
     return snapshot
 
@@ -114,6 +130,19 @@ async def analyze_device_network_endpoint(
                 if exc.code != "analysis_failed"
                 else exc.reason
             ),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - son care: beklenmeyen hata 500+traceback SIZDIRMAZ
+        correlation_id = uuid.uuid4().hex
+        logger.exception(
+            "ag/cihaz analizi beklenmeyen hatayla basarisiz (correlation_id=%s)", correlation_id
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "analyzer_internal_error",
+                "message": "Analiz beklenmeyen bir hatayla tamamlanamadi",
+                "correlation_id": correlation_id,
+            },
         ) from exc
 
     return response

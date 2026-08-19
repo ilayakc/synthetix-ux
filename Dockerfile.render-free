@@ -42,7 +42,19 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PORT=10000
+    PORT=10000 \
+    # --- glibc malloc bellek sinirlama (512 MB Render ucretsiz butcesi) ---
+    # Konteyner, host'un TUM CPU sayisini gorur (ör. 32). glibc malloc
+    # varsayilan olarak CPU basina ~8 arena (64 MB'a kadar) acar; her Python
+    # sureci COK is parcacikli oldugu icin (asyncio + SQLAlchemy threadpool +
+    # httpx + playwright) RSS gereksiz yere buyur. Uc Python surecinde birden
+    # (api + worker + analyzer) bu, Chromium acilmadan ONCE bile 512 MB'a
+    # yaklastiran ana etkendir. Arena sayisini 2'ye sabitlemek ve serbest
+    # birakilan bellegi OS'e agresifce iade etmek (TRIM) en yuksek degerli,
+    # en guvenli tasarruftur - uygulama davranisini DEGISTIRMEZ. Tum alt
+    # surecler bu ENV'i miras alir (bkz. app.render_free_launcher).
+    MALLOC_ARENA_MAX=2 \
+    MALLOC_TRIM_THRESHOLD_=131072
 # Not: taban imaj Chromium'u /ms-playwright altina kurar ve
 # PLAYWRIGHT_BROWSERS_PATH'i zaten ayarlar; analyzer subprocess'i (ayri cwd)
 # ayni ortam degiskeniyle browser'i guvenilir sekilde bulur.

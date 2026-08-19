@@ -52,8 +52,69 @@ from app.url_safety import UnsafeUrlError, is_blocked_ip, resolve_host_ips, vali
 logger = logging.getLogger("analyzer.browser")
 
 _semaphore = asyncio.Semaphore(settings.max_concurrent_analyses)
+
+
+def _chromium_launch_args(host_rule: str) -> list[str]:
+    """Render ucretsiz (512 MB) container'i icin bellek-muhafazakar Chromium bayraklari.
+
+    Yalnizca PASIF analizi (navigasyon + screenshot + DOM okuma) etkilemeyen,
+    iyi bilinen konteyner/headless bayraklari eklenir - islevi bozan hicbir
+    deneysel bayrak YOKTUR:
+
+    - `--host-resolver-rules`: SSRF pinleme (bkz. modul dokstring'i) - islevsel.
+    - `--no-sandbox` / `--disable-dev-shm-usage` / `--disable-gpu`: konteyner
+      zorunlulugu (root, kucuk /dev/shm, GPU yok).
+    - `--disable-features=site-per-process,...`: iframe basina AYRI renderer
+      surecini kapatir (iframe-yogun sayfalarda en buyuk RSS tasarrufu; tum
+      cerceveler tek renderer'da). Ceviri/otomatik-doldurma/optimizasyon-ipuclari
+      gibi analiz disi alt sistemler de kapatilir.
+    - `--js-flags=--max-old-space-size=256`: V8 eski-nesil yiginini sinirla.
+    - kalan bayraklar: arka plan zamanlayici/ag/senkron alt sistemlerini kapatir
+      (bellek + CPU tasarrufu; gorsel ciktiyi etkilemez).
+
+    NOT: `--single-process`/`--no-zygote` KASITLI olarak eklenmedi - en cok
+    bellek tasarrufunu saglasalar da agir (iframe/JS-yogun) sayfalarda "Target
+    crashed" kararsizligina yol acabilirler.
+    """
+
+    return [
+        f"--host-resolver-rules={host_rule}",
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-features=site-per-process,IsolateOrigins,Translate,AutofillServerCommunication,OptimizationHints,MediaRouter",
+        "--js-flags=--max-old-space-size=256",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-sync",
+        "--disable-default-apps",
+        "--disable-component-update",
+        "--metrics-recording-only",
+        "--mute-audio",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--hide-scrollbars",
+    ]
+
+
+async def _safe_close_browser(browser) -> None:
+    """Browser'i kapatir; kapanis sirasindaki hatalar (zaten cokmus/kapanmis
+    hedef) asil analiz hatasini MASKELEMEMELIDIR - yalnizca loglanir."""
+
+    try:
+        await browser.close()
+    except Exception as exc:  # noqa: BLE001 - cleanup hatasi bastirilir
+        logger.warning("browser.close() cleanup sirasinda hata (yok sayildi): %s", exc)
+
+
 EMPTY_PAGE_SNAPSHOT_CODE = "empty_page_snapshot"
 RESPONSE_TOO_LARGE_CODE = "response_too_large"
+# Chromium'un analiz sirasinda cokmesi/hedefin kapanmasi (cogunlukla bellek
+# baskisi altinda) - GECICI kabul edilir (backend 502'yi yeniden dener).
+BROWSER_CRASHED_CODE = "browser_crashed"
 EMPTY_PAGE_SNAPSHOT_MESSAGE = (
     "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
     "Site otomatik tarayicilara bos icerik donduruyor olabilir."
@@ -955,12 +1016,7 @@ async def analyze_device_network(url: str, profile_keys: list[str]) -> DeviceNet
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=True,
-                args=[
-                    f"--host-resolver-rules={host_rule}",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ],
+                args=_chromium_launch_args(host_rule),
             )
             try:
                 for profile_key in profile_keys:
@@ -970,7 +1026,7 @@ async def analyze_device_network(url: str, profile_keys: list[str]) -> DeviceNet
                         warnings.append(f"Profil basarisiz ({profile_key}): {result.error}")
                     results.append(result)
             finally:
-                await browser.close()
+                await _safe_close_browser(browser)
 
     failed_count = sum(1 for r in results if not r.succeeded)
     error_rate = round(failed_count / len(results), 4) if results else 0.0
@@ -999,17 +1055,27 @@ async def analyze_url(url: str) -> PageFeatureSnapshotV1:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=True,
-                args=[
-                    f"--host-resolver-rules={host_rule}",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ],
+                args=_chromium_launch_args(host_rule),
             )
             try:
                 return await _run_analysis(browser, validated)
+            except (AnalysisError, UnsafeUrlError):
+                raise
+            except PlaywrightTimeoutError as exc:
+                raise AnalysisError(
+                    f"Sayfa zaman asimina ugradi ({settings.navigation_timeout_seconds}s)"
+                ) from exc
+            except PlaywrightError as exc:
+                # Renderer/hedef cokmesi (cogunlukla bellek baskisi) - GECICI:
+                # ham istisna/traceback disariya sizmaz, typed & yeniden-denenebilir
+                # bir hataya cevrilir (backend 502 -> analyzer_unavailable).
+                logger.warning("tarayici analiz sirasinda beklenmedik sekilde kapandi: %s", exc)
+                raise AnalysisError(
+                    "Tarayici analiz sirasinda beklenmedik sekilde kapandi",
+                    code=BROWSER_CRASHED_CODE,
+                ) from exc
             finally:
-                await browser.close()
+                await _safe_close_browser(browser)
 
 
 __all__ = ["AnalysisError", "analyze_url"]
