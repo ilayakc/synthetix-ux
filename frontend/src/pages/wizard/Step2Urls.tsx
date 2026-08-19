@@ -12,11 +12,11 @@ const LEGACY_AI_DRAFT_WARNING =
 // verebilir (kullanılan hak iade edilir). Kullanıcıyı test başlatmadan önce
 // desteklenen kapsam hakkında bilgilendirir (bkz. docs/render-free.md).
 const URL_SCOPE_NOTICE =
-  "Ücretsiz demo, tek bir sayfayı hafif kaynak kullanımıyla analiz eder. " +
-  "Kurumsal/tanıtım ve orta ağırlıktaki siteler güvenilir çalışır. Çok ağır " +
-  "sayfalar (çok sayıda büyük görsel/üçüncü taraf içerik barındıran bazı " +
-  "e-ticaret sayfaları) güvenli bellek sınırı nedeniyle analizi tamamlayamayıp " +
-  "kontrollü bir hata verebilir; bu durumda kullanılan hak otomatik iade edilir.";
+  "Bu sürüm standart web sayfaları için optimize edilmiştir. Video/sosyal medya, " +
+  "harita, büyük pazar yeri ve doğrudan dosya bağlantıları başlatılmadan engellenir. " +
+  "Kurumsal, tanıtım veya belirli bir ürün alt sayfası kullanın. Dinamik olarak çok " +
+  "ağır olduğu ancak analiz sırasında anlaşılabilen bir sayfa güvenli biçimde " +
+  "durdurulursa Chip harcanmaz.";
 
 export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: StepProps) {
   const isAbComparison = payload.test_type === "ab_comparison";

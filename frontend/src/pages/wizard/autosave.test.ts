@@ -33,4 +33,16 @@ describe("sanitizeDraftForAutosave", () => {
     expect(result.name).toBe("Test");
     expect(result.persona_count).toBe(1000);
   });
+
+  it("desteklenmeyen ağır URL'leri autosave PATCH'inden çıkarır", () => {
+    const result = sanitizeDraftForAutosave({
+      current_url: "https://www.youtube.com/watch?v=abc",
+      new_url: "https://www.google.com/maps/place/example",
+      name: "Demo testi",
+    });
+
+    expect(result.current_url).toBeUndefined();
+    expect(result.new_url).toBeUndefined();
+    expect(result.name).toBe("Demo testi");
+  });
 });

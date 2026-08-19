@@ -1,5 +1,6 @@
 import { type WizardDraftPayload } from "../../api/client";
 import { targetTaskRejectionReason } from "./targetTaskValidation";
+import { analysisUrlScopeRejectionReason } from "./urlScopeValidation";
 
 export function isValidHttpUrl(value: string): boolean {
   try {
@@ -24,11 +25,18 @@ export function sanitizeDraftForAutosave(payload: WizardDraftPayload): WizardDra
   }
   if (
     next.current_url !== undefined &&
-    (!next.current_url.trim() || !isValidHttpUrl(next.current_url))
+    (!next.current_url.trim() ||
+      !isValidHttpUrl(next.current_url) ||
+      analysisUrlScopeRejectionReason(next.current_url) !== null)
   ) {
     delete next.current_url;
   }
-  if (next.new_url !== undefined && (!next.new_url.trim() || !isValidHttpUrl(next.new_url))) {
+  if (
+    next.new_url !== undefined &&
+    (!next.new_url.trim() ||
+      !isValidHttpUrl(next.new_url) ||
+      analysisUrlScopeRejectionReason(next.new_url) !== null)
+  ) {
     delete next.new_url;
   }
   return next;

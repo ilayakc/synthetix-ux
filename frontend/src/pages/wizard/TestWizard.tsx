@@ -23,6 +23,7 @@ import {
 import { isValidHttpUrl, sanitizeDraftForAutosave } from "./autosave";
 import { incompatibleSelectedModuleKeys } from "./moduleCompatibility";
 import { targetTaskRejectionReason } from "./targetTaskValidation";
+import { analysisUrlScopeRejectionReason } from "./urlScopeValidation";
 import Step1Details from "./Step1Details";
 import Step2Urls from "./Step2Urls";
 import Step3Personas from "./Step3Personas";
@@ -65,6 +66,9 @@ function validateStep(step: number, payload: WizardDraftPayload): Record<string,
       errors.current_url = "URL gereklidir.";
     } else if (!isValidHttpUrl(payload.current_url)) {
       errors.current_url = "Geçerli bir http(s) URL girin.";
+    } else {
+      const scopeError = analysisUrlScopeRejectionReason(payload.current_url);
+      if (scopeError) errors.current_url = scopeError;
     }
     if (payload.test_type === "ab_comparison") {
       const isNewVisualSource =
@@ -77,6 +81,9 @@ function validateStep(step: number, payload: WizardDraftPayload): Record<string,
         errors.new_url = "Yeni tasarım URL'si gereklidir.";
       } else if (!isValidHttpUrl(payload.new_url)) {
         errors.new_url = "Geçerli bir http(s) URL girin.";
+      } else {
+        const scopeError = analysisUrlScopeRejectionReason(payload.new_url);
+        if (scopeError) errors.new_url = scopeError;
       }
     }
   }
@@ -485,6 +492,15 @@ export default function TestWizard() {
           }));
           setBanner("Hedef görevi düzeltip testi yeniden başlatın.");
           void goToStep(1);
+          return;
+        }
+        if (detail?.code === "UNSUPPORTED_ANALYSIS_URL") {
+          setFieldErrors((current) => ({
+            ...current,
+            [detail.field ?? "current_url"]: err.message,
+          }));
+          setBanner("URL'yi değiştirip testi yeniden başlatın. Chip harcanmadı.");
+          void goToStep(2);
           return;
         }
         setBanner(err.message);

@@ -11,11 +11,11 @@ from app.db import get_session
 from app.dependencies import Principal, get_organization_id, require_roles
 from app.models.analytics import AnalyticsEventType
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
+from app.services import analysis_url_scope, url_safety
 from app.services import analytics as analytics_service
 from app.services import settings as settings_service
 from app.services import target_task as target_task_service
 from app.services import test_wizard as wizard_service
-from app.services import url_safety
 from app.services.exceptions import InsufficientChipBalanceError, UnauthorizedPageAnalysisError
 
 router = APIRouter(prefix="/api/tests/drafts", tags=["test-wizard"])
@@ -34,6 +34,15 @@ def _invalid_target_task_http_exc(
     gosterir (genel "bir hata olustu" mesajina indirgemez, bkz.
     frontend/src/api/client.ts)."""
 
+    return HTTPException(
+        status_code=422,
+        detail={"code": exc.code, "detail": exc.message, "field": exc.field},
+    )
+
+
+def _unsupported_analysis_url_http_exc(
+    exc: analysis_url_scope.UnsupportedAnalysisUrlError,
+) -> HTTPException:
     return HTTPException(
         status_code=422,
         detail={"code": exc.code, "detail": exc.message, "field": exc.field},
@@ -181,6 +190,8 @@ async def patch_draft(
         wizard_service.validate_source_type_for_test_type(merged_payload)
     except target_task_service.InvalidTargetTaskError as exc:
         raise _invalid_target_task_http_exc(exc) from exc
+    except analysis_url_scope.UnsupportedAnalysisUrlError as exc:
+        raise _unsupported_analysis_url_http_exc(exc) from exc
     except wizard_service.DraftValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -309,6 +320,8 @@ async def launch_draft(
         # `launch_draft` bu kontrolu TUM yan etkilerden once yapar - hicbir Chip
         # rezerve/harcanmaz, hicbir SimulationRun olusmaz.
         raise _invalid_target_task_http_exc(exc) from exc
+    except analysis_url_scope.UnsupportedAnalysisUrlError as exc:
+        raise _unsupported_analysis_url_http_exc(exc) from exc
     except wizard_service.DraftValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except InsufficientChipBalanceError as exc:

@@ -145,6 +145,25 @@ async def _force_draft_target_task(draft_id: str, value: str) -> None:
         await engine.dispose()
 
 
+async def _force_draft_url(draft_id: str, value: str) -> None:
+    """Eski bir taslakta desteklenmeyen URL bulunması durumunu simüle eder."""
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.models.test_wizard import TestWizardDraft
+
+    engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            draft = await session.get(TestWizardDraft, uuid.UUID(draft_id))
+            assert draft is not None
+            draft.payload = {**draft.payload, "current_url": value}
+            flag_modified(draft, "payload")
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
 async def _create_report_for_run(organization_id: str, run_id: str) -> None:
     """Proje silme korumasini izole bicimde test etmek icin tamamlanmis rapor izi ekler."""
 
@@ -431,6 +450,67 @@ def test_wizard_invalid_url_syntax_is_rejected(client):
     assert response.status_code == 400
 
 
+def test_wizard_unsupported_heavy_url_is_rejected_before_it_is_saved(client):
+    _register(client)
+    draft = _create_draft(client)
+
+    response = client.patch(
+        f"/api/tests/drafts/{draft['id']}",
+        json={"payload": {"current_url": "https://www.youtube.com/watch?v=abc"}},
+        headers=_csrf_headers(client),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "UNSUPPORTED_ANALYSIS_URL",
+        "detail": (
+            "Bu URL ücretsiz demo kapasitesinin dışında. Video/sosyal medya, harita, "
+            "büyük pazar yeri ve doğrudan dosya bağlantıları analiz edilemez. Daha hafif "
+            "bir kurumsal, tanıtım veya ürün alt sayfası URL'si girin; test başlatılmadı "
+            "ve Chip harcanmadı."
+        ),
+        "field": "current_url",
+    }
+
+    persisted = client.get(f"/api/tests/drafts/{draft['id']}")
+    assert persisted.status_code == 200
+    assert "current_url" not in persisted.json()["payload"]
+
+
+def test_wizard_launch_rejects_legacy_heavy_url_without_spending_chips(client):
+    """Eski taslaklar da launch sırasında ve tüm mali yan etkilerden önce engellenir."""
+
+    import anyio
+
+    session = _register(client)
+    project = _create_project(client)
+    draft = _create_draft(client)
+    payload = _basic_ux_payload(project["id"], persona_count=1500)
+    payload["authorization_confirmed"] = True
+    _patch_draft(client, draft["id"], payload)
+
+    anyio.run(_credit_chips, session["organization_id"], 5000)
+    balance_before = anyio.run(_org_chip_balance, session["organization_id"])
+    anyio.run(_force_draft_url, draft["id"], "https://www.youtube.com/watch?v=abc")
+
+    launch = client.post(f"/api/tests/drafts/{draft['id']}/launch", headers=_csrf_headers(client))
+
+    assert launch.status_code == 422, launch.text
+    assert launch.json()["detail"] == {
+        "code": "UNSUPPORTED_ANALYSIS_URL",
+        "detail": (
+            "Bu URL ücretsiz demo kapasitesinin dışında. Video/sosyal medya, harita, "
+            "büyük pazar yeri ve doğrudan dosya bağlantıları analiz edilemez. Daha hafif "
+            "bir kurumsal, tanıtım veya ürün alt sayfası URL'si girin; test başlatılmadı "
+            "ve Chip harcanmadı."
+        ),
+        "field": "current_url",
+    }
+    assert anyio.run(_org_chip_balance, session["organization_id"]) == balance_before
+    assert client.get(f"/api/projects/{project['id']}").json()["test_count"] == 0
+    assert client.get(f"/api/tests/drafts/{draft['id']}").json()["status"] == "draft"
+
+
 def test_wizard_persona_count_below_minimum_is_rejected(client):
     _register(client)
     draft = _create_draft(client)
@@ -523,9 +603,7 @@ def test_wizard_patch_accepts_valid_short_turkish_target_task(client, good_value
     project = _create_project(client)
     draft = _create_draft(client)
 
-    updated = _patch_draft(
-        client, draft["id"], {"project_id": project["id"], "target_task": good_value}
-    )
+    updated = _patch_draft(client, draft["id"], {"project_id": project["id"], "target_task": good_value})
     assert updated["payload"]["target_task"] == good_value
 
 

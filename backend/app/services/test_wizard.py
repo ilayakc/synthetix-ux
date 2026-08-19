@@ -24,7 +24,7 @@ from app.models.personas import Persona
 from app.models.simulations import SimulationRun, SimulationStatus
 from app.models.test_wizard import TestWizardDraft, TestWizardDraftStatus
 from app.models.tests import TestDefinition, TestVariant
-from app.services import chip_ledger, module_catalog, persona_presets, personas, quotes
+from app.services import analysis_url_scope, chip_ledger, module_catalog, persona_presets, personas, quotes
 from app.services import design_assets as design_assets_service
 from app.services import design_generation as design_generation_service
 from app.services import entitlements as entitlements_service
@@ -309,6 +309,7 @@ def validate_patch_fields(patch: dict) -> None:
     for field in ("current_url", "new_url"):
         if field in patch and patch[field] is not None:
             _validate_url_syntax(patch[field], field)
+            analysis_url_scope.validate_analysis_url(patch[field], field=field)
 
     if "current_source_type" in patch and patch["current_source_type"] not in SOURCE_TYPES:
         raise DraftValidationError(f"Gecersiz current_source_type: {patch['current_source_type']}")
@@ -1065,6 +1066,14 @@ async def launch_draft(
         raise DraftValidationError(
             f"Sihirbaz tamamlanmadan baslatilamaz, eksik/gecersiz alan(lar): {', '.join(missing)}"
         )
+
+    if effective_source_type(draft.payload) == SOURCE_TYPE_URL:
+        analysis_url_scope.validate_analysis_url(draft.payload.get("current_url"), field="current_url")
+    if (
+        draft.payload.get("test_type") == AB_COMPARISON
+        and effective_new_source_type(draft.payload) == SOURCE_TYPE_URL
+    ):
+        analysis_url_scope.validate_analysis_url(draft.payload.get("new_url"), field="new_url")
 
     # Kaynak-modul uyumluluk dogrulamasi (ör. `network_device_test` +
     # screenshot/AI kaynagi) HER SEYDEN ONCE, hicbir side effect
