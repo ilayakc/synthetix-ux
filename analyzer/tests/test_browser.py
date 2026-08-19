@@ -213,3 +213,93 @@ async def test_empty_page_snapshot_is_checked_bounded_times_before_typed_failure
     assert exc_info.value.code == browser.EMPTY_PAGE_SNAPSHOT_CODE
     assert page.evaluate_count == 3
     assert page.wait_count == 2
+
+
+# --- Hafif ("lite") analiz modu ---------------------------------------------
+
+
+def test_blocked_resource_types_lite_includes_font(monkeypatch):
+    monkeypatch.setattr(browser.settings, "lite_mode", True)
+    monkeypatch.setattr(browser.settings, "lite_blocked_resource_types", ("media", "font"))
+    assert browser._blocked_resource_types() == ("media", "font")
+
+
+def test_blocked_resource_types_full_only_media(monkeypatch):
+    monkeypatch.setattr(browser.settings, "lite_mode", False)
+    assert browser._blocked_resource_types() == ("media",)
+
+
+@pytest.mark.asyncio
+async def test_route_handler_blocks_font_in_lite_mode(monkeypatch):
+    monkeypatch.setattr(browser.settings, "lite_mode", True)
+    monkeypatch.setattr(browser.settings, "lite_blocked_resource_types", ("media", "font"))
+    blocked: dict[str, int] = {}
+    handler = browser._make_route_handler("example.com", {"example.com": True}, {"count": 0}, blocked)
+    route = _Route(_Request(url="https://example.com/font.woff2", resource_type="font"))
+
+    await handler(route)
+
+    assert route.aborted is True
+    assert blocked.get("font") == 1
+
+
+@pytest.mark.asyncio
+async def test_route_handler_allows_document_and_css_in_lite_mode(monkeypatch):
+    monkeypatch.setattr(browser.settings, "lite_mode", True)
+    monkeypatch.setattr(browser.settings, "lite_blocked_resource_types", ("media", "font"))
+    handler = browser._make_route_handler("example.com", {"example.com": True}, {"count": 0}, {})
+    for resource_type in ("document", "stylesheet", "script", "image"):
+        route = _Route(_Request(url="https://example.com/x", resource_type=resource_type))
+        await handler(route)
+        assert route.continued is True, f"{resource_type} engellenmemeli"
+        assert route.aborted is False
+
+
+def test_memory_usage_fraction(monkeypatch):
+    monkeypatch.setattr(browser.settings, "memory_guard_enabled", True)
+    monkeypatch.setattr(browser, "_effective_limit_bytes", lambda: 512 * 1024 * 1024)
+    monkeypatch.setattr(browser, "_cgroup_working_set_bytes", lambda: 384 * 1024 * 1024)
+    assert browser._memory_usage_fraction() == pytest.approx(0.75)
+
+    monkeypatch.setattr(browser.settings, "memory_guard_enabled", False)
+    assert browser._memory_usage_fraction() is None
+
+
+def test_build_snapshot_includes_analysis_mode_metadata():
+    features = {
+        "title": "Test",
+        "headings": [],
+        "text_stats": {
+            "word_count": 3,
+            "avg_sentence_word_count": 3.0,
+            "visible_text_char_count": 10,
+            "heading_count": 0,
+        },
+        "controls": {"link_count": 1, "button_count": 1, "form_count": 0, "form_field_count": 0},
+        "element_boxes": [],
+        "layout_regions": {},
+        "performance": {
+            "dom_content_loaded_ms": 10.0,
+            "load_event_ms": 20.0,
+            "first_contentful_paint_ms": 15.0,
+            "total_navigation_ms": 20.0,
+        },
+        "contrast_candidates": [],
+    }
+    snapshot = browser._build_snapshot(
+        url="https://example.com",
+        final_url="https://example.com",
+        redirect_count=0,
+        features=features,
+        screenshot_bytes=b"\x89PNG\r\n",
+        axe_response={"scan_status": "completed", "violations": [], "passes": [], "incomplete": []},
+        warnings=[],
+        screenshot_width=1366,
+        screenshot_height=900,
+        analysis_mode="lite",
+        analysis_limited=True,
+    )
+    assert snapshot.analysis_mode == "lite"
+    assert snapshot.analysis_limited is True
+    # Ekran goruntusu yuksekligi viewport ile uyumlu (tam-sayfa degil).
+    assert snapshot.screenshot.height == 900

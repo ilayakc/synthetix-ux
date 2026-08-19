@@ -288,6 +288,21 @@ def _enforce_memory_admission() -> None:
         raise AnalysisError(_MEMORY_PRESSURE_MESSAGE, code=ANALYZER_MEMORY_PRESSURE_CODE)
 
 
+def _memory_usage_fraction() -> float | None:
+    """Container working-set bellegin, etkin limite orani ([0,1]). Guard kapali
+    veya cgroup okunamiyorsa `None`."""
+
+    if not settings.memory_guard_enabled:
+        return None
+    working_set = _cgroup_working_set_bytes()
+    if working_set is None:
+        return None
+    limit = _effective_limit_bytes()
+    if limit <= 0:
+        return None
+    return working_set / limit
+
+
 async def _memory_watchdog(browser, state: dict[str, bool]) -> None:
     """Analiz sirasinda container working-set bellegini izler; esik asilirsa
     browser'i kapatir VE artik chromium süreçlerini kesin biçimde reap eder."""
@@ -416,12 +431,23 @@ def _oversized_response_details(response, page) -> tuple[str, str, str, int] | N
     return action, response_host, resource_type, length
 
 
+def _blocked_resource_types() -> tuple[str, ...]:
+    """Bu istek icin engellenecek kaynak turleri. Hafif modda medyaya EK olarak
+    font (ve config'te tanimli digerleri) engellenir; tam modda yalnizca medya."""
+
+    if settings.lite_mode:
+        return tuple(settings.lite_blocked_resource_types)
+    return ("media",)
+
+
 def _make_route_handler(
     pinned_hostname: str,
     validated_hosts: dict[str, bool],
     redirect_state: dict[str, int],
     blocked_resource_state: dict[str, int] | None = None,
 ):
+    blocked_types = _blocked_resource_types()
+
     async def handler(route: Route) -> None:
         request = route.request
         url = request.url
@@ -432,13 +458,17 @@ def _make_route_handler(
             await route.abort()
             return
 
-        # Video/ses kaynaklari DOM, erisilebilirlik ve tiklanabilir alan
-        # analizine katkida bulunmaz. Buyuk medya dosyalarinin tek basina
-        # tum analizi dusurmesini ve gereksiz bellek/ag tuketimini engelle.
-        if request.resource_type == "media":
+        # Medya/font gibi kaynaklar DOM, erisilebilirlik ve tiklanabilir alan
+        # analizine katkida bulunmaz. Bunlarin tek basina tum analizi dusurmesini
+        # ve (ozellikle hafif modda) gereksiz bellek/ag tuketimini engelle. Ana
+        # belge, CSS ve gerekli JS ASLA engellenmez (yalnizca bu kaynak turleri).
+        if request.resource_type in blocked_types:
             if blocked_resource_state is not None:
-                blocked_resource_state["media"] = blocked_resource_state.get("media", 0) + 1
-            logger.info("pasif analiz icin medya kaynagi engellendi: host=%s", hostname)
+                key = request.resource_type
+                blocked_resource_state[key] = blocked_resource_state.get(key, 0) + 1
+            logger.info(
+                "pasif analiz icin kaynak engellendi: host=%s type=%s", hostname, request.resource_type
+            )
             await route.abort()
             return
 
@@ -602,7 +632,13 @@ _FEATURE_EXTRACTION_JS = """
     const centerX = rect.x + rect.width / 2;
     const centerBonus = Math.max(0, 1 - Math.abs(centerX - window.innerWidth / 2) / (window.innerWidth / 2));
     const visibleStartBonus = rect.y >= 0 && rect.y < window.innerHeight * 0.8 ? 0.5 : 0;
-    return kindWeight + sizeBonus + centerBonus * 0.35 + visibleStartBonus;
+    // Ikon-only semantik kontroller (sepet/hesap/arama/menu...) cogunlukla
+    // navigasyonda kucuk ve dusuk oncelikli gorunur; yogun bir sayfada aday
+    // slice'inin (ilk N) DISINDA kalip rapor katmanina hic ulasmayabilirler.
+    // Gorevle eslesebilmeleri icin (ör. "sepeti goruntule") belirgin bir oncelik
+    // takviyesi verilir - boylece gercek sepet ikonu adaylarda korunur.
+    const semanticBonus = controlSemantic(el) !== null ? 4 : 0;
+    return kindWeight + sizeBonus + centerBonus * 0.35 + visibleStartBonus + semanticBonus;
   }
 
   function relativeLuminance(r, g, b) {
@@ -815,6 +851,8 @@ def _build_snapshot(
     warnings: list[str],
     screenshot_width: int,
     screenshot_height: int,
+    analysis_mode: str = "full",
+    analysis_limited: bool = False,
 ) -> PageFeatureSnapshotV1:
     accessibility = {
         "scan_status": axe_response.get("scan_status", "completed"),
@@ -849,6 +887,8 @@ def _build_snapshot(
             "height": screenshot_height,
             "base64_data": base64.b64encode(screenshot_bytes).decode("ascii"),
         },
+        "analysis_mode": analysis_mode,
+        "analysis_limited": analysis_limited,
         "warnings": warnings,
     }
     return PageFeatureSnapshotV1.model_validate(payload)
@@ -861,6 +901,23 @@ async def _run_accessibility_precheck(page, warnings: list[str]) -> dict:
     sinirli ortamlarda uzun surebilir. Tarama tek basina tum URL snapshot'ini
     dusurmez; eksik sonuc `scan_status=skipped` ve uyariyla acikca belirtilir.
     """
+
+    # Hafif modda: axe baslatilmadan ONCE bellek trip esigine yaklasmissa taramayi
+    # kontrollu bicimde atla - agir DOM'da axe'in son bellek artisiyla watchdog'u
+    # tetikleyip TUM analizi (screenshot dahil) dusurmesini onler.
+    if settings.lite_mode:
+        usage = _memory_usage_fraction()
+        if usage is not None and usage >= settings.lite_axe_skip_pct:
+            warnings.append(
+                "Erisilebilirlik on kontrolu bellek korumasi nedeniyle atlandi; "
+                "temel sayfa analizi mevcut verilerle tamamlandi"
+            )
+            logger.warning(
+                "axe-core on kontrolu atlandi (bellek %.0f%% >= %.0f%% esigi)",
+                usage * 100,
+                settings.lite_axe_skip_pct * 100,
+            )
+            return {"scan_status": "skipped", "violations": [], "passes": [], "incomplete": []}
 
     axe = Axe()
     try:
@@ -974,9 +1031,11 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
 
     if redirect_state["count"] > 0:
         warnings.append(f"{redirect_state['count']} yonlendirme takip edildi")
-    if blocked_resources.get("media", 0) > 0:
+    blocked_total = sum(blocked_resources.values())
+    if blocked_total > 0:
+        kinds = ", ".join(sorted(blocked_resources))
         warnings.append(
-            f"{blocked_resources['media']} medya kaynagi pasif analiz icin yuklenmeden atlandi"
+            f"{blocked_total} kaynak ({kinds}) pasif analiz icin yuklenmeden atlandi"
         )
     if oversized_subresources:
         total = sum(oversized_subresources.values())
@@ -985,43 +1044,52 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
             f"{total} buyuk alt kaynak ({kinds}) boyut sinirini asti; temel sayfa analizi korundu"
         )
 
-    # SPA ve tembel yuklenen bolumlerin yerlesmesi icin sinirli bir bekleme
-    # ve pasif kaydirma yapilir; tiklama/form gonderme yapilmaz.
+    # SPA ve tembel yuklenen bolumlerin yerlesmesi icin sinirli bir bekleme.
     try:
         await page.wait_for_load_state("networkidle", timeout=5000)
     except PlaywrightTimeoutError:
         warnings.append("Ag istekleri 5 saniyede sakinlesmedi; mevcut icerikle devam edildi")
 
-    await page.evaluate(
-        """async ({step, limit, settle}) => {
-          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-          let previousHeight = 0;
-          for (let y = 0; y < limit; y += step) {
-            window.scrollTo(0, y);
-            await sleep(settle);
-            const height = Math.max(document.body?.scrollHeight || 0, document.documentElement.scrollHeight || 0);
-            if (height === previousHeight && y + step >= height) break;
-            previousHeight = height;
-          }
-          window.scrollTo(0, 0);
-          await sleep(settle);
-        }""",
-        {
-            "step": settings.viewport_height,
-            "limit": settings.screenshot_max_height,
-            "settle": settings.dynamic_content_settle_ms,
-        },
-    )
-    document_height = await page.evaluate(
-        "Math.max(document.body?.scrollHeight || 0, document.documentElement.scrollHeight || 0)"
-    )
-    capture_height = min(
-        max(settings.viewport_height, int(document_height)), settings.screenshot_max_height
-    )
-    if int(document_height) > capture_height:
-        warnings.append(
-            f"Sayfa {int(document_height)} px; ekran goruntusu guvenlik siniri nedeniyle {capture_height} px ile sinirlandi"
+    if settings.lite_mode:
+        # HAFIF MOD: tam-sayfa lazy-scroll YAPILMAZ. Sabit bir kisa yerlesme
+        # beklemesi (scroll=0) yeterlidir; ekran goruntusu ve element_boxes AYNI
+        # viewport + AYNI scroll konumunda (0,0) uretilir. Boylece 4000 px'e kadar
+        # tam-sayfa PNG kodlama + tum lazy icerik yukleme bellek zirvesi (gigbi'de
+        # ~425 MB -> watchdog trip) olusmaz. capture_height = viewport yuksekligi.
+        await page.wait_for_timeout(max(0, settings.dynamic_content_settle_ms))
+        capture_height = settings.viewport_height
+    else:
+        # TAM MOD: pasif kaydirma ile tembel icerigi yakala; tiklama/form yok.
+        await page.evaluate(
+            """async ({step, limit, settle}) => {
+              const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+              let previousHeight = 0;
+              for (let y = 0; y < limit; y += step) {
+                window.scrollTo(0, y);
+                await sleep(settle);
+                const height = Math.max(document.body?.scrollHeight || 0, document.documentElement.scrollHeight || 0);
+                if (height === previousHeight && y + step >= height) break;
+                previousHeight = height;
+              }
+              window.scrollTo(0, 0);
+              await sleep(settle);
+            }""",
+            {
+                "step": settings.viewport_height,
+                "limit": settings.screenshot_max_height,
+                "settle": settings.dynamic_content_settle_ms,
+            },
         )
+        document_height = await page.evaluate(
+            "Math.max(document.body?.scrollHeight || 0, document.documentElement.scrollHeight || 0)"
+        )
+        capture_height = min(
+            max(settings.viewport_height, int(document_height)), settings.screenshot_max_height
+        )
+        if int(document_height) > capture_height:
+            warnings.append(
+                f"Sayfa {int(document_height)} px; ekran goruntusu guvenlik siniri nedeniyle {capture_height} px ile sinirlandi"
+            )
 
     try:
         features = await _extract_features_with_bounded_readiness(page, capture_height)
@@ -1037,6 +1105,12 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
 
     await context.close()
 
+    if settings.lite_mode:
+        warnings.append(
+            "Bu sayfa kaynak kullanimini azaltmak icin hafif analiz modunda incelendi; "
+            "sonuclar gorunur ekran alanini temel alir"
+        )
+
     return _build_snapshot(
         url=validated.url,
         final_url=final_url,
@@ -1047,6 +1121,8 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
         warnings=warnings,
         screenshot_width=settings.viewport_width,
         screenshot_height=capture_height,
+        analysis_mode="lite" if settings.lite_mode else "full",
+        analysis_limited=settings.lite_mode,
     )
 
 

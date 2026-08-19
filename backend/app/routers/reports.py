@@ -257,6 +257,9 @@ class InteractionHeatmapSection(BaseModel):
     summary: str | None = None
     hotspots: list[InteractionHeatmapHotspot] = []
     unmatched_task_warning: str | None = None
+    # Provider bos dondugunde deterministik yedek secim kullanildi mi (bkz.
+    # ai_interaction_heatmap.worker._maybe_deterministic_fallback).
+    fallback_used: bool = False
     # Her zaman dolu, her zaman gorunur kalmasi gereken zorunlu aciklama.
     disclaimer: str = INTERACTION_HEATMAP_DISCLAIMER
     # Sinirli/guvenli hata kodu (yalnizca failed) - ham provider hatasi ASLA sizmaz.
@@ -266,6 +269,11 @@ class InteractionHeatmapSection(BaseModel):
     image_width: int | None = None
     image_height: int | None = None
     coordinates_available: bool = False
+    # Analyzer'in hafif ("lite") modda calisip calismadigini frontend'e tasir;
+    # UI bunu hata gibi DEGIL bilgilendirme olarak gosterir (sonuclar gorunur
+    # ekran alanini temel alir). Geriye uyumlu: eski analiz verilerinde "full".
+    analysis_mode: str | None = None
+    analysis_limited: bool = False
 
 
 class CampaignCtaSection(BaseModel):
@@ -897,11 +905,18 @@ async def _build_interaction_heatmap(
     screenshot_url: str | None = None
     image_width: int | None = None
     image_height: int | None = None
+    analysis_mode: str | None = None
+    analysis_limited = False
     if analysis is not None:
         image_width = analysis.image_width
         image_height = analysis.image_height
         if analysis.screenshot_data is not None:
             screenshot_url = f"/api/reports/{report_id}/heatmap-screenshot"
+        features = analysis.features or {}
+        raw_mode = features.get("analysis_mode")
+        if isinstance(raw_mode, str) and raw_mode:
+            analysis_mode = raw_mode
+        analysis_limited = bool(features.get("analysis_limited"))
 
     hm = (
         await session.execute(
@@ -920,6 +935,8 @@ async def _build_interaction_heatmap(
             screenshot_url=screenshot_url,
             image_width=image_width,
             image_height=image_height,
+            analysis_mode=analysis_mode,
+            analysis_limited=analysis_limited,
         )
 
     if hm.status == InteractionHeatmapStatus.SUCCEEDED and isinstance(hm.result, dict):
@@ -940,11 +957,14 @@ async def _build_interaction_heatmap(
             summary=result.get("summary"),
             hotspots=hotspots,
             unmatched_task_warning=result.get("unmatched_task_warning"),
+            fallback_used=bool(result.get("fallback_used")),
             disclaimer=result.get("disclaimer") or INTERACTION_HEATMAP_DISCLAIMER,
             screenshot_url=screenshot_url,
             image_width=image_width,
             image_height=image_height,
             coordinates_available=bool(hotspots) and screenshot_url is not None,
+            analysis_mode=analysis_mode,
+            analysis_limited=analysis_limited,
         )
 
     status = hm.status.value  # queued | running | failed
@@ -964,6 +984,8 @@ async def _build_interaction_heatmap(
         screenshot_url=screenshot_url,
         image_width=image_width,
         image_height=image_height,
+        analysis_mode=analysis_mode,
+        analysis_limited=analysis_limited,
     )
 
 

@@ -457,3 +457,28 @@ def test_valid_cart_task_matches_cart_candidate_no_strong_match() -> None:
     assert output.hotspots
     assert output.hotspots[0].candidate_id == "candidate-1"
     assert output.hotspots[0].task_relevance in ("direct", "related")
+
+
+@pytest.mark.parametrize(
+    "target_task",
+    [
+        "Sepetteki ürünü görüntüle",
+        "Sepete git",
+        "Sepetimi aç",
+        "Sepeti görüntüle",
+        "Alışveriş çantasını aç",
+    ],
+)
+def test_turkish_cart_phrases_match_cart_candidate_directly(target_task: str) -> None:
+    """Kullanicinin verdigi Turkce sepet gorev ifadeleri, gercek sepet adayiyla
+    (label 'Sepet') DOGRUDAN eslesir - 'no strong match' URETMEZ."""
+
+    candidates = [
+        _candidate("candidate-1", "Sepet", kind="button", role="button", x=0.9, y=0.02, w=0.03, h=0.03),
+        _candidate("candidate-2", "Hakkimizda", kind="navigation_link"),
+    ]
+    output = rank_interaction_hotspots(candidates, target_task=target_task)
+
+    assert output.unmatched_task_warning is None
+    assert output.hotspots and output.hotspots[0].candidate_id == "candidate-1"
+    assert output.hotspots[0].task_relevance == "direct"

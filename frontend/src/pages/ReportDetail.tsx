@@ -1503,6 +1503,13 @@ function AiInteractionHeatmapPanel({
         {normalizeTurkishSystemCopy(section?.disclaimer ?? AI_INTERACTION_HEATMAP_DISCLAIMER)}
       </p>
 
+      {(section?.analysis_limited || section?.analysis_mode === "lite") && (
+        <p className="report-analysis-lite-notice" role="note">
+          Bu sayfa kaynak kullanımını azaltmak için hafif analiz modunda incelendi. Sonuçlar
+          görünür ekran alanını (ilk ekran) temel alır.
+        </p>
+      )}
+
       {state === "not_requested" && (
         <div className="report-heatmap-empty">
           <p>Bu çalışma için AI tıklama tahmini modülü seçilmedi.</p>

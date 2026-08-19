@@ -147,6 +147,11 @@ class InteractionHeatmapResult(BaseModel):
     hotspots: list[ResolvedHotspot]
     unmatched_task_warning: str | None
     disclaimer: str
+    # Provider "guclu eslesme yok" (bos) dondugunde, GERCEK adaylar uzerinde
+    # calisan deterministik siralayici acik bir ust aday buldugunda True olur -
+    # koordinatlar yine GERCEK adaylardan gelir (hayali nokta URETILMEZ). Frontend
+    # bunu "deterministik yedek secim" olarak isaretleyebilir.
+    fallback_used: bool = False
 
 
 __all__ = [

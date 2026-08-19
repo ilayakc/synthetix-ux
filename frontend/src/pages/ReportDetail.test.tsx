@@ -156,6 +156,29 @@ describe("ReportDetail — AI tıklama tahmini", () => {
     expect(document.querySelector(".ai-interaction-hotspot")).not.toBeInTheDocument();
   });
 
+  it("hafif (lite) analiz modunda bilgilendirme gösterir, hata gibi göstermez", async () => {
+    renderReportDetail(
+      baseReport({
+        interaction_heatmap_requested: true,
+        interaction_heatmap: {
+          ...succeededInteractionHeatmap,
+          analysis_mode: "lite",
+          analysis_limited: true,
+        },
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Özet" })).toBeInTheDocument());
+    goToTab("Isı Haritası");
+    const notice = screen.getByText(/hafif analiz modunda incelendi/i);
+    expect(notice).toBeInTheDocument();
+    // Bilgilendirme; hata (alert) DEGIL.
+    expect(notice).toHaveAttribute("role", "note");
+    // Hotspot yine görselde çizilir (lite mod başarılı sonucu bozmaz).
+    expect(
+      screen.getByRole("button", { name: /AI hotspot 1: Hesap oluştur/ }),
+    ).toBeInTheDocument();
+  });
+
   it("AI görünümünde CTA katmanı açılıp kapanır ve kutular ısı üstünde görünür", async () => {
     renderReportDetail(
       baseReport({

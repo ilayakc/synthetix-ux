@@ -38,8 +38,35 @@ class Settings(BaseSettings):
     # acik bir "skipped" durumu + uyariyla raporlanir.
     accessibility_scan_timeout_seconds: int = 20
 
+    # --- Hafif ("lite") analiz modu (Render ucretsiz 512 MB varsayilani) ------
+    # Agir sayfalarda (ör. gigbi) tam-sayfa lazy-scroll + 4000 px'e kadar
+    # ekran goruntusu, anon bellegi watchdog esigine (~425 MB) tasiyip analizi
+    # dusuruyordu. Hafif modda YALNIZCA sabit viewport (viewport_width x
+    # viewport_height) yakalanir: tam-sayfa scroll YAPILMAZ, ekran goruntusu
+    # viewport yuksekligiyle sinirlidir, font/medya kaynaklari engellenir ve
+    # bellek esigine yaklasilirsa axe taramasi kontrollu bicimde atlanir.
+    #
+    # GUVENLI VARSAYILAN: production'da flag eksik olsa bile lite=True olur; boyle
+    # bir ortam (Render Free) icin dogru varsayilandir. Bellegi bol bir ortamda
+    # LITE_MODE=false ortam degiskeni ile tam mod acikca geri alinabilir.
+    lite_mode: bool = True
+    # Hafif modda ekran goruntusunu tetikleyen kaynak turleri (medyaya EK).
+    # `font` cogunlukla buyuk ve pasif analiz icin gereksizdir; engellenmesi
+    # DOM/tiklanabilir alan cikarimini bozmaz.
+    lite_blocked_resource_types: tuple[str, ...] = ("media", "font")
+    # DOM aday/element kutusu ust siniri (guvenli, bounded). Hafif modda gorunur
+    # viewport zaten az aday icerir; bu, patolojik sayfalarda ust siniri saglar.
+    max_dom_candidates: int = 300
+    # Axe taramasi baslatilmadan once bellek bu kesre ulasmissa (trip'ten once)
+    # tarama kontrollu bicimde atlanir - agir DOM'da axe'in son bellek artisiyla
+    # watchdog'u tetiklemesini onler.
+    lite_axe_skip_pct: float = 0.72
+
     # --- Eszamanlilik ve kaynak sinirlari ---
-    max_concurrent_analyses: int = 2
+    # Render ucretsizde TEK analyzer sureci 512 MB'i API+worker+nginx ile
+    # paylasir; ayni anda YALNIZCA BIR agir Chromium analizi calismalidir (aksi
+    # halde iki es-zamanli analiz OOM'a yakinsar).
+    max_concurrent_analyses: int = 1
 
     # Tum analiz (navigasyon + scroll + screenshot + axe) icin toplam sure
     # butcesi. Ayri ayri navigation/axe timeout'larina EK olarak, hicbir tekil

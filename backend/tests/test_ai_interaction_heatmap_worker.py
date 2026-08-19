@@ -133,6 +133,52 @@ class TransientFailSelector:
         raise AIProviderTransportError("gecici test hatasi")
 
 
+class EmptyOutputSelector:
+    """Gercek provider gibi (is_mock=False) davranir ama 'guclu eslesme yok' (bos)
+    dondurur - deterministik yedek yolunu tetiklemek icin."""
+
+    provider_name = "openai"
+    model_name = "gpt-test"
+    method = "openai_candidate_selection"
+    is_mock = False
+
+    async def select(self, **kwargs):
+        return SelectorResult(
+            output=AIInteractionOutput(
+                summary="Guclu eslesme yok",
+                hotspots=[],
+                unmatched_task_warning="Görevle güçlü eşleşen bir etkileşim alanı bulunamadı.",
+            ),
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            method=self.method,
+        )
+
+
+# Ikon-only sepet kontrolu (control_semantic='cart') iceren gercek aday seti -
+# rapor katmani bunu "Sepet" etiketli aday yapar (bkz. candidates._SEMANTIC_LABELS).
+_CART_ELEMENT_BOXES = [
+    {
+        "role": "button",
+        "control_semantic": "cart",
+        "interaction_kind": "button",
+        "x": 1180,
+        "y": 20,
+        "width": 44,
+        "height": 44,
+    },
+    {
+        "role": "link",
+        "label": "Hakkimizda",
+        "interaction_kind": "navigation_link",
+        "x": 100,
+        "y": 24,
+        "width": 120,
+        "height": 24,
+    },
+]
+
+
 async def _seed_run(
     maker,
     organization_id: uuid.UUID,
@@ -255,6 +301,62 @@ async def test_no_candidates_yields_empty_result_without_provider_call(maker):
     assert hm.status == InteractionHeatmapStatus.SUCCEEDED
     assert hm.result["hotspots"] == []
     assert hm.result["unmatched_task_warning"]
+
+
+async def test_provider_empty_uses_deterministic_fallback_for_cart(maker):
+    """Gercek provider 'guclu eslesme yok' dondugunde, GERCEK sepet adayi ve
+    gorevle ('Sepetteki urunu goruntule') acik eslesme varsa deterministik yedek
+    devreye girer: hotspot uretilir, fallback_used=True, koordinatlar GERCEK
+    aday kaydindan gelir (hayali nokta yok)."""
+
+    org_id = await _make_org(maker)
+    launch = uuid.uuid4()
+    reservation_id = await _reserve(maker, org_id, launch_run_id=launch)
+    run_id = await _seed_run(
+        maker,
+        org_id,
+        features={"element_boxes": _CART_ELEMENT_BOXES},
+        target_task="Sepetteki urunu goruntule",
+        launch_run_id=launch,
+        heatmap_reservation_id=reservation_id,
+    )
+
+    result = await hm_worker.process_one_interaction_heatmap(maker, selector=EmptyOutputSelector())
+
+    assert result.outcome == "succeeded"
+    hm = await _load_heatmap(maker, run_id)
+    assert hm is not None
+    assert hm.status == InteractionHeatmapStatus.SUCCEEDED
+    assert hm.result["fallback_used"] is True
+    hotspots = hm.result["hotspots"]
+    assert hotspots, "deterministik yedek en az bir hotspot uretmeli"
+    assert hotspots[0]["label"] == "Sepet"
+    assert 0.0 <= hotspots[0]["x"] <= 1.0
+    assert 0.0 <= hotspots[0]["y"] <= 1.0
+
+
+async def test_provider_empty_without_match_stays_empty(maker):
+    """Gercek provider bos dondu VE gorevle eslesen GERCEK aday yoksa yedek
+    DEVREYE GIRMEZ: bos ama basarili sonuc korunur (hayali nokta URETILMEZ)."""
+
+    org_id = await _make_org(maker)
+    launch = uuid.uuid4()
+    reservation_id = await _reserve(maker, org_id, launch_run_id=launch)
+    run_id = await _seed_run(
+        maker,
+        org_id,
+        features={"element_boxes": _CART_ELEMENT_BOXES},
+        target_task="Iletisim formunu ac",
+        launch_run_id=launch,
+        heatmap_reservation_id=reservation_id,
+    )
+
+    result = await hm_worker.process_one_interaction_heatmap(maker, selector=EmptyOutputSelector())
+
+    assert result.outcome == "succeeded"
+    hm = await _load_heatmap(maker, run_id)
+    assert hm.result["fallback_used"] is False
+    assert hm.result["hotspots"] == []
 
 
 async def test_semantically_invalid_target_task_fails_without_provider_call(maker):

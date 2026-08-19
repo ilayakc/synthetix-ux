@@ -3629,6 +3629,18 @@
   font-size: 0.8125rem;
 }
 
+/* Hafif ("lite") analiz bilgilendirmesi - HATA DEGIL, notr/bilgi tonu. */
+.report-analysis-lite-notice {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--color-border-strong, var(--color-border));
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-surface-muted, rgba(148, 163, 184, 0.12));
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
 .report-heatmap-empty p {
   margin: 0 0 8px;
 }

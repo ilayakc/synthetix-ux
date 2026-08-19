@@ -55,6 +55,7 @@ from app.services.ai_interaction_heatmap.schemas import (
     INTERACTION_HEATMAP_DISCLAIMER,
     INTERACTION_HEATMAP_PROMPT_VERSION,
     INTERACTION_HEATMAP_SCHEMA_VERSION,
+    METHOD_DOM_VISUAL_RANKING,
     METHOD_LABELS,
     NO_STRONG_MATCH_WARNING,
     AIInteractionOutput,
@@ -82,6 +83,13 @@ DEFAULT_SETTLEMENT_GROUP_LIMIT: Final = 20
 # init/settlement salt=1/2 ile CAKISMASIN diye farkli degerler).
 _RUN_LOCK_SALT: Final = 11
 _SETTLEMENT_LOCK_SALT: Final = 12
+
+# Deterministik yedek (fallback) icin: provider BOS ("guclu eslesme yok")
+# dondugunde, GERCEK adaylar uzerinde calisan deterministik siralayicinin en ust
+# adayi ile ikinci aday arasindaki ASGARI skor farki. Bu esik saglanmadikca (ve
+# ust aday gorevle en az "related" olmadikca) yedek DEVREYE GIRMEZ - belirsiz bir
+# secimi haritaya donusturmemek icin.
+_FALLBACK_MIN_SCORE_GAP: Final = 0.10
 
 # TYPED, guvenli hata kodlari (provider_errors'takilere EK - domain hatalari).
 ERROR_CODE_PAGE_ANALYSIS_UNAVAILABLE: Final = "page_analysis_unavailable"
@@ -208,6 +216,40 @@ def _empty_result(*, provider: str, model_name: str, method: str, fingerprint: s
         unmatched_task_warning=NO_STRONG_MATCH_WARNING,
         disclaimer=INTERACTION_HEATMAP_DISCLAIMER,
     )
+
+
+def _maybe_deterministic_fallback(
+    work: _ClaimedWork, *, provider_name: str, model_name: str
+) -> InteractionHeatmapResult | None:
+    """Provider BOS dondugunde deterministik yedek sonucu (varsa) uretir.
+
+    KONTROLLU: yalnizca GERCEK adaylar uzerinde calisan deterministik siralayici
+    (a) en az bir hotspot buluyor, (b) ust aday gorevle en az "related" ve (c)
+    ust aday ile ikincisi arasinda yeterli skor farki varsa (tek aday da yeter)
+    devreye girer. Aksi halde `None` (bos sonuc korunur - hayali nokta URETILMEZ).
+    Koordinatlar yine GERCEK adaylardan gelir (bkz. service._resolve)."""
+
+    deterministic = build_interaction_heatmap(
+        candidates=work.evidence.candidates,
+        target_task=work.evidence.target_task or "",
+        target_audience=work.evidence.target_audience,
+        persona_distribution=work.evidence.persona_distribution,
+        content_sha256=work.evidence.content_sha256,
+        confirmed_candidate_id=work.evidence.confirmed_candidate_id,
+        model_name=model_name,
+        provider_name=provider_name,
+        method=METHOD_DOM_VISUAL_RANKING,
+        selector=None,  # deterministik siralayici (rank_interaction_hotspots)
+    )
+    hotspots = deterministic.hotspots
+    if not hotspots:
+        return None
+    top = hotspots[0]
+    if top.task_relevance not in ("direct", "related"):
+        return None
+    if len(hotspots) > 1 and (top.score - hotspots[1].score) < _FALLBACK_MIN_SCORE_GAP:
+        return None
+    return deterministic.model_copy(update={"fallback_used": True})
 
 
 # =============================================================================
@@ -554,6 +596,32 @@ async def process_one_interaction_heatmap(
             return await _persist_failure(
                 session_maker, work, error_code=ERROR_CODE_OUTPUT_VALIDATION_FAILED, retryable=False
             )
+
+        # Provider "guclu eslesme yok" (bos) dondu; GERCEK adaylar uzerinde
+        # deterministik siralayici acik bir ust aday buluyorsa KONTROLLU yedege
+        # gec (hayali nokta URETILMEZ). Mock secici zaten deterministiktir -
+        # yedek yalnizca gercek provider bos dondugunde denenir.
+        fallback_used = False
+        if not result.hotspots and not selector.is_mock:
+            fallback = _maybe_deterministic_fallback(
+                work, provider_name=sel_result.provider_name, model_name=sel_result.model_name
+            )
+            if fallback is not None:
+                result = fallback
+                fallback_used = True
+
+        # Guvenli teshis logu: yalnizca sayimlar + mod/kod (URL/gorev/PII loglanmaz).
+        logger.info(
+            "interaction heatmap secim tamamlandi",
+            extra={
+                "heatmap_id": str(work.heatmap_id),
+                "candidate_count": len(work.evidence.candidates),
+                "selected_candidate_count": len(result.hotspots),
+                "method": result.method,
+                "fallback_used": fallback_used,
+                "image_present": work.evidence.screenshot_data is not None,
+            },
+        )
 
         return await _persist_success(session_maker, work, selector, result.model_dump(mode="json"))
 

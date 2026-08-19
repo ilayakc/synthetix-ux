@@ -88,3 +88,46 @@ async def test_decorative_icon_without_semantic_or_text_is_not_extracted():
     boxes = features["element_boxes"]
     # Semantik ipucu ve metni OLMAYAN dekoratif ikon buton aday yapilmaz.
     assert not any((b.get("label") is None and b.get("control_semantic") is None) for b in boxes)
+
+
+# Yogun navigasyonlu sayfada ikon-only sepet kontrolunun aday slice'inda
+# (oncelik takviyesi sayesinde) KORUNDUGUNU dogrular - takviye olmadan dusuk
+# oncelikli sepet ikonu ilk-N aday disinda kalip rapor katmanina ulasmiyordu.
+_DENSE_NAV_HTML = """
+<!doctype html><html><head><meta charset="utf-8"><style>
+  body { margin: 0; font-family: sans-serif; }
+  a.navlink { display: inline-block; width: 120px; height: 30px; }
+  .cart { width: 44px; height: 44px; display: inline-flex; }
+  svg { width: 24px; height: 24px; }
+</style></head><body>
+  <nav>
+    __LINKS__
+    <button class="cart"><svg viewBox="0 0 24 24"><path d="M1 1h22v22H1z"/></svg></button>
+  </nav>
+</body></html>
+"""
+
+
+async def _extract_dense() -> dict:
+    links = "\n".join(
+        f'<a class="navlink" href="/kategori-{i}">Kategori {i}</a>' for i in range(60)
+    )
+    html = _DENSE_NAV_HTML.replace("__LINKS__", links)
+    async with async_playwright() as p:
+        browser_obj = await p.chromium.launch()
+        try:
+            page = await browser_obj.new_page(viewport={"width": 1280, "height": _CAPTURE_HEIGHT})
+            await page.set_content(html)
+            return await page.evaluate(_FEATURE_EXTRACTION_JS, _CAPTURE_HEIGHT)
+        finally:
+            await browser_obj.close()
+
+
+@pytest.mark.asyncio
+async def test_icon_only_cart_survives_dense_nav_priority_slice():
+    features = await _extract_dense()
+    boxes = features["element_boxes"]
+    assert any(b.get("control_semantic") == "cart" for b in boxes), (
+        "yogun navigasyonda ikon-only sepet kontrolu oncelik takviyesiyle "
+        "aday slice'inda korunmali"
+    )

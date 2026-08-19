@@ -153,6 +153,13 @@ class PageFeatureSnapshotV1(BaseModel):
     accessibility_precheck: AccessibilityPrecheck
     screenshot: Screenshot
 
+    # Analiz modu metadata'si (geriye uyumlu; eski tuketiciler yok sayar).
+    # "lite": yalnizca sabit viewport yakalandi (tam-sayfa scroll/screenshot
+    # yapilmadi). `analysis_limited=True`, sonuclarin gorunur ekran alanini temel
+    # aldigini belirtir; UI bunu hata gibi DEGIL bilgilendirme olarak gosterir.
+    analysis_mode: Literal["full", "lite"] = "full"
+    analysis_limited: bool = False
+
     warnings: list[str] = []
 
 

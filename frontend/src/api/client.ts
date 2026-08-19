@@ -1155,6 +1155,12 @@ export interface ReportInteractionHeatmapSection {
   image_width: number | null;
   image_height: number | null;
   coordinates_available: boolean;
+  // Analyzer hafif ("lite") modda mi calisti (sonuclar gorunur ekran alanini
+  // temel alir). Geriye uyumlu opsiyonel alanlar.
+  analysis_mode?: string | null;
+  analysis_limited?: boolean;
+  // Provider bos dondugunde deterministik yedek secim kullanildi mi.
+  fallback_used?: boolean;
 }
 
 export type CtaOverlayClassification =

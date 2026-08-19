@@ -213,3 +213,34 @@ async def test_report_section_failed_exposes_only_error_code(session: AsyncSessi
     assert section.available is False
     assert section.error_code == "provider_timeout"
     assert not section.hotspots
+
+
+async def test_report_section_exposes_lite_analysis_mode(
+    session: AsyncSession, organization: Organization
+):
+    """Analyzer hafif ("lite") modda calistiysa, salt-okunur rapor bolumu bunu
+    `analysis_mode="lite"` + `analysis_limited=True` olarak frontend'e tasir -
+    UI bunu (hata degil) bilgilendirme olarak gosterebilsin."""
+
+    from app.models.page_analysis import PageAnalysis, PageAnalysisSourceKind, PageAnalysisStatus
+    from app.routers.reports import _build_interaction_heatmap
+
+    run = await _make_run(session, organization, modules=["ai_interaction_heatmap"])
+    analysis = PageAnalysis(
+        organization_id=organization.id,
+        source_kind=PageAnalysisSourceKind.URL,
+        url="https://example.com",
+        status=PageAnalysisStatus.SUCCEEDED,
+        features={"element_boxes": [], "analysis_mode": "lite", "analysis_limited": True},
+        image_width=1366,
+        image_height=900,
+        content_sha256="sha-lite",
+    )
+    session.add(analysis)
+    await session.flush()
+    run.page_analysis_id = analysis.id
+    await session.flush()
+
+    section = await _build_interaction_heatmap(session, organization.id, uuid.uuid4(), run)
+    assert section.analysis_mode == "lite"
+    assert section.analysis_limited is True
