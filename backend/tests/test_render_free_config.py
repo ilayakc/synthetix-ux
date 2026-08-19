@@ -27,8 +27,22 @@ def test_render_blueprint_declares_only_free_resources():
     assert all(service["type"] in {"web", "keyvalue"} for service in blueprint["services"])
     assert all(database["plan"] == "free" for database in blueprint["databases"])
 
+    # Ayri (public) analyzer web servisi KALDIRILDI - analyzer artik ana
+    # container icinde loopback'te calisir. DB/Valkey kaynaklari cogaltilmadi.
+    service_names = {service["name"] for service in blueprint["services"]}
+    assert "synthetix-ux-ily-analyzer" not in service_names
+    assert sum(1 for s in blueprint["services"] if s["type"] == "web") == 1
+    assert len(blueprint["databases"]) == 1
+    assert sum(1 for s in blueprint["services"] if s["type"] == "keyvalue") == 1
+
     main_service = next(service for service in blueprint["services"] if service["name"] == "synthetix-ux-ily")
     env = {item["key"]: item for item in main_service["envVars"]}
+    # Analyzer artik loopback uzerinden cagrilir (public edge/429 YOK) ve
+    # limitleri ana servisin env'inden okunur.
+    assert env["ANALYZER_BASE_URL"]["value"] == "http://127.0.0.1:8100"
+    assert env["MAX_CONCURRENT_ANALYSES"]["value"] == "1"
+    assert env["NAVIGATION_TIMEOUT_SECONDS"]["value"] == "45"
+    assert env["ACCESSIBILITY_SCAN_TIMEOUT_SECONDS"]["value"] == "20"
     assert env["JWT_SECRET_KEY"] == {"key": "JWT_SECRET_KEY", "generateValue": True}
     assert env["ANALYZER_SHARED_TOKEN"] == {
         "key": "ANALYZER_SHARED_TOKEN",

@@ -1,8 +1,16 @@
 # Zero-cost Render demo image.
 #
-# The public web service runs the static frontend, FastAPI backend and ARQ
-# worker in one free instance. This is intentionally a presentation/demo
-# topology, not the production topology in compose.prod.yaml.
+# The public web service runs the static frontend, FastAPI backend, ARQ worker
+# AND the Playwright analyzer in ONE free instance. This is intentionally a
+# presentation/demo topology, not the production topology in compose.prod.yaml
+# (where the analyzer is a separate, network-isolated service).
+#
+# Why the analyzer is co-located here: Render's free plan cannot serve private
+# traffic, so a separate free analyzer web service could only be reached over
+# the PUBLIC internet - which put it behind Render/Cloudflare's edge and caused
+# HTTP 429 (rate limit) + cold-start failures before requests ever reached the
+# analyzer app. Running it in-container on 127.0.0.1:8100 removes that public
+# edge entirely (bkz. deploy/render_free_start.py, app.render_free_launcher).
 
 FROM node:20-alpine AS frontend-build
 
@@ -20,7 +28,14 @@ ENV VITE_SLOW_REQUEST_THRESHOLD_MS=$VITE_SLOW_REQUEST_THRESHOLD_MS
 
 RUN npm run build
 
-FROM python:3.12-slim AS runtime
+# Runtime tabani, analyzer/Dockerfile ile AYNI mantik: Microsoft'un onceden
+# derleyip dogruladigi Chromium + tum sistem bagimliliklarini iceren resmi
+# Playwright imaji. `-noble` (Ubuntu 24.04) Python 3.12 tasir (backend
+# `datetime.UTC` gibi 3.11+ ozellikleri kullanir; `-jammy`/3.10 KIRARDI) ve
+# requirements.txt'teki `playwright==1.49.0` ile birebir eslesir. Bu, Debian
+# slim uzerinde `playwright install --with-deps`in Ubuntu'ya ozgu font paketi
+# (`ttf-ubuntu-font-family`) yuzunden basarisiz olmasi riskini ortadan kaldirir.
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble AS runtime
 
 WORKDIR /app
 
@@ -28,6 +43,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=10000
+# Not: taban imaj Chromium'u /ms-playwright altina kurar ve
+# PLAYWRIGHT_BROWSERS_PATH'i zaten ayarlar; analyzer subprocess'i (ayri cwd)
+# ayni ortam degiskeniyle browser'i guvenilir sekilde bulur.
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl libgl1 libglib2.0-0 nginx \
@@ -37,10 +55,24 @@ RUN apt-get update \
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
 
+# Analyzer calisma zamani bagimliligi: axe-core koprusu. `playwright==1.49.0`
+# BURADA ACIKCA PINLENIR - aksi halde axe-playwright-python, playwright'i taban
+# imajdaki Chromium'la (revizyon 1148) UYUMSUZ daha yeni bir surume yukseltir ve
+# "Executable doesn't exist ... chromium_headless_shell-<yeni rev>" hatasi verir.
+# Pinlenince pip taban imajin 1.49.0'ini korur; Chromium indirmeye/apt kurmaya
+# GEREK YOKTUR (analyzer/requirements.txt de bu ikiliyi birlikte pinler).
+RUN pip install "playwright==1.49.0" "axe-playwright-python==0.1.4"
+
 COPY backend/ ./
 COPY --from=frontend-build /frontend/dist /usr/share/nginx/html
 COPY deploy/nginx.render-free.conf /etc/nginx/conf.d/default.conf
 COPY deploy/render_free_start.py /opt/synthetix/render_free_start.py
+# Analyzer kodu, backend ile ayni `app` paket adini kullandigi icin AYRI bir
+# dizine kopyalanir (/opt/analyzer/app). Supervisor bu servisi cwd=/opt/analyzer
+# ile baslatir (bkz. app.render_free_launcher._SERVICE_CWD); boylece uvicorn'un
+# `app.main:app` cozumlemesi backend degil ANALYZER paketine gider - iki `app`
+# paketi asla ayni surecte cakismaz.
+COPY analyzer/app /opt/analyzer/app
 
 EXPOSE 10000
 STOPSIGNAL SIGTERM

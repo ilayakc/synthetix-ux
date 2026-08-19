@@ -77,6 +77,12 @@ class PageAnalysis(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=PageAnalysisStatus.QUEUED,
     )
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Gecici hatadan (429/timeout/5xx/baglanti) sonra KALICI, gecikmeli yeniden
+    # deneme zamani. `queued` bir is yalnizca `next_attempt_at` NULL ya da
+    # gecmisteyse alinir (bkz. app.services.page_analysis.claim_next_queued);
+    # boylece worker restart/redeploy olsa bile geri-cekilme suresi kaybolmaz ve
+    # worker `sleep` ile bloke edilmeden diger isleri tuketmeye devam eder.
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

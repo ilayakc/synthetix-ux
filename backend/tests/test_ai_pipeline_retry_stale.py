@@ -270,9 +270,9 @@ async def test_single_alembic_head():  # (2)
     cfg = Config("alembic.ini")
     cfg.set_main_option("script_location", "migrations")
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    # AI interaction heatmap tablosu ve ayri Chip rezervasyon baglantisi mevcut
-    # tek Alembic head'ini ilerletir.
-    assert heads == ["a41d7e9c3b20"]
+    # Tek Alembic head invariant'i. En son ilerletme: page_analyses.next_attempt_at
+    # (kalici gecikmeli yeniden deneme; bkz. b7d2f9a4c1e8).
+    assert heads == ["b7d2f9a4c1e8"]
 
 
 async def test_migration_down_revision_chains_to_prior_head():  # (3)

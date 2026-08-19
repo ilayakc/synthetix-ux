@@ -27,6 +27,16 @@ const EMPTY_PAGE_SNAPSHOT_ERROR_MESSAGE =
 const RESPONSE_TOO_LARGE_ERROR_MESSAGE =
   "Sayfanın ana belgesi analiz sınırından büyük. Aynı URL'yi yeniden denemek sonucu değiştirmez; bu siteyi ekran görüntüsü kaynağıyla deneyin.";
 
+// Gecici analyzer hatalari: run RETRYABLE kalir (yeniden dene butonu gorunur),
+// ama kullaniciya genel "Bağlı sayfa analizi başarısız" yerine ayristirilabilir,
+// uygulanabilir bir mesaj gosterilir (bkz. app.services.simulation_worker
+// PAGE_ANALYSIS_RATE_LIMITED_CODE / PAGE_ANALYSIS_UNAVAILABLE_CODE).
+const RATE_LIMITED_ERROR_MESSAGE =
+  "Analiz servisi geçici olarak yoğundu ve otomatik yeniden denemeler yeterli olmadı. Birazdan yeniden deneyebilirsiniz.";
+
+const ANALYZER_UNAVAILABLE_ERROR_MESSAGE =
+  "Analiz servisine geçici olarak ulaşılamadı. Birazdan yeniden deneyebilirsiniz.";
+
 const STATUS_LABELS: Record<SimulationRunStatus, string> = {
   queued: "Kuyrukta",
   running: "Çalışıyor",
@@ -389,6 +399,16 @@ function SimulationCard({
       : run.failure_code === "page_analysis_response_too_large"
         ? RESPONSE_TOO_LARGE_ERROR_MESSAGE
         : NON_RETRYABLE_ERROR_MESSAGE;
+  // Gecici (retryable) analyzer hatalari icin ayristirilabilir, uygulanabilir
+  // mesaj - ham hata metni yerine gosterilir; "Yeniden dene" butonu korunur.
+  const retryableFailureMessage =
+    isFailed && run.retryable
+      ? run.failure_code === "page_analysis_rate_limited"
+        ? RATE_LIMITED_ERROR_MESSAGE
+        : run.failure_code === "page_analysis_unavailable"
+          ? ANALYZER_UNAVAILABLE_ERROR_MESSAGE
+          : null
+      : null;
   const normalizedProgressMessage = run.progress_message
     ? normalizeTurkishSystemCopy(run.progress_message)
     : null;
@@ -457,6 +477,8 @@ function SimulationCard({
       {run.error &&
         (isNonRetryableFailure ? (
           <p className="simulation-card__error">{nonRetryableMessage}</p>
+        ) : retryableFailureMessage ? (
+          <p className="simulation-card__error">{retryableFailureMessage}</p>
         ) : (
           <p className="simulation-card__error">Hata: {normalizedError}</p>
         ))}

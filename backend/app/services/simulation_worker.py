@@ -102,6 +102,12 @@ TERMINAL_STATUSES = (SimulationStatus.SUCCEEDED, SimulationStatus.FAILED, Simula
 NETWORK_DEVICE_TEST_REQUIRES_URL_CODE = "network_device_test_requires_url"
 PAGE_ANALYSIS_EMPTY_SNAPSHOT_CODE = "page_analysis_empty_snapshot"
 PAGE_ANALYSIS_RESPONSE_TOO_LARGE_CODE = "page_analysis_response_too_large"
+# Gecici analyzer hatalari (429 / erisilemez) maksimum otomatik denemeden sonra
+# terminal FAILED olsa bile: kullaniciya genel "Bagli sayfa analizi basarisiz"
+# yerine ayristirilabilir, uygulanabilir bir kod/mesaj gosterilir ve run
+# RETRYABLE kalir (kullanici birazdan tekrar deneyebilir).
+PAGE_ANALYSIS_RATE_LIMITED_CODE = "page_analysis_rate_limited"
+PAGE_ANALYSIS_UNAVAILABLE_CODE = "page_analysis_unavailable"
 
 NETWORK_DEVICE_TEST_NON_RETRYABLE_MESSAGE = (
     "Bu çalışma ekran görüntüsüyle Ağ ve cihaz testi seçildiği için yeniden denenemez. "
@@ -137,6 +143,14 @@ def classify_run_failure(run: SimulationRun) -> tuple[bool, str | None]:
 
     if run.error == _PAGE_ANALYSIS_RESPONSE_TOO_LARGE_MESSAGE:
         return False, PAGE_ANALYSIS_RESPONSE_TOO_LARGE_CODE
+
+    # Gecici analyzer hatalari: kod ayristirilabilir kalir ama retryable=True
+    # (kullanici birazdan tekrar deneyebilir; genel "basarisiz" gosterilmez).
+    if run.error == _PAGE_ANALYSIS_RATE_LIMITED_MESSAGE:
+        return True, PAGE_ANALYSIS_RATE_LIMITED_CODE
+
+    if run.error == _PAGE_ANALYSIS_UNAVAILABLE_MESSAGE:
+        return True, PAGE_ANALYSIS_UNAVAILABLE_CODE
 
     return True, None
 
@@ -195,6 +209,13 @@ _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE = (
     "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
     "Bu site otomatik analiz tarayicisina bos icerik donduruyor olabilir."
 )
+_PAGE_ANALYSIS_RATE_LIMITED_MESSAGE = (
+    "Analiz servisi gecici olarak yogundu ve otomatik yeniden denemeler yeterli olmadi. "
+    "Birazdan yeniden deneyebilirsiniz."
+)
+_PAGE_ANALYSIS_UNAVAILABLE_MESSAGE = (
+    "Analiz servisine gecici olarak ulasilamadi. Birazdan yeniden deneyebilirsiniz."
+)
 _PAGE_ANALYSIS_RESPONSE_TOO_LARGE_MESSAGE = (
     "Sayfadaki ana belge izin verilen boyut sinirini astigi icin analiz tamamlanamadi. "
     "Bu siteyi ekran goruntusu kaynagiyla deneyin."
@@ -233,6 +254,10 @@ async def fail_runs_blocked_by_failed_page_analysis(
             message = _PAGE_ANALYSIS_EMPTY_SNAPSHOT_MESSAGE
         elif page_analysis_error_code == "response_too_large":
             message = _PAGE_ANALYSIS_RESPONSE_TOO_LARGE_MESSAGE
+        elif page_analysis_error_code == "analyzer_rate_limited":
+            message = _PAGE_ANALYSIS_RATE_LIMITED_MESSAGE
+        elif page_analysis_error_code == "analyzer_unavailable":
+            message = _PAGE_ANALYSIS_UNAVAILABLE_MESSAGE
         else:
             message = _PAGE_ANALYSIS_FAILED_MESSAGE
         await _finalize_failed(session, run, error=message)

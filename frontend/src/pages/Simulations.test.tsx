@@ -192,6 +192,40 @@ describe("Simulations", () => {
     expect(screen.getByText(/Hata: analyzer'a ulasilamadi/)).toBeInTheDocument();
   });
 
+  it("429 (rate limited) terminal hatada spesifik mesaj gosterir ama 'Yeniden dene' korunur", async () => {
+    stubRuns([
+      baseRun({
+        id: "33333333-3333-3333-3333-333333333333",
+        retryable: true,
+        failure_code: "page_analysis_rate_limited",
+        error: "ic hata ayrintisi",
+      }),
+    ]);
+    renderSimulations();
+
+    await waitFor(() => expect(screen.getByText(/Çalıştırma 33333333/)).toBeInTheDocument());
+    expect(screen.getByText("Yeniden dene")).toBeInTheDocument();
+    expect(screen.getByText(/Analiz servisi geçici olarak yoğundu/)).toBeInTheDocument();
+    expect(screen.queryByText(/ic hata ayrintisi/)).not.toBeInTheDocument();
+  });
+
+  it("analyzer erisilemez (unavailable) terminal hatada spesifik mesaj ve 'Yeniden dene' gosterir", async () => {
+    stubRuns([
+      baseRun({
+        id: "44444444-4444-4444-4444-444444444444",
+        retryable: true,
+        failure_code: "page_analysis_unavailable",
+        error: "ic hata ayrintisi",
+      }),
+    ]);
+    renderSimulations();
+
+    await waitFor(() => expect(screen.getByText(/Çalıştırma 44444444/)).toBeInTheDocument());
+    expect(screen.getByText("Yeniden dene")).toBeInTheDocument();
+    expect(screen.getByText(/Analiz servisine geçici olarak ulaşılamadı/)).toBeInTheDocument();
+    expect(screen.queryByText(/ic hata ayrintisi/)).not.toBeInTheDocument();
+  });
+
   it("ayni hata metnini ilerleme mesaji olarak tekrar etmez", async () => {
     const legacyError = "Bagli sayfa analizi basarisiz oldugu icin bu calistirma islenemedi";
     stubRuns([

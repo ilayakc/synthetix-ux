@@ -136,12 +136,16 @@ def _fixture_analyzer_snapshot(
 
 
 def _mock_client(
-    *, status_code: int = 200, json_body: dict | None = None, raise_exc: Exception | None = None
+    *,
+    status_code: int = 200,
+    json_body: dict | None = None,
+    raise_exc: Exception | None = None,
+    headers: dict | None = None,
 ):
     async def handler(request: httpx.Request) -> httpx.Response:
         if raise_exc is not None:
             raise raise_exc
-        return httpx.Response(status_code, json=json_body)
+        return httpx.Response(status_code, json=json_body, headers=headers)
 
     transport = httpx.MockTransport(handler)
     return httpx.AsyncClient(transport=transport)
@@ -549,6 +553,120 @@ async def test_reap_stale_running_fails_after_max_attempts(session: AsyncSession
     await page_analysis_service.reap_stale_running(session, timeout_seconds=1, max_attempts=3)
     await session.refresh(analysis)
     assert analysis.status == PageAnalysisStatus.FAILED
+
+
+# --- Kalici gecikmeli yeniden deneme (next_attempt_at) -----------------------
+
+
+async def test_process_analysis_429_requeues_with_backoff_and_typed_code(
+    session: AsyncSession, organization: Organization, monkeypatch
+):
+    """429 -> gecikmeli yeniden deneme; kod `analyzer_rate_limited` olarak
+    saklanir (genel `analyzer_rejected` altinda KAYBOLMAZ) ve `next_attempt_at`
+    yapilandirilmis geri-cekilme (varsayilan ilk adim 15s) kadar ileri konur."""
+
+    monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
+    analysis = await _make_queued_analysis(session, organization)
+    analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 1
+
+    before = datetime.now(UTC)
+    client = _mock_client(status_code=429, json_body={"detail": "Too Many Requests"})
+    try:
+        await page_analysis_service.process_analysis(session, analysis, client=client)
+    finally:
+        await client.aclose()
+
+    assert analysis.status == PageAnalysisStatus.QUEUED
+    assert analysis.error_code == page_analysis_service.ANALYZER_RATE_LIMITED_CODE
+    assert analysis.next_attempt_at is not None
+    # attempt_count=1 -> cizelgenin ilk adimi (15s), Retry-After yok.
+    delta = (analysis.next_attempt_at - before).total_seconds()
+    assert 14 <= delta <= 20
+    assert analysis.finished_at is None
+
+
+async def test_process_analysis_429_honors_retry_after_header(
+    session: AsyncSession, organization: Organization, monkeypatch
+):
+    monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
+    analysis = await _make_queued_analysis(session, organization)
+    analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 1
+
+    before = datetime.now(UTC)
+    client = _mock_client(
+        status_code=429,
+        json_body={"detail": "Too Many Requests"},
+        headers={"Retry-After": "42"},
+    )
+    try:
+        await page_analysis_service.process_analysis(session, analysis, client=client)
+    finally:
+        await client.aclose()
+
+    assert analysis.status == PageAnalysisStatus.QUEUED
+    assert analysis.next_attempt_at is not None
+    # Retry-After=42 > temel geri-cekilme (15s) -> Retry-After kazanir.
+    delta = (analysis.next_attempt_at - before).total_seconds()
+    assert 40 <= delta <= 48
+
+
+async def test_process_analysis_three_429_ends_in_typed_terminal_failure(
+    session: AsyncSession, organization: Organization, monkeypatch
+):
+    """Ucuncu 429 sonrasi is FAILED olur ama gercek kod (`analyzer_rate_limited`)
+    korunur - kullanici genel bir 'analyzer_rejected' gormez."""
+
+    monkeypatch.setattr(url_safety, "resolve_host_ips", lambda hostname: ("93.184.216.34",))
+    analysis = await _make_queued_analysis(session, organization)
+    analysis.status = PageAnalysisStatus.RUNNING
+    analysis.attempt_count = 3  # page_analysis_max_attempts
+
+    client = _mock_client(status_code=429, json_body={"detail": "Too Many Requests"})
+    try:
+        await page_analysis_service.process_analysis(session, analysis, client=client)
+    finally:
+        await client.aclose()
+
+    assert analysis.status == PageAnalysisStatus.FAILED
+    assert analysis.error_code == page_analysis_service.ANALYZER_RATE_LIMITED_CODE
+    assert analysis.next_attempt_at is None
+    assert analysis.finished_at is not None
+
+
+async def test_claim_next_queued_skips_future_next_attempt_at_survives_restart(
+    session: AsyncSession, organization: Organization
+):
+    """`next_attempt_at` gelecekteki bir is (worker restart olsa da DB'de kalir)
+    ALINMAZ; suresi gecmis/None olan is ALINIR."""
+
+    not_due = await _make_queued_analysis(session, organization, url="https://example.com/a")
+    due = await _make_queued_analysis(session, organization, url="https://example.com/b")
+    not_due.next_attempt_at = datetime.now(UTC) + timedelta(seconds=120)
+    due.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    await session.flush()
+
+    claimed = await page_analysis_service.claim_next_queued(session, limit=10_000)
+    claimed_ids = {a.id for a in claimed}
+
+    assert due.id in claimed_ids
+    assert not_due.id not in claimed_ids
+    await session.refresh(due)
+    assert due.next_attempt_at is None  # alinirken temizlenir
+
+
+async def test_duplicate_claim_does_not_reprocess_running_job(
+    session: AsyncSession, organization: Organization
+):
+    """Ayni dongunun/duplicate cron'un ikinci turu RUNNING isi tekrar almaz
+    (tek analyzer cagrisi garantisi)."""
+
+    await _make_queued_analysis(session, organization)
+    first = await page_analysis_service.claim_next_queued(session, limit=10_000)
+    assert len(first) == 1
+    second = await page_analysis_service.claim_next_queued(session, limit=10_000)
+    assert second == []
 
 
 @pytest.mark.security

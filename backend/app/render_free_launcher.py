@@ -42,7 +42,18 @@ class _Process(Protocol):
 
 # Alt sürece stamp'lenecek rol (yalnizca Python süreçleri; nginx Python
 # logger'i kullanmaz). Bkz. app.logging_config._PROCESS_ROLE.
-_SERVICE_ROLES: dict[str, str] = {"backend": "api", "worker": "worker"}
+_SERVICE_ROLES: dict[str, str] = {"backend": "api", "worker": "worker", "analyzer": "analyzer"}
+
+# Analyzer, backend ile AYNI `app` paket adini kullanir; cakismayi onlemek icin
+# ayri bir cwd'den (bkz. Dockerfile.render-free `/opt/analyzer`) baslatilir -
+# uvicorn `app.main:app`'i o dizindeki (ANALYZER) pakete gore cozer. Diger
+# servisler container WORKDIR'ini (backend paket koku) miras alir.
+_SERVICE_CWD: dict[str, str] = {"analyzer": "/opt/analyzer"}
+
+# In-container analyzer'in dinledigi loopback adresi. render.yaml `ANALYZER_
+# BASE_URL=http://127.0.0.1:8100` verir; burada da ayni portu dinletiriz.
+_ANALYZER_HOST = "127.0.0.1"
+_ANALYZER_PORT = "8100"
 
 SpawnFn = Callable[[str, list[str]], _Process]
 
@@ -51,11 +62,22 @@ def build_service_commands() -> dict[str, list[str]]:
     """Tek container'da çalisacak sabit servis komutlari (isim -> argv).
 
     `worker` girdisi ARQ simulation worker'idir - Render ücretsiz planinda ayri
-    bir Background Worker olmadigi icin kuyruk tüketicisi BURADADIR."""
+    bir Background Worker olmadigi icin kuyruk tüketicisi BURADADIR. `analyzer`
+    ise Playwright tabanli sayfa analiz servisidir; SADECE loopback'te dinler
+    (public edge YOK - uretimde gorulen 429 kaskadinin kok nedeni buydu) ve
+    backend/worker ona `http://127.0.0.1:8100` uzerinden ulasir."""
 
     return {
         "backend": ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
         "worker": ["arq", "app.worker.WorkerSettings"],
+        "analyzer": [
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            _ANALYZER_HOST,
+            "--port",
+            _ANALYZER_PORT,
+        ],
         "frontend": ["nginx", "-g", "daemon off;"],
     }
 
@@ -69,7 +91,11 @@ def _child_env(service_name: str) -> dict[str, str]:
 
 
 def _default_spawn(name: str, command: list[str]) -> _Process:
-    return subprocess.Popen(command, env=_child_env(name))  # noqa: S603 - fixed constant commands
+    # cwd=None -> container WORKDIR'ini miras alir (backend/worker/frontend);
+    # analyzer icin /opt/analyzer (ayri `app` paketi - bkz. _SERVICE_CWD).
+    return subprocess.Popen(  # noqa: S603 - fixed constant commands
+        command, env=_child_env(name), cwd=_SERVICE_CWD.get(name)
+    )
 
 
 def _out(message: str) -> None:
@@ -215,7 +241,15 @@ def main() -> int:
     _bootstrap_user()
     _bootstrap_public_demo()
 
-    _out("render-free: API + ARQ worker + nginx tek container'da baslatiliyor")
+    _out(
+        "render-free: API + ARQ worker + analyzer (127.0.0.1:8100) + nginx tek "
+        "container'da baslatiliyor"
+    )
+    # Not: worker, analyzer henuz hazir degilken bir isi tuketirse analyzer'a
+    # yapilan cagri baglanti hatasi verir; bu KALICI, gecikmeli yeniden deneme
+    # olarak ele alinir (analyzer_unavailable -> next_attempt_at, varsayilan 15s;
+    # bkz. app.services.page_analysis) - yani readiness, bloke etmeyen kontrollu
+    # bir backoff ile saglanir; is asla sessizce kaybolmaz.
     return Supervisor(build_service_commands()).run()
 
 

@@ -29,6 +29,7 @@ import hashlib
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 
 import httpx
 from sqlalchemy import select
@@ -73,8 +74,17 @@ _SCREENSHOT_VALIDATION_FAILED_MESSAGE = "Ekran goruntusu guvenlik dogrulamasinda
 EMPTY_PAGE_SNAPSHOT_CODE = "empty_page_snapshot"
 RESPONSE_TOO_LARGE_CODE = "response_too_large"
 ANALYZER_UNAVAILABLE_CODE = "analyzer_unavailable"
+ANALYZER_RATE_LIMITED_CODE = "analyzer_rate_limited"
 ANALYZER_REJECTED_CODE = "analyzer_rejected"
+# Analyzer'in typed sozlesmesinde (bkz. analyzer/app/browser.py) tasidigi,
+# istemciye/loga guvenle yansitilabilen hata siniflari.
 _ALLOWED_ANALYZER_ERROR_CODES = {EMPTY_PAGE_SNAPSHOT_CODE, RESPONSE_TOO_LARGE_CODE}
+# Kalici (terminal) analyzer hata siniflari: ayni girdide degismeyeceginden
+# yeniden denenmez (bkz. _is_retryable_analyzer_failure). `empty_page_snapshot`
+# BURADA DEGILDIR - site cold start / dinamik yukleme / bot-korumasi gecici
+# olabilir; bu yuzden gecikmeli olarak yeniden denenir ve ancak maksimum
+# denemeden sonra typed olarak kalici FAILED'e gecer.
+_TERMINAL_ANALYZER_ERROR_CODES = {RESPONSE_TOO_LARGE_CODE}
 EMPTY_PAGE_SNAPSHOT_MESSAGE = (
     "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
     "Site otomatik tarayicilara bos icerik donduruyor olabilir."
@@ -84,11 +94,47 @@ EMPTY_PAGE_SNAPSHOT_MESSAGE = (
 class AnalyzerResponseError(RuntimeError):
     """Analyzer HTTP yanitini retry kararinda durum koduyla birlikte tasir."""
 
-    def __init__(self, status_code: int, detail: str, *, code: str | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        detail: str,
+        *,
+        code: str | None = None,
+        retry_after_seconds: float | None = None,
+    ):
         super().__init__(f"analyzer hatasi ({status_code}): {detail}")
         self.status_code = status_code
         self.detail = detail
         self.code = code or ANALYZER_REJECTED_CODE
+        # 429/503 yanitindaki `Retry-After` (saniye); yoksa None.
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _parse_retry_after(raw: str | None) -> float | None:
+    """`Retry-After` basligini saniyeye cevirir (delta-seconds VEYA HTTP-date).
+
+    Gecersiz/negatif/asiri buyuk degerler yok sayilir; ust sinir kirpmasi
+    cagiran tarafta (bkz. _retry_delay_seconds) uygulanir.
+    """
+
+    if not raw:
+        return None
+    raw = raw.strip()
+    try:
+        seconds = float(raw)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(raw)
+        except (TypeError, ValueError):
+            return None
+        if when is None:
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        seconds = (when - _now()).total_seconds()
+    if seconds <= 0 or seconds != seconds:  # noqa: PLR0124 - NaN kontrolu
+        return None
+    return seconds
 
 
 def _now() -> datetime:
@@ -188,9 +234,15 @@ async def get_owned_analysis(
 async def claim_next_queued(session: AsyncSession, limit: int = CLAIM_BATCH_SIZE) -> list[PageAnalysis]:
     """Bekleyen (queued) analiz islerini kilitleyip 'running' durumuna gecirir."""
 
+    now = _now()
     result = await session.execute(
         select(PageAnalysis)
-        .where(PageAnalysis.status == PageAnalysisStatus.QUEUED)
+        .where(
+            PageAnalysis.status == PageAnalysisStatus.QUEUED,
+            # KALICI gecikmeli yeniden deneme: `next_attempt_at` gelecekteyse is
+            # henuz alinmaz (worker restart olsa bile bu zaman DB'de saklidir).
+            (PageAnalysis.next_attempt_at.is_(None)) | (PageAnalysis.next_attempt_at <= now),
+        )
         .order_by(PageAnalysis.created_at)
         .limit(limit)
         .with_for_update(skip_locked=True)
@@ -198,10 +250,11 @@ async def claim_next_queued(session: AsyncSession, limit: int = CLAIM_BATCH_SIZE
     analyses = list(result.scalars().all())
     for analysis in analyses:
         analysis.status = PageAnalysisStatus.RUNNING
-        analysis.started_at = _now()
+        analysis.started_at = now
         analysis.attempt_count += 1
         analysis.error = None
         analysis.error_code = None
+        analysis.next_attempt_at = None
     await session.flush()
     return analyses
 
@@ -248,20 +301,38 @@ async def _call_analyzer(client: httpx.AsyncClient, url: str) -> dict:
                 detail_payload = response.json().get("detail", response.text)
             except ValueError:
                 detail_payload = response.text
+            typed_code: str | None = None
             if isinstance(detail_payload, dict):
                 raw_code = detail_payload.get("code")
-                code = (
-                    raw_code
-                    if isinstance(raw_code, str) and raw_code in _ALLOWED_ANALYZER_ERROR_CODES
-                    else ANALYZER_REJECTED_CODE
-                )
+                if isinstance(raw_code, str) and raw_code in _ALLOWED_ANALYZER_ERROR_CODES:
+                    typed_code = raw_code
                 message = detail_payload.get("message")
                 detail = message if isinstance(message, str) else "Analyzer istegi tamamlanamadi"
             else:
-                code = None
                 detail = str(detail_payload)
-            raise AnalyzerResponseError(response.status_code, detail, code=code)
+            # Analyzer typed bir kod vermediyse (ya da edge/proxy katmani ureten
+            # taraf ise) durum kodundan ayristirilabilir, guvenli bir sinif
+            # turetilir - 429 asla genel `analyzer_rejected` altinda kaybolmaz.
+            code = typed_code or _status_error_code(response.status_code)
+            retry_after = _parse_retry_after(response.headers.get("retry-after"))
+            raise AnalyzerResponseError(
+                response.status_code, detail, code=code, retry_after_seconds=retry_after
+            )
         return response.json()
+
+
+def _status_error_code(status_code: int) -> str:
+    """HTTP durum kodundan ayristirilabilir, guvenli bir analyzer hata sinifi.
+
+    429 -> `analyzer_rate_limited`; 408/5xx -> `analyzer_unavailable`; diger
+    (beklenmedik) durumlar -> genel `analyzer_rejected`.
+    """
+
+    if status_code == 429:
+        return ANALYZER_RATE_LIMITED_CODE
+    if status_code == 408 or status_code >= 500:
+        return ANALYZER_UNAVAILABLE_CODE
+    return ANALYZER_REJECTED_CODE
 
 
 def _is_retryable_analyzer_failure(exc: Exception) -> bool:
@@ -276,9 +347,32 @@ def _is_retryable_analyzer_failure(exc: Exception) -> bool:
         return True
     if not isinstance(exc, AnalyzerResponseError):
         return False
-    if exc.code == RESPONSE_TOO_LARGE_CODE or "yanit boyutu sinirini asti" in exc.detail.lower():
+    if exc.code in _TERMINAL_ANALYZER_ERROR_CODES or "yanit boyutu sinirini asti" in exc.detail.lower():
         return False
     return exc.status_code in (408, 429) or exc.status_code >= 500
+
+
+def _retry_delay_seconds(attempt_count: int, exc: Exception) -> float:
+    """Bir sonraki denemeye kadar beklenecek KALICI gecikme (saniye).
+
+    `Retry-After` (yalnizca 429 gibi yanitlarda) varsa ust sinirla kirpilarak
+    kullanilir; yoksa yapilandirilabilir geri-cekilme cizelgesi (varsayilan
+    15/45/120) uygulanir. `attempt_count`, o ana kadar YAPILMIS deneme sayisidir
+    (ilk hatadan sonra >= 1); cizelgenin son elemani sonraki tum denemeler icin
+    tekrar kullanilir.
+    """
+
+    schedule = settings.page_analysis_retry_backoff_seconds or (15,)
+    index = min(max(attempt_count - 1, 0), len(schedule) - 1)
+    base_delay = float(schedule[index])
+
+    retry_after = getattr(exc, "retry_after_seconds", None)
+    if retry_after is not None:
+        capped = min(float(retry_after), float(settings.page_analysis_retry_after_cap_seconds))
+        # Retry-After'i dikkate al ama en az temel geri-cekilme kadar bekle
+        # (edge katmaninin cok kisa/sifir onerdigi degerlerde kaskadi onler).
+        return max(capped, base_delay)
+    return base_delay
 
 
 async def _record_analyzer_failure(
@@ -288,6 +382,7 @@ async def _record_analyzer_failure(
 ) -> None:
     retryable = _is_retryable_analyzer_failure(exc)
     attempts_remaining = analysis.attempt_count < settings.page_analysis_max_attempts
+    status_code = getattr(exc, "status_code", None)
     if isinstance(exc, AnalyzerResponseError):
         analysis.error_code = exc.code[:100]
         # Yeni typed analyzer sozlesmesinde kullaniciya yalnizca bizim sabit,
@@ -299,23 +394,42 @@ async def _record_analyzer_failure(
             else str(exc)
         )
     else:
+        # Timeout/baglanti kopmasi/DNS vb. (httpx.RequestError) -> gecici altyapi.
         analysis.error_code = ANALYZER_UNAVAILABLE_CODE
         analysis.error = str(exc)
     if retryable and attempts_remaining:
+        delay = _retry_delay_seconds(analysis.attempt_count, exc)
+        next_attempt_at = _now() + timedelta(seconds=delay)
         analysis.status = PageAnalysisStatus.QUEUED
         analysis.started_at = None
         analysis.finished_at = None
+        analysis.next_attempt_at = next_attempt_at
+        retry_after = getattr(exc, "retry_after_seconds", None)
         logger.warning(
-            "analiz gecici hatadan sonra yeniden kuyruga alindi (id=%s, deneme=%s/%s): %s",
+            "analiz gecici hatadan sonra gecikmeli yeniden denenecek "
+            "(id=%s, code=%s, status=%s, deneme=%s/%s, sonraki=%s, gecikme=%.0fs, retry_after=%s)",
             analysis.id,
+            analysis.error_code,
+            status_code,
             analysis.attempt_count,
             settings.page_analysis_max_attempts,
-            exc,
+            next_attempt_at.isoformat(),
+            delay,
+            f"{retry_after:.0f}s" if retry_after is not None else "-",
         )
     else:
         analysis.status = PageAnalysisStatus.FAILED
         analysis.finished_at = _now()
-        logger.warning("analiz basarisiz (id=%s): %s", analysis.id, exc)
+        analysis.next_attempt_at = None
+        logger.warning(
+            "analiz terminal hata (id=%s, code=%s, status=%s, deneme=%s/%s): %s",
+            analysis.id,
+            analysis.error_code,
+            status_code,
+            analysis.attempt_count,
+            settings.page_analysis_max_attempts,
+            exc,
+        )
     await session.flush()
 
 
@@ -542,9 +656,13 @@ async def reap_stale_running(
         if analysis.attempt_count < max_attempts:
             analysis.status = PageAnalysisStatus.QUEUED
             analysis.started_at = None
+            # Takilan is hemen (gecikmesiz) yeniden alinabilir olmali - bu bir
+            # hiz-limiti degil, worker cokmesinden kurtarmadir.
+            analysis.next_attempt_at = None
         else:
             analysis.status = PageAnalysisStatus.FAILED
             analysis.error = "Zaman asimi: maksimum deneme sayisina ulasildi"
+            analysis.next_attempt_at = None
             analysis.finished_at = _now()
         await session.flush()
 

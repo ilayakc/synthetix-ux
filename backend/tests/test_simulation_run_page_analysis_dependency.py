@@ -315,6 +315,54 @@ async def test_oversized_document_failure_is_specific_non_retryable(
     assert failure_code == "page_analysis_response_too_large"
 
 
+async def test_rate_limited_failure_is_specific_and_retryable(
+    session: AsyncSession, organization: Organization
+):
+    """Uc otomatik 429 sonrasi terminal FAILED olsa bile: kod ayristirilabilir
+    (`page_analysis_rate_limited`), mesaj genel degil ve run RETRYABLE kalir."""
+
+    analysis = await _make_page_analysis(
+        session,
+        organization,
+        status=PageAnalysisStatus.FAILED,
+        features=None,
+        error_code="analyzer_rate_limited",
+    )
+    run = await _make_run(session, organization, page_analysis_id=analysis.id)
+
+    assert await simulation_worker.fail_runs_blocked_by_failed_page_analysis(session) == 1
+    await session.refresh(run)
+    retryable, failure_code = simulation_worker.classify_run_failure(run)
+
+    assert run.status == SimulationStatus.FAILED
+    assert "yogundu" in (run.error or "")
+    assert "Bagli sayfa analizi basarisiz" not in (run.error or "")  # genel mesaj YOK
+    assert retryable is True
+    assert failure_code == "page_analysis_rate_limited"
+
+
+async def test_analyzer_unavailable_failure_is_specific_and_retryable(
+    session: AsyncSession, organization: Organization
+):
+    analysis = await _make_page_analysis(
+        session,
+        organization,
+        status=PageAnalysisStatus.FAILED,
+        features=None,
+        error_code="analyzer_unavailable",
+    )
+    run = await _make_run(session, organization, page_analysis_id=analysis.id)
+
+    assert await simulation_worker.fail_runs_blocked_by_failed_page_analysis(session) == 1
+    await session.refresh(run)
+    retryable, failure_code = simulation_worker.classify_run_failure(run)
+
+    assert run.status == SimulationStatus.FAILED
+    assert "ulasilamadi" in (run.error or "")
+    assert retryable is True
+    assert failure_code == "page_analysis_unavailable"
+
+
 async def test_ab_one_side_page_analysis_failure_releases_full_group(
     session: AsyncSession, organization: Organization
 ):

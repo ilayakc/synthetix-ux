@@ -150,6 +150,17 @@ class Settings(BaseSettings):
     analyzer_device_network_timeout_seconds: int = 90
     page_analysis_max_attempts: int = 3
     page_analysis_stale_timeout_seconds: int = 120
+    # URL analiz (analyzer) gecici hata geri-cekilmesi: her yeniden deneme icin
+    # KALICI (DB'de `page_analyses.next_attempt_at` olarak saklanan) gecikme.
+    # Cron kuyrugu ~3 saniyede bir yoklar; gecikme olmadan ayni is 3 saniyede uc
+    # kez cagrilirdi (uretimde gorulen 429 kaskadinin asil nedeni - bkz.
+    # app.services.page_analysis._record_analyzer_failure). Liste, o ana kadarki
+    # deneme sayisina gore okunur; son eleman sonraki tum denemeler icin tekrar
+    # kullanilir. Testler kisa degerlerle override edebilir.
+    page_analysis_retry_backoff_seconds: tuple[int, ...] = (15, 45, 120)
+    # 429 yanitindaki `Retry-After` dikkate alinir ama sinirsiz beklenmez; asiri
+    # buyuk/kotu niyetli degerlere karsi bu ust sinirla kirpilir.
+    page_analysis_retry_after_cap_seconds: int = 300
     page_analysis_screenshot_retention_seconds: int = 24 * 60 * 60
     # Paket 4 Final: tamamlanmis bir Rapor'a bagli PageAnalysis'in ekran
     # goruntusu, baglanti olmayan kisa-omurlu capture'lardan (yukaridaki

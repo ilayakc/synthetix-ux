@@ -4,12 +4,18 @@
 #
 # NOTE: Render's free plan has NO Background Worker instance type, so there is
 # intentionally NO `type: worker` resource here. The single web service below
-# runs the FastAPI API, the ARQ simulation worker AND nginx together in one
-# container via deploy/render_free_start.py (a supervisor that fails the
-# container if any child dies). Do NOT add a separate paid `type: worker` and
-# do NOT duplicate the db/queue/analyzer resources - that breaks the free
-# Blueprint. Only these four resources exist: this web service, the analyzer
-# web service, the Postgres database and the Valkey key-value queue.
+# runs the FastAPI API, the ARQ simulation worker, the Playwright analyzer AND
+# nginx together in one container via deploy/render_free_start.py (a supervisor
+# that fails the container if any child dies). Do NOT add a separate paid
+# `type: worker` and do NOT duplicate the db/queue resources - that breaks the
+# free Blueprint. Only these THREE resources exist: this web service, the
+# Postgres database and the Valkey key-value queue.
+#
+# The analyzer is deliberately NOT a separate web service: Render free cannot
+# serve private traffic, so a separate free analyzer would only be reachable
+# over the PUBLIC internet, behind Render/Cloudflare's edge - which returned
+# HTTP 429 before requests reached the analyzer app. It now runs in-container
+# on 127.0.0.1:8100 (bkz. app.render_free_launcher), reached via loopback.
 
 previews:
   generation: off
@@ -67,8 +73,18 @@ services:
           type: keyvalue
           name: synthetix-ux-ily-queue
           property: connectionString
+      # Analyzer artik ayni container'da, yalnizca loopback'te dinler (public
+      # edge/429 YOK - bkz. dosya basligi ve app.render_free_launcher).
       - key: ANALYZER_BASE_URL
-        value: https://synthetix-ux-ily-analyzer.onrender.com
+        value: http://127.0.0.1:8100
+      # In-container analyzer subprocess'inin okudugu limitler (eski ayri
+      # analyzer servisinden tasindi; bkz. analyzer/app/config.py).
+      - key: MAX_CONCURRENT_ANALYSES
+        value: "1"
+      - key: NAVIGATION_TIMEOUT_SECONDS
+        value: "45"
+      - key: ACCESSIBILITY_SCAN_TIMEOUT_SECONDS
+        value: "20"
       - key: ANALYZER_REQUEST_TIMEOUT_SECONDS
         value: "180"
       - key: PAGE_ANALYSIS_STALE_TIMEOUT_SECONDS
@@ -101,31 +117,6 @@ services:
         value: medium
       - key: OPENAI_MAX_OUTPUT_TOKENS
         value: "4000"
-
-  - type: web
-    name: synthetix-ux-ily-analyzer
-    runtime: docker
-    plan: free
-    region: frankfurt
-    dockerfilePath: ./analyzer/Dockerfile
-    dockerContext: ./analyzer
-    healthCheckPath: /health
-    envVars:
-      - key: PORT
-        value: "10000"
-      - key: ENVIRONMENT
-        value: production
-      - key: MAX_CONCURRENT_ANALYSES
-        value: "1"
-      - key: NAVIGATION_TIMEOUT_SECONDS
-        value: "45"
-      - key: ACCESSIBILITY_SCAN_TIMEOUT_SECONDS
-        value: "20"
-      - key: ANALYZER_SHARED_TOKEN
-        fromService:
-          type: web
-          name: synthetix-ux-ily
-          envVarKey: ANALYZER_SHARED_TOKEN
 
   - type: keyvalue
     name: synthetix-ux-ily-queue
