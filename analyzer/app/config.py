@@ -41,6 +41,40 @@ class Settings(BaseSettings):
     # --- Eszamanlilik ve kaynak sinirlari ---
     max_concurrent_analyses: int = 2
 
+    # Tum analiz (navigasyon + scroll + screenshot + axe) icin toplam sure
+    # butcesi. Ayri ayri navigation/axe timeout'larina EK olarak, hicbir tekil
+    # analizin bu sureyi asmamasini garanti eder (finally cleanup her zaman
+    # calisir). Backend'in analyzer_request_timeout'undan (varsayilan 180s)
+    # KISA olmalidir ki backend timeout'a dusmeden analyzer typed hata donsun.
+    analysis_total_timeout_seconds: int = 150
+
+    # --- Bellek koruma (Render ucretsiz 512 MB) ---
+    # Guard'i tamamen kapatmak icin (ör. bellek limiti bol olan ortamlar) tek
+    # anahtar. Acikken cgroup limiti tespit edilir; edilemezse fallback kullanilir.
+    memory_guard_enabled: bool = True
+    # Container bellek limiti tespit edilemezse (cgroup 'max' dondururse, ör.
+    # yerel Docker'da --memory verilmemisse) kullanilacak geri-donus limiti.
+    container_memory_limit_mb: int = 512
+    # ADMISSION: Chromium ACILMADAN once container'da en az bu kadar BOS bellek
+    # yoksa analiz baslatilmaz - hemen retryable typed hata (analyzer_memory_
+    # pressure) donulur. Hafif bir sayfanin baslamasina izin verecek kadar kucuk,
+    # ama container zaten yukluyken (es zamanli worker/OpenCV, onceki analiz)
+    # yeni bir Chromium acmayi engelleyecek kadar buyuk secilir.
+    memory_admission_min_free_mb: int = 110
+    # WATCHDOG: analiz SIRASINDA container bellegi limitin bu kesrini asarsa
+    # (kernel OOM-kill'den ONCE) browser derhal kapatilir ve analiz retryable
+    # typed hatayla iptal edilir - boylece agir bir sayfa TUM container'i (API+
+    # worker+nginx) cokertmez. Kalan ~%12 marj, iptalin OOM'dan once tamamlanmasi
+    # icin gerekli emniyet payidir.
+    # 0.83: agir bir sayfada anon bellek limitin %83'unu (512'de ~425 MB) asinca
+    # tripler. Hafif sayfalarin anon'u ~315 MB oldugu icin onlar ETKILENMEZ;
+    # kalan ~%17 (~87 MB) marj, iki poll arasindaki ani anon artisinin (image
+    # decode) kernel OOM-kill'e ulasmadan yakalanmasi icin emniyet payidir.
+    # 512 MB'lik full container'da (API+worker+analyzer+nginx) OOM-kill/restart
+    # OLMADAN kontrollu iptal olctuldu (restart_count=0, oom_killed=false).
+    memory_guard_trip_pct: float = 0.83
+    memory_guard_poll_ms: int = 80
+
     # --- Ekran goruntusu saklama ---
     screenshot_retention_seconds: int = 24 * 60 * 60
 

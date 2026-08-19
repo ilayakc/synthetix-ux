@@ -32,7 +32,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
+import os
+import signal
+from collections.abc import AsyncGenerator
 
 from axe_playwright_python.async_playwright import Axe
 from playwright.async_api import Error as PlaywrightError
@@ -115,10 +119,16 @@ RESPONSE_TOO_LARGE_CODE = "response_too_large"
 # Chromium'un analiz sirasinda cokmesi/hedefin kapanmasi (cogunlukla bellek
 # baskisi altinda) - GECICI kabul edilir (backend 502'yi yeniden dener).
 BROWSER_CRASHED_CODE = "browser_crashed"
+# Container bellek koruma esigi (admission VEYA calisma-ani watchdog) devreye
+# girdi - GECICI: is retryable typed hatayla durur, container COKMEZ.
+ANALYZER_MEMORY_PRESSURE_CODE = "analyzer_memory_pressure"
+# Analizin toplam sure butcesi asildi - GECICI (yeniden denenebilir).
+ANALYZER_TIMEOUT_CODE = "analyzer_timeout"
 EMPTY_PAGE_SNAPSHOT_MESSAGE = (
     "Sayfa acildi ancak analiz edilebilir metin veya etkilesim alani yuklenmedi. "
     "Site otomatik tarayicilara bos icerik donduruyor olabilir."
 )
+_MEMORY_PRESSURE_MESSAGE = "Sunucu bellek baskisi altinda; analiz guvenle durduruldu"
 
 
 class AnalysisError(Exception):
@@ -128,6 +138,209 @@ class AnalysisError(Exception):
         self.reason = reason
         self.code = code
         super().__init__(reason)
+
+
+# --- Container bellek koruma (Render ucretsiz 512 MB) ------------------------
+#
+# Sorun: tek 512 MB'lik container'da API + ARQ worker + analyzer + nginx birlikte
+# calisir; agir bir sayfada Chromium tek basina ~400 MB'a ulasabilir. V8 heap
+# siniri (`--js-flags`) Chromium'un TOPLAM (native) bellegini SINIRLAMAZ ve OS
+# container'i OOM-kill ederse `browser_crashed` handler'i CALISAMAZ (kernel
+# sureci oldurur, container yeniden baslar). Bu yuzden iki katmanli, cgroup
+# tabanli bir koruma uygulanir:
+#
+# 1. ADMISSION: Chromium ACILMADAN once bos bellek yetersizse hemen typed
+#    retryable hata (analyzer_memory_pressure) - container zaten yukluyken
+#    (es zamanli worker/OpenCV isi, onceki analizden kalan) yeni Chromium acmaz.
+# 2. WATCHDOG: analiz SIRASINDA container bellegi limitin `trip_pct`'ini asarsa
+#    (kernel OOM-kill esiginden ONCE) browser derhal kapatilir; is typed
+#    retryable hatayla iptal edilir. Boylece agir bir sayfa TUM container'i
+#    cokertmek yerine yalnizca KENDI isini kontrollu bicimde dusurur.
+
+
+def _read_cgroup_int(path: str) -> int | None:
+    try:
+        with open(path) as fh:
+            raw = fh.read().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    if raw == "max":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _cgroup_current_bytes() -> int | None:
+    """Container'in ANLIK toplam bellek kullanimi (cgroup v2 memory.current /
+    v1 usage) - page cache DAHIL (yalnizca raporlama/tani icin)."""
+
+    for path in ("/sys/fs/cgroup/memory.current", "/sys/fs/cgroup/memory/memory.usage_in_bytes"):
+        value = _read_cgroup_int(path)
+        if value is not None:
+            return value
+    return None
+
+
+def _read_cgroup_stat() -> dict[str, int]:
+    for path in ("/sys/fs/cgroup/memory.stat", "/sys/fs/cgroup/memory/memory.stat"):
+        try:
+            with open(path) as fh:
+                stat: dict[str, int] = {}
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) == 2:
+                        try:
+                            stat[parts[0]] = int(parts[1])
+                        except ValueError:
+                            continue
+                if stat:
+                    return stat
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+    return {}
+
+
+def _cgroup_working_set_bytes() -> int | None:
+    """OOM-KILL ile ILGILI (geri-KAZANILAMAZ) bellek.
+
+    Chromium'un ~300 MB'lik ikilisi/kaynaklari cgroup'a page CACHE (file-backed)
+    olarak yuklenir ve `memory.current`'i sisirir; fakat kernel bunu OOM'dan
+    ONCE geri kazanir - yani gercek baski DEGILDIR. Bu yuzden trip karari
+    ANONYMOUS bellege (`anon`; heap/stack - geri kazanilamaz, Chromium'un GERCEK
+    calisma bellegi) dayanir; tum file cache (aktif+pasif) haric tutulur. Bu
+    olmadan, sicak file-cache hafif bir sayfada bile yanlis 'bellek baskisi'
+    tetikler (gozlemlenen hata). anon yoksa working-set fallback'i kullanilir."""
+
+    stat = _read_cgroup_stat()
+    # cgroup v2: 'anon'; v1: 'rss' (ikisi de anonymous bellek).
+    anon = stat.get("anon", stat.get("rss"))
+    if anon is not None:
+        return anon + stat.get("unevictable", 0)
+    current = _cgroup_current_bytes()
+    if current is None:
+        return None
+    inactive_file = stat.get("inactive_file", stat.get("total_inactive_file", 0))
+    return max(0, current - inactive_file)
+
+
+def _kill_chromium_processes() -> int:
+    """Container'daki tum Chromium süreçlerini SIGKILL eder (artik/zombie temizligi).
+
+    GUVENLIDIR: analyzer eszamanliligi 1'dir (`_semaphore`), bu yüzden herhangi
+    bir chromium süreci DAIMA o anki (iptal edilen) analize aittir. Watchdog
+    browser'i kapattiktan sonra kalan stragglerlari kesin biçimde reap eder -
+    aksi halde sizan süreçler bellegi tutmaya devam eder (gözlemlenen hata)."""
+
+    killed = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/comm") as fh:
+                comm = fh.read().strip()
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+        if "chrome" in comm or "headless" in comm:
+            with contextlib.suppress(OSError):
+                os.kill(int(pid), signal.SIGKILL)
+                killed += 1
+    return killed
+
+
+def _cgroup_limit_bytes() -> int | None:
+    """Container bellek limiti; 'max'/sinirsiz ise None (cgroup v1 dev sentineli haric)."""
+
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        value = _read_cgroup_int(path)
+        # cgroup v1 sinirsizi ~2^63 gibi cok buyuk bir sentinelle temsil eder.
+        if value is not None and value < (1 << 62):
+            return value
+    return None
+
+
+def _effective_limit_bytes() -> int:
+    detected = _cgroup_limit_bytes()
+    if detected is not None:
+        return detected
+    return settings.container_memory_limit_mb * 1024 * 1024
+
+
+def _enforce_memory_admission() -> None:
+    """Chromium acilmadan once yeterli bos bellek yoksa retryable hata firlatir."""
+
+    if not settings.memory_guard_enabled:
+        return
+    working_set = _cgroup_working_set_bytes()
+    if working_set is None:  # cgroup okunamiyorsa (guard'i tamamen bypass etme)
+        return
+    limit = _effective_limit_bytes()
+    free_mb = (limit - working_set) / (1024 * 1024)
+    if free_mb < settings.memory_admission_min_free_mb:
+        logger.warning(
+            "bellek admission reddi: bos=%.0fMB < esik=%sMB (limit=%.0fMB, working_set=%.0fMB)",
+            free_mb,
+            settings.memory_admission_min_free_mb,
+            limit / 1024 / 1024,
+            working_set / 1024 / 1024,
+        )
+        raise AnalysisError(_MEMORY_PRESSURE_MESSAGE, code=ANALYZER_MEMORY_PRESSURE_CODE)
+
+
+async def _memory_watchdog(browser, state: dict[str, bool]) -> None:
+    """Analiz sirasinda container working-set bellegini izler; esik asilirsa
+    browser'i kapatir VE artik chromium süreçlerini kesin biçimde reap eder."""
+
+    limit = _effective_limit_bytes()
+    trip = int(limit * settings.memory_guard_trip_pct)
+    interval = max(0.02, settings.memory_guard_poll_ms / 1000)
+    while True:
+        await asyncio.sleep(interval)
+        working_set = _cgroup_working_set_bytes()
+        if working_set is not None and working_set >= trip:
+            state["tripped"] = True
+            logger.warning(
+                "bellek koruma esigi asildi (working_set=%.0fMB >= trip=%.0fMB, limit=%.0fMB); "
+                "browser kapatiliyor + artik chromium reap - container OOM-kill'den korunuyor",
+                working_set / 1024 / 1024,
+                trip / 1024 / 1024,
+                limit / 1024 / 1024,
+            )
+            await _safe_close_browser(browser)
+            # Graceful close mid-analiz stragglerlar birakabilir; kesin reap et.
+            killed = _kill_chromium_processes()
+            if killed:
+                logger.warning("watchdog: %d artik chromium süreci SIGKILL edildi", killed)
+            return
+
+
+@contextlib.asynccontextmanager
+async def _guarded_browser(host_rule: str) -> AsyncGenerator[tuple[object, dict[str, bool]]]:
+    """Admission + watchdog + garantili cleanup ile bir Chromium browser saglar.
+
+    `yield` edilen `state["tripped"]`, watchdog'un devreye girip girmedigini
+    belirtir; cagiran taraf hata sinifini buna gore (memory_pressure vs
+    browser_crashed) secer.
+    """
+
+    _enforce_memory_admission()
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=_chromium_launch_args(host_rule))
+        state: dict[str, bool] = {"tripped": False}
+        watchdog = (
+            asyncio.create_task(_memory_watchdog(browser, state))
+            if settings.memory_guard_enabled
+            else None
+        )
+        try:
+            yield browser, state
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watchdog
+            await _safe_close_browser(browser)
 
 
 def _is_empty_page_snapshot(features: dict) -> bool:
@@ -1013,20 +1226,18 @@ async def analyze_device_network(url: str, profile_keys: list[str]) -> DeviceNet
     results: list[DeviceNetworkProfileResult] = []
 
     async with _semaphore:
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=True,
-                args=_chromium_launch_args(host_rule),
-            )
-            try:
-                for profile_key in profile_keys:
-                    profile = DEVICE_NETWORK_PROFILES[profile_key]
-                    result = await _measure_device_network_profile(browser, validated, profile_key, profile)
-                    if not result.succeeded:
-                        warnings.append(f"Profil basarisiz ({profile_key}): {result.error}")
-                    results.append(result)
-            finally:
-                await _safe_close_browser(browser)
+        async with _guarded_browser(host_rule) as (browser, state):
+            for profile_key in profile_keys:
+                if state["tripped"]:
+                    warnings.append(
+                        f"Profil atlandi ({profile_key}): sunucu bellek baskisi altinda"
+                    )
+                    continue
+                profile = DEVICE_NETWORK_PROFILES[profile_key]
+                result = await _measure_device_network_profile(browser, validated, profile_key, profile)
+                if not result.succeeded:
+                    warnings.append(f"Profil basarisiz ({profile_key}): {result.error}")
+                results.append(result)
 
     failed_count = sum(1 for r in results if not r.succeeded)
     error_rate = round(failed_count / len(results), 4) if results else 0.0
@@ -1051,31 +1262,54 @@ async def analyze_url(url: str) -> PageFeatureSnapshotV1:
     pinned_ip = validated.resolved_ips[0]
     host_rule = f"MAP {validated.hostname} {pinned_ip}"
 
+    # `_semaphore` (max_concurrent_analyses) tek analyzer surecinde global
+    # eszamanlilik sinirini uygular; Render ucretsizde launcher TEK analyzer
+    # sureci baslattigi icin bu, container genelinde otoriter global sinirdir.
     async with _semaphore:
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(
-                headless=True,
-                args=_chromium_launch_args(host_rule),
-            )
+        async with _guarded_browser(host_rule) as (browser, state):
             try:
-                return await _run_analysis(browser, validated)
+                # Toplam sure butcesi: tekil navigation/axe timeout'larina EK
+                # ust sinir - finally cleanup her durumda calisir.
+                return await asyncio.wait_for(
+                    _run_analysis(browser, validated),
+                    timeout=settings.analysis_total_timeout_seconds,
+                )
             except (AnalysisError, UnsafeUrlError):
+                # Watchdog analizi kestiyse (browser kapatildi -> _run_analysis
+                # AnalysisError'a sarmalanmis bir PlaywrightError firlatabilir),
+                # hatayi typed bellek-baskisi olarak yeniden sinifla.
+                if state["tripped"]:
+                    raise AnalysisError(
+                        _MEMORY_PRESSURE_MESSAGE, code=ANALYZER_MEMORY_PRESSURE_CODE
+                    ) from None
                 raise
+            except TimeoutError as exc:  # asyncio.wait_for toplam sure asimi
+                if state["tripped"]:
+                    raise AnalysisError(
+                        _MEMORY_PRESSURE_MESSAGE, code=ANALYZER_MEMORY_PRESSURE_CODE
+                    ) from exc
+                raise AnalysisError(
+                    f"Analiz toplam sure sinirini asti ({settings.analysis_total_timeout_seconds}s)",
+                    code=ANALYZER_TIMEOUT_CODE,
+                ) from exc
             except PlaywrightTimeoutError as exc:
                 raise AnalysisError(
                     f"Sayfa zaman asimina ugradi ({settings.navigation_timeout_seconds}s)"
                 ) from exc
             except PlaywrightError as exc:
-                # Renderer/hedef cokmesi (cogunlukla bellek baskisi) - GECICI:
-                # ham istisna/traceback disariya sizmaz, typed & yeniden-denenebilir
-                # bir hataya cevrilir (backend 502 -> analyzer_unavailable).
+                # Watchdog browser'i kapattiysa bu bir bellek-baskisi iptalidir;
+                # aksi halde gercek bir renderer/hedef cokmesidir. Her iki durumda
+                # da GECICI: ham istisna/traceback disariya sizmaz.
+                if state["tripped"]:
+                    logger.warning("analiz bellek koruma nedeniyle iptal edildi: %s", exc)
+                    raise AnalysisError(
+                        _MEMORY_PRESSURE_MESSAGE, code=ANALYZER_MEMORY_PRESSURE_CODE
+                    ) from exc
                 logger.warning("tarayici analiz sirasinda beklenmedik sekilde kapandi: %s", exc)
                 raise AnalysisError(
                     "Tarayici analiz sirasinda beklenmedik sekilde kapandi",
                     code=BROWSER_CRASHED_CODE,
                 ) from exc
-            finally:
-                await _safe_close_browser(browser)
 
 
 __all__ = ["AnalysisError", "analyze_url"]

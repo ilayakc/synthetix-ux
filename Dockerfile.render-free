@@ -62,7 +62,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl libgl1 libglib2.0-0 nginx \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -f /etc/nginx/sites-enabled/default
+    && rm -f /etc/nginx/sites-enabled/default \
+    # nginx varsayilani `worker_processes auto` -> host'un TUM CPU'su kadar worker
+    # (Render'da 30+) acar; tek bir statik/proxy demosu icin gereksiz surec+bellek.
+    # Tek worker yeterli (bkz. gorev talimati: gereken minimum surec sayisi).
+    && sed -i 's/^worker_processes.*/worker_processes 1;/' /etc/nginx/nginx.conf
 
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install -r requirements.txt
@@ -86,7 +90,19 @@ COPY deploy/render_free_start.py /opt/synthetix/render_free_start.py
 # paketi asla ayni surecte cakismaz.
 COPY analyzer/app /opt/analyzer/app
 
+# tini (ayri, GEC katman - pip cache'ini bozmaz). PID 1 zombie-reaper icin.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+
 EXPOSE 10000
 STOPSIGNAL SIGTERM
 
+# tini'yi PID 1 yapar: Chromium her analizden sonra PID 1'e ORFAN kalan
+# yardimci surecler birakir; Python supervisor bunlari (kendi Popen
+# cocuklari disindaki orfanlari) reap ETMEZ -> zamanla ZOMBIE birikir (uzun
+# uptime'da PID tukenmesi). tini `-g` sinyalleri surec grubuna iletir ve tum
+# orfan zombie'leri kesin biçimde reap eder. Supervisor'in kendi cocuklari
+# (uvicorn/arq/nginx) hala Python tarafindan izlenir - cakisma YOK.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["python", "/opt/synthetix/render_free_start.py"]

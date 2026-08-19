@@ -6,6 +6,18 @@ import type { StepProps } from "./types";
 const LEGACY_AI_DRAFT_WARNING =
   "Bu taslakta artık desteklenmeyen bir AI tasarım denemesi bulunuyor. Devam etmek için URL veya ekran görüntüsü seçin.";
 
+// Ücretsiz demo, tek sayfayı sıkı bir bellek bütçesinde (512 MB) gerçek bir
+// tarayıcıyla analiz eder. Hafif/orta sayfalar güvenilir çalışır; çok ağır
+// sayfalar güvenli sınır nedeniyle analizi tamamlayamayıp KONTROLLÜ bir hata
+// verebilir (kullanılan hak iade edilir). Kullanıcıyı test başlatmadan önce
+// desteklenen kapsam hakkında bilgilendirir (bkz. docs/render-free.md).
+const URL_SCOPE_NOTICE =
+  "Ücretsiz demo, tek bir sayfayı hafif kaynak kullanımıyla analiz eder. " +
+  "Kurumsal/tanıtım ve orta ağırlıktaki siteler güvenilir çalışır. Çok ağır " +
+  "sayfalar (çok sayıda büyük görsel/üçüncü taraf içerik barındıran bazı " +
+  "e-ticaret sayfaları) güvenli bellek sınırı nedeniyle analizi tamamlayamayıp " +
+  "kontrollü bir hata verebilir; bu durumda kullanılan hak otomatik iade edilir.";
+
 export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: StepProps) {
   const isAbComparison = payload.test_type === "ab_comparison";
   const isAccessibilityPrecheck = payload.test_type === "accessibility_precheck";
@@ -34,6 +46,9 @@ export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: S
   if (isAbComparison) {
     return (
       <div>
+        <p className="auth-notice" role="note">
+          {URL_SCOPE_NOTICE}
+        </p>
         <p className="auth-notice">
           A/B testi iki farklı şirketi karşılaştırmak için değil, aynı ürünün kontrollü bir tasarım
           değişikliğini ölçmek içindir. Varyant A orijinal tasarım; Varyant B ise buton rengi, CTA
@@ -101,6 +116,9 @@ export default function Step2Urls({ payload, fieldErrors, onChange, draftId }: S
 
   return (
     <div>
+      <p className="auth-notice" role="note">
+        {URL_SCOPE_NOTICE}
+      </p>
       <DesignSourcePicker
         label="Tasarım kaynağı"
         sourceType={payload.current_source_type}
