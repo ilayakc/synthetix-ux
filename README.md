@@ -1,12 +1,13 @@
 # Synthetix UX
 
-Çok kiracılı (multi-tenant) bir **B2B SaaS sentetik UX test platformu**.
-Kullanıcılar bir web sayfası URL'si ya da yükledikleri bir tasarım ekran
-görüntüsü üzerinden persona tabanlı sentetik simülasyonlar çalıştırır;
-platform bunları **açıklanabilir, deterministik, kalibre edilmemiş bir
-heuristic simülasyon motoruyla** (bkz. [docs/methodology.md](docs/methodology.md))
-skorlar, görsel katmanlarla (sentetik dikkat/CTA overlay'i) raporlar ve
-isteğe bağlı bir AI açıklama/raporlama katmanıyla doğal dile çevirir.
+**Synthetix UX**, bir web sayfasının veya yüklenen bir tasarım görselinin
+kullanıcı deneyimini (UX) *sentetik* personalarla test etmeye yarayan çok
+kiracılı (multi-tenant) bir **B2B SaaS platformudur**. Kullanıcı bir URL ya
+da ekran görüntüsü verir; platform bunu açıklanabilir, deterministik bir
+**sezgisel (heuristic)** simülasyon motoruyla analiz eder. Sonuç; skorları,
+görsel katmanları (sentetik dikkat/CTA overlay'i) ve isteğe bağlı bir AI
+açıklama katmanını içeren okunabilir bir rapora dönüşür (motorun kapsamı ve
+sınırları için bkz. [docs/methodology.md](docs/methodology.md)).
 
 > **Bilimsel dürüstlük uyarısı.** Bu motor **gerçek insan davranışı
 > üretmez**. Tüm çıktılar "sentetik senaryo tahmini"dir ve gerçek
@@ -267,8 +268,9 @@ limitleri için bkz. [docs/security.md](docs/security.md).
 
 ## AI katmanları
 
-Üç **bağımsız**, ayrı yapılandırılan AI özelliği vardır; birinin etkin
-olması diğerini otomatik açmaz (bkz. [docs/ai-policy.md](docs/ai-policy.md)):
+Birbirinden **bağımsız**, ayrı yapılandırılan AI özellikleri vardır; birinin
+etkin olması diğerini otomatik açmaz. Hepsi varsayılan olarak kapalı ya da
+yerel/deterministik modda çalışır (bkz. [docs/ai-policy.md](docs/ai-policy.md)):
 
 1. **AI destekli açıklama (hızlı rapor özeti)** — zaten hesaplanmış rapor
    metriklerini doğal dile çevirir; **karar vermez ve hiçbir metriği yeniden
@@ -331,8 +333,9 @@ değişkenleriyle başlangıç hesapları sağlanabilir.
   (`127.0.0.1:8100`) çalışan Playwright analyzer; ücretsiz PostgreSQL ve
   Redis-uyumlu Key Value ile sunum/değerlendirme amaçlı sıfır maliyetli bir
   topoloji (`render.yaml`, `Dockerfile.render-free`). Toplam **yalnızca üç
-  Render kaynağı** vardır; analyzer ayrı bir web servisi değildir (ayrı servis
-  daha önce public edge kaynaklı HTTP 429'a yol açıyordu). Render ücretsiz
+  Render kaynağı** vardır; analyzer ayrı bir web servisi değil, aynı container
+  içinde çalışır (bu tasarım tercihinin gerekçesi için bkz.
+  [docs/render-free.md](docs/render-free.md)). Render ücretsiz
   planı 512 MB RAM ile sınırlı olduğu için analyzer varsayılan olarak lite
   (viewport tabanlı) modda çalışır. Kurulum adımları, sorun giderme ve ücretsiz
   plan sınırları için bkz. [docs/render-free.md](docs/render-free.md). Render
@@ -364,7 +367,7 @@ synthetix-ux/
 │  │  ├─ routers/          # API uç noktaları (auth, projects, simulations, reports, billing, admin, ...)
 │  │  ├─ models/           # SQLAlchemy modelleri
 │  │  ├─ services/         # İş mantığı (ai_pipeline, design_generation, chip_ledger, ...)
-│  │  ├─ engine/           # Heuristic sentetik simülasyon motoru
+│  │  ├─ engine/           # Sezgisel (heuristic) sentetik simülasyon motoru
 │  │  └─ worker.py         # arq WorkerSettings
 │  └─ migrations/          # Alembic
 ├─ frontend/               # React + TypeScript + Vite
@@ -387,9 +390,9 @@ synthetix-ux/
 | Belge | İçerik |
 | ----- | ------ |
 | [docs/architecture.md](docs/architecture.md) | Servisler, veri modeli (ER), tenant sınırı, kimlik/oturum, RBAC |
-| [docs/methodology.md](docs/methodology.md) | Heuristic simülasyon motorunun girdileri, kuralları, varsayımları, sınırları |
+| [docs/methodology.md](docs/methodology.md) | Sezgisel (heuristic) simülasyon motorunun girdileri, kuralları, varsayımları, sınırları |
 | [docs/security.md](docs/security.md) | SSRF tehdit modeli, analyzer/görsel analiz güvenliği, saklama süreleri |
-| [docs/ai-policy.md](docs/ai-policy.md) | İki bağımsız AI katmanının kapsamı, sağlayıcı modeli, denetim |
+| [docs/ai-policy.md](docs/ai-policy.md) | Bağımsız AI katmanlarının kapsamı, sağlayıcı modeli, denetim |
 | [docs/product-rules.md](docs/product-rules.md) | Değişmez ticari/bilimsel dürüstlük kuralları |
 | [docs/scientific-integrity.md](docs/scientific-integrity.md) | Bilimsel iddia sınırları |
 | [docs/testing.md](docs/testing.md) | Test paketi, `verify.ps1` bayrakları, hangi testin neyi koruduğu |
@@ -415,8 +418,8 @@ değildir:
   aşırı ağır veya erişimi engellenmiş sayfalar pasif analyzer tarafından
   okunamayabilir; bu beklenen bir sınırdır ve tüm ürünün çalışmadığı anlamına
   gelmez.
-- **Sentetik sonuçlar.** Motor kalibre edilmemiş, deterministik bir heuristic
-  simülasyondur; **gerçek kullanıcı tıklaması, gerçek göz takibi verisi veya
+- **Sentetik sonuçlar.** Motor kalibre edilmemiş, deterministik bir sezgisel
+  (heuristic) simülasyondur; **gerçek kullanıcı tıklaması, gerçek göz takibi verisi veya
   gerçek insan davranışı üretmez** ve gerçek kullanılabilirlik/A-B testinin
   yerine geçmez (bkz. [docs/scientific-integrity.md](docs/scientific-integrity.md)).
 - **AI katmanları ayrıca ücretlidir.** Render kaynakları ücretsiz olsa da AI
@@ -428,15 +431,20 @@ değildir:
 
 ## Kapsam dışı
 
+<details>
+<summary>Bu aşamada bilinçli olarak kapsam dışı bırakılanlar (aç/kapa)</summary>
+
 Bu aşamada bulunmayanlar: Kafka, ChromaDB/RAG, serbest sohbet botu, ödeme
 sağlayıcısı entegrasyonu ve **gerçek (kalibre edilmiş) bir simülasyon
-motoru** — mevcut heuristic motor kalibre edilmemiştir ve gerçek insan
-davranışı üretmez (bkz. [docs/methodology.md](docs/methodology.md)
+motoru** — mevcut sezgisel (heuristic) motor kalibre edilmemiştir ve gerçek
+insan davranışı üretmez (bkz. [docs/methodology.md](docs/methodology.md)
 "Kalibrasyon planı"). Kimlik doğrulama tarafında Google OAuth/SSO, davet
 e-postası ve gerçek parola sıfırlama e-posta gönderimi altyapı olarak
 hazırdır ancak üretim e-posta sağlayıcısı bağlı değildir. AI katmanları
 varsayılan olarak harici bir sağlayıcıya bağlı değildir; hiçbir sentetik
 sonuç gerçek insan kullanıcı davranışı olarak sunulamaz.
+
+</details>
 
 ---
 
