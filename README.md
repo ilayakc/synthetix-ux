@@ -422,10 +422,13 @@ değildir:
   (heuristic) simülasyondur; **gerçek kullanıcı tıklaması, gerçek göz takibi verisi veya
   gerçek insan davranışı üretmez** ve gerçek kullanılabilirlik/A-B testinin
   yerine geçmez (bkz. [docs/scientific-integrity.md](docs/scientific-integrity.md)).
-- **AI katmanları ayrıca ücretlidir.** Render kaynakları ücretsiz olsa da AI
-  açıklama, AI etkileşim ısı haritası ve AI tasarım varyantı özellikleri gerçek
-  bir OpenAI API anahtarı gerektirir; anahtar yapılandırılmadığında bu özellikler
-  devre dışı kalır, ürünün geri kalanı çalışmaya devam eder.
+- **Harici AI sağlayıcıları ayrıca ücretli olabilir.** Yerel ve deterministik
+  AI açıklama modu (`AI_PROVIDER=none`) API anahtarı olmadan çalışır. Gerçek
+  OpenAI tabanlı AI raporu ve AI etkileşim ısı haritası ile uzak sağlayıcı
+  üzerinden tasarım varyantı üretimi, ilgili sağlayıcı yapılandırmasını ve API
+  anahtarını gerektirir. Render kaynakları ücretsiz olsa da bu harici servisler
+  ayrıca ücret oluşturabilir; yapılandırılmadıklarında ürünün yerel ve
+  deterministik özellikleri çalışmaya devam eder.
 
 ---
 
