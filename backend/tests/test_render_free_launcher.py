@@ -9,14 +9,21 @@ kapatma calisir.
 
 from __future__ import annotations
 
+import signal
 import subprocess
 
+import pytest
+
+from app import render_free_launcher
 from app.render_free_launcher import (
     _SERVICE_CWD,
     Supervisor,
     _child_env,
     _default_spawn,
+    _run_preflight_step,
+    _verify_public_port,
     build_service_commands,
+    main,
 )
 
 
@@ -193,3 +200,183 @@ def test_wait_all_kills_children_that_ignore_terminate():
 
     for proc in supervisor.children.values():
         assert proc.kill_calls == 1
+
+
+def test_start_skips_already_started_service():
+    # Onceden spawn_service ile baslatilan nginx `start()` tarafindan TEKRAR
+    # baslatilmaz (nginx iki kez baslatilmaz).
+    counts: dict[str, int] = {}
+
+    def fake_spawn(name: str, command: list[str]) -> FakeProcess:
+        counts[name] = counts.get(name, 0) + 1
+        return FakeProcess()
+
+    supervisor = Supervisor(build_service_commands(), spawn=fake_spawn)
+    supervisor.spawn_service("frontend")
+    supervisor.start()
+
+    assert counts["frontend"] == 1  # yalnizca bir kez
+    assert set(supervisor.children) == {"backend", "worker", "analyzer", "frontend"}
+
+
+def test_spawn_service_rejects_double_start():
+    supervisor = Supervisor(build_service_commands(), spawn=lambda name, command: FakeProcess())
+    supervisor.spawn_service("frontend")
+    with pytest.raises(RuntimeError):
+        supervisor.spawn_service("frontend")
+
+
+# --- PORT dogrulama --------------------------------------------------------
+
+
+def test_verify_public_port_accepts_10000(monkeypatch):
+    monkeypatch.setenv("PORT", "10000")
+    _verify_public_port()  # firlatmamali
+
+
+def test_verify_public_port_allows_unset(monkeypatch):
+    monkeypatch.delenv("PORT", raising=False)
+    _verify_public_port()  # firlatmamali (ör. yerel calistirma)
+
+
+def test_verify_public_port_rejects_mismatch(monkeypatch):
+    monkeypatch.setenv("PORT", "8080")
+    with pytest.raises(RuntimeError) as exc:
+        _verify_public_port()
+    assert "10000" in str(exc.value)
+
+
+# --- On hazirlik (preflight) adimlari --------------------------------------
+
+
+def test_preflight_step_raises_clear_error_on_failure(monkeypatch):
+    def fake_run(argv, *, check=False, timeout=None):
+        raise subprocess.CalledProcessError(returncode=5, cmd=argv)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as exc:
+        _run_preflight_step("veritabani migration'i", ["alembic", "upgrade", "head"])
+    assert "migration" in str(exc.value)
+    assert "5" in str(exc.value)
+
+
+def test_preflight_step_raises_on_timeout(monkeypatch):
+    def fake_run(argv, *, check=False, timeout=None):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as exc:
+        _run_preflight_step("veritabani migration'i", ["alembic", "upgrade", "head"])
+    assert "zaman asimina" in str(exc.value)
+
+
+# --- main(): port ONCE acilir, sonra on hazirlik --------------------------
+
+
+@pytest.fixture
+def _stub_preflight_env(monkeypatch):
+    # main() testlerini Render ortam degiskenlerinden yalitir.
+    monkeypatch.setattr(render_free_launcher, "_configure_render_origin", lambda: None)
+    monkeypatch.setattr(render_free_launcher, "_verify_public_port", lambda: None)
+
+
+def test_main_opens_public_port_before_preflight(_stub_preflight_env):
+    calls: list[str] = []
+
+    def fake_spawn(name: str, command: list[str]) -> FakeProcess:
+        calls.append(f"spawn:{name}")
+        # backend ilk poll'da olsun ki run() hemen donsun (sonsuz izleme yok).
+        return FakeProcess(die_on_poll=0 if name == "backend" else None, exit_code=1)
+
+    supervisor = Supervisor(build_service_commands(), spawn=fake_spawn, shutdown_timeout=0.1)
+
+    def fake_preflight() -> None:
+        calls.append("preflight")
+
+    main(supervisor=supervisor, run_preflight=fake_preflight, install_signal_handlers=False)
+
+    # nginx (frontend) on hazirliktan ONCE baslar.
+    assert calls.index("spawn:frontend") < calls.index("preflight")
+    # backend/worker/analyzer on hazirliktan SONRA baslar.
+    for service in ("backend", "worker", "analyzer"):
+        assert calls.index("preflight") < calls.index(f"spawn:{service}")
+
+
+def test_main_starts_nginx_exactly_once(_stub_preflight_env):
+    counts: dict[str, int] = {}
+
+    def fake_spawn(name: str, command: list[str]) -> FakeProcess:
+        counts[name] = counts.get(name, 0) + 1
+        return FakeProcess(die_on_poll=0 if name == "backend" else None, exit_code=1)
+
+    supervisor = Supervisor(build_service_commands(), spawn=fake_spawn, shutdown_timeout=0.1)
+    main(supervisor=supervisor, run_preflight=lambda: None, install_signal_handlers=False)
+
+    assert counts["frontend"] == 1
+
+
+def test_main_success_monitors_four_services(_stub_preflight_env):
+    procs: dict[str, FakeProcess] = {}
+
+    def fake_spawn(name: str, command: list[str]) -> FakeProcess:
+        proc = FakeProcess(die_on_poll=0 if name == "backend" else None, exit_code=2)
+        procs[name] = proc
+        return proc
+
+    supervisor = Supervisor(build_service_commands(), spawn=fake_spawn, shutdown_timeout=0.1)
+    code = main(supervisor=supervisor, run_preflight=lambda: None, install_signal_handlers=False)
+
+    # Dort servis de baslatilip izlenir; backend olunce fail-closed (code propagate).
+    assert set(supervisor.children) == {"backend", "worker", "analyzer", "frontend"}
+    assert code == 2
+    assert procs["frontend"].terminate_calls == 1  # nginx da supervisor'ca kapatildi
+
+
+def test_main_shuts_down_nginx_when_preflight_fails(_stub_preflight_env):
+    procs: dict[str, FakeProcess] = {}
+
+    def fake_spawn(name: str, command: list[str]) -> FakeProcess:
+        proc = FakeProcess()
+        procs[name] = proc
+        return proc
+
+    supervisor = Supervisor(build_service_commands(), spawn=fake_spawn, shutdown_timeout=0.1)
+
+    def failing_preflight() -> None:
+        raise RuntimeError("migration patladi")
+
+    code = main(
+        supervisor=supervisor, run_preflight=failing_preflight, install_signal_handlers=False
+    )
+
+    assert code == 1
+    # Yalnizca nginx baslatilmisti ve kapatildi; kalan servisler hic baslatilmadi.
+    assert set(procs) == {"frontend"}
+    assert procs["frontend"].terminate_calls == 1
+
+
+def test_signal_terminates_all_children():
+    # signal=15 (SIGTERM) tum cocuklari kapatir. Gercek sinyal gondermek yerine
+    # kayitli handler dogrudan cagirilir (Windows/pytest'te tasinabilir).
+    procs: list[FakeProcess] = []
+
+    def fake_spawn(name: str, command: list[str]) -> FakeProcess:
+        proc = FakeProcess()
+        procs.append(proc)
+        return proc
+
+    supervisor = Supervisor(build_service_commands(), spawn=fake_spawn)
+    supervisor.start()
+
+    original = signal.getsignal(signal.SIGTERM)
+    try:
+        supervisor.install_signal_handlers()
+        handler = signal.getsignal(signal.SIGTERM)
+        assert callable(handler)
+        handler(signal.SIGTERM, None)  # signal=15
+    finally:
+        signal.signal(signal.SIGTERM, original)
+
+    assert supervisor.stopping is True
+    for proc in procs:
+        assert proc.terminate_calls == 1
