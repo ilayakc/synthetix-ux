@@ -16,6 +16,20 @@ isteğe bağlı bir AI açıklama/raporlama katmanıyla doğal dile çevirir.
 
 ---
 
+## Canlı uygulama
+
+- **Canlı demo:** https://synthetix-ux-ily.onrender.com/
+- **Depo:** https://github.com/ilayakc/synthetix-ux
+
+Ana sayfadaki **"Canlı demoyu incele"** düğmesi, parola gerektirmeden ayrı ve
+sınırlı bir demo hesabına oturum açar. Uygulama ücretsiz Render planında
+barındırıldığı için servis boştayken uykuya geçer; bu nedenle ilk istek
+(cold-start) birkaç on saniye sürebilir ve sayfa yanıt verene kadar geçici
+olarak 503 dönebilir. Ayrıntılı sınırlamalar için bkz.
+[Bilinen sınırlamalar](#bilinen-sınırlamalar).
+
+---
+
 ## İçindekiler
 
 - [Özellikler](#özellikler)
@@ -34,7 +48,9 @@ isteğe bağlı bir AI açıklama/raporlama katmanıyla doğal dile çevirir.
 - [Günlükler ve durdurma](#günlükler-ve-durdurma)
 - [Proje yapısı](#proje-yapısı)
 - [Dokümantasyon](#dokümantasyon)
+- [Bilinen sınırlamalar](#bilinen-sınırlamalar)
 - [Kapsam dışı](#kapsam-dışı)
+- [Lisans ve iletişim](#lisans-ve-iletişim)
 
 ---
 
@@ -382,6 +398,34 @@ synthetix-ux/
 
 ---
 
+## Bilinen sınırlamalar
+
+Bu, bir portföy/gösterim (showcase) dağıtımıdır; production SLA garantisi
+değildir:
+
+- **Ücretsiz Render planı ve cold-start.** Servis boştayken uykuya geçer;
+  ilk istek birkaç on saniye sürebilir ve uygulama uyanana kadar geçici 503
+  dönebilir. Sonraki istekler normal hızda yanıt verir.
+- **512 MB RAM sınırı.** Ölçülen bellek kullanımı nedeniyle ağır sayfalar tek
+  instance'ın belleğine sığmayabilir; bu yüzden canlı demoda analyzer
+  varsayılan olarak **lite (viewport tabanlı)** modda çalışır. Hafif/orta
+  ağırlıktaki sayfalar sorunsuz analiz edilir (bkz.
+  [docs/render-free.md](docs/render-free.md)).
+- **Bazı URL'ler analiz edilemeyebilir.** Bot korumalı, giriş duvarı arkasında,
+  aşırı ağır veya erişimi engellenmiş sayfalar pasif analyzer tarafından
+  okunamayabilir; bu beklenen bir sınırdır ve tüm ürünün çalışmadığı anlamına
+  gelmez.
+- **Sentetik sonuçlar.** Motor kalibre edilmemiş, deterministik bir heuristic
+  simülasyondur; **gerçek kullanıcı tıklaması, gerçek göz takibi verisi veya
+  gerçek insan davranışı üretmez** ve gerçek kullanılabilirlik/A-B testinin
+  yerine geçmez (bkz. [docs/scientific-integrity.md](docs/scientific-integrity.md)).
+- **AI katmanları ayrıca ücretlidir.** Render kaynakları ücretsiz olsa da AI
+  açıklama, AI etkileşim ısı haritası ve AI tasarım varyantı özellikleri gerçek
+  bir OpenAI API anahtarı gerektirir; anahtar yapılandırılmadığında bu özellikler
+  devre dışı kalır, ürünün geri kalanı çalışmaya devam eder.
+
+---
+
 ## Kapsam dışı
 
 Bu aşamada bulunmayanlar: Kafka, ChromaDB/RAG, serbest sohbet botu, ödeme
@@ -393,3 +437,15 @@ e-postası ve gerçek parola sıfırlama e-posta gönderimi altyapı olarak
 hazırdır ancak üretim e-posta sağlayıcısı bağlı değildir. AI katmanları
 varsayılan olarak harici bir sağlayıcıya bağlı değildir; hiçbir sentetik
 sonuç gerçek insan kullanıcı davranışı olarak sunulamaz.
+
+---
+
+## Lisans ve iletişim
+
+Bu depo bir portföy/gösterim projesi olarak paylaşılmaktadır. Ayrı bir açık
+kaynak lisansı (ör. LICENSE dosyası) tanımlanmamıştır; kod, inceleme ve
+değerlendirme amacıyla yayımlanmıştır. Kullanım veya işbirliği için lütfen
+iletişime geçin.
+
+- **GitHub:** [github.com/ilayakc](https://github.com/ilayakc)
+- **LinkedIn:** [linkedin.com/in/ilayda-akça](https://www.linkedin.com/in/ilayda-ak%C3%A7a-92291b3ab/)
