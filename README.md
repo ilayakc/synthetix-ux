@@ -311,12 +311,16 @@ değişkenleriyle başlangıç hesapları sağlanabilir.
   bkz. [docs/production.md](docs/production.md) ve `compose.prod.yaml`. Bu bir
   referans kurulumdur, gerçek bir SLA garantisi değildir.
 - **Render ücretsiz demo:** tek instance üzerinde nginx + React frontend +
-  FastAPI backend + `arq` worker, ayrı bir token korumalı analyzer, ücretsiz
-  PostgreSQL ve Redis-uyumlu Key Value ile sunum/değerlendirme amaçlı sıfır
-  maliyetli bir topoloji (`render.yaml`, `Dockerfile.render-free`). Kurulum
-  adımları ve ücretsiz plan sınırları için bkz.
-  [docs/render-free.md](docs/render-free.md). Render kaynakları ücretsiz olsa
-  da OpenAI API kullanımı ayrıca ücretlidir.
+  FastAPI backend + `arq` worker **ve** aynı container içinde loopback'te
+  (`127.0.0.1:8100`) çalışan Playwright analyzer; ücretsiz PostgreSQL ve
+  Redis-uyumlu Key Value ile sunum/değerlendirme amaçlı sıfır maliyetli bir
+  topoloji (`render.yaml`, `Dockerfile.render-free`). Toplam **yalnızca üç
+  Render kaynağı** vardır; analyzer ayrı bir web servisi değildir (ayrı servis
+  daha önce public edge kaynaklı HTTP 429'a yol açıyordu). Render ücretsiz
+  planı 512 MB RAM ile sınırlı olduğu için analyzer varsayılan olarak lite
+  (viewport tabanlı) modda çalışır. Kurulum adımları, sorun giderme ve ücretsiz
+  plan sınırları için bkz. [docs/render-free.md](docs/render-free.md). Render
+  kaynakları ücretsiz olsa da OpenAI API kullanımı ayrıca ücretlidir.
 
 ---
 
