@@ -44,3 +44,6 @@ Thumbs.db
 
 # --- Local backups (never committed) ---
 .local/
+
+# --- Local Claude Code settings (never committed) ---
+.claude/settings.local.json
