@@ -265,6 +265,137 @@ def test_memory_usage_fraction(monkeypatch):
     assert browser._memory_usage_fraction() is None
 
 
+# --- network_device_test: context kapanis dayanikliligi -----------------------
+#
+# Render production regresyonu: bir profil olculurken watchdog browser'i kapatir
+# (bellek koruma) veya Chromium context'i geri donusturur; ardindan `finally`
+# blogundaki `context.close()` "Target.disposeBrowserContext: Failed to find
+# context with id" PlaywrightError'i firlatirdi. Bu cleanup hatasi hem basarili
+# olcumu maskeliyor hem de except bloklariyla YAKALANMADIGI icin (finally'de
+# olusuyor) tum `analyze_device_network` istegini 502'ye dusuruyordu.
+
+
+class _FakeProfileAxeResult:
+    response = {"violations": []}
+
+
+class _FakeProfileAxe:
+    async def run(self, page, options):
+        return _FakeProfileAxeResult()
+
+
+class _FakeProfilePage:
+    def __init__(self, goto_exc=None):
+        self._goto_exc = goto_exc
+        self.goto_url = None
+
+    def set_default_navigation_timeout(self, _ms):
+        pass
+
+    def set_default_timeout(self, _ms):
+        pass
+
+    async def route(self, _pattern, _handler):
+        pass
+
+    async def goto(self, url, wait_until):
+        self.goto_url = url
+        if self._goto_exc is not None:
+            raise self._goto_exc
+
+    async def evaluate(self, _script):
+        return {
+            "dom_content_loaded_ms": 100.0,
+            "load_event_ms": 200.0,
+            "total_navigation_ms": 200.0,
+        }
+
+
+class _FakeProfileContext:
+    def __init__(self, *, close_exc=None, goto_exc=None):
+        self._close_exc = close_exc
+        self._goto_exc = goto_exc
+        self.close_calls = 0
+
+    async def new_page(self):
+        return _FakeProfilePage(goto_exc=self._goto_exc)
+
+    async def close(self):
+        self.close_calls += 1
+        if self._close_exc is not None:
+            raise self._close_exc
+
+
+class _FakeProfileBrowser:
+    def __init__(self, context):
+        self._context = context
+
+    async def new_context(self, **_options):
+        return self._context
+
+
+class _FakeValidated:
+    hostname = "example.com"
+    url = "https://example.com/"
+
+
+@pytest.mark.asyncio
+async def test_profile_context_close_failure_does_not_mask_success(monkeypatch):
+    """`context.close()` "Failed to find context with id" ile patlasa bile basarili
+    bir profil olcumu bozulmaz ve hata YUKARI SIZMAZ (tum endpoint 502 olmaz)."""
+
+    monkeypatch.setattr(browser, "Axe", _FakeProfileAxe)
+    close_error = browser.PlaywrightError(
+        "Protocol error (Target.disposeBrowserContext): Failed to find context with id"
+    )
+    context = _FakeProfileContext(close_exc=close_error)
+    fake_browser = _FakeProfileBrowser(context)
+    profile = browser.DEVICE_NETWORK_PROFILES["desktop_broadband"]
+
+    result = await browser._measure_device_network_profile(
+        fake_browser, _FakeValidated(), "desktop_broadband", profile
+    )
+
+    assert result.succeeded is True
+    assert result.profile_key == "desktop_broadband"
+    assert result.timings is not None
+    assert context.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_profile_context_close_failure_does_not_mask_prior_error(monkeypatch):
+    """Olcumun kendisi basarisiz olur VE ardindan `context.close()` de patlarsa,
+    cleanup hatasi asil (typed) profil hatasini maskelememelidir."""
+
+    monkeypatch.setattr(browser, "Axe", _FakeProfileAxe)
+    goto_error = browser.PlaywrightError("net::ERR_CONNECTION_RESET")
+    close_error = browser.PlaywrightError(
+        "Protocol error (Target.disposeBrowserContext): Failed to find context with id"
+    )
+    context = _FakeProfileContext(close_exc=close_error, goto_exc=goto_error)
+    fake_browser = _FakeProfileBrowser(context)
+    profile = browser.DEVICE_NETWORK_PROFILES["desktop_broadband"]
+
+    result = await browser._measure_device_network_profile(
+        fake_browser, _FakeValidated(), "desktop_broadband", profile
+    )
+
+    assert result.succeeded is False
+    assert "ERR_CONNECTION_RESET" in result.error
+    assert context.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_safe_close_swallows_target_not_found(caplog):
+    class _Boom:
+        async def close(self):
+            raise browser.PlaywrightError("Failed to find context with id")
+
+    # Hicbir sey firlatmamali; yalnizca warning loglanmali.
+    await browser._safe_close(_Boom(), "context")
+    await browser._safe_close(None, "context")  # idempotent: None sessizce yok sayilir
+
+
 def test_build_snapshot_includes_analysis_mode_metadata():
     features = {
         "title": "Test",

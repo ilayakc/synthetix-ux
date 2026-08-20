@@ -104,14 +104,30 @@ def _chromium_launch_args(host_rule: str) -> list[str]:
     ]
 
 
-async def _safe_close_browser(browser) -> None:
-    """Browser'i kapatir; kapanis sirasindaki hatalar (zaten cokmus/kapanmis
-    hedef) asil analiz hatasini MASKELEMEMELIDIR - yalnizca loglanir."""
+async def _safe_close(closeable, label: str) -> None:
+    """Bir Playwright kaynagini (browser / context / page) idempotent ve guvenli
+    kapatir.
 
+    Kapanis sirasindaki hatalar CLEANUP hatasidir; asil analiz/olcum sonucunu ya
+    da o an islenen onceki hatayi MASKELEMEMELIDIR - yalnizca warning olarak
+    loglanir. Tipik ornek: hedef zaten kapanmis/kaybolmus
+    (``Target.disposeBrowserContext: Failed to find context with id`` -
+    ör. watchdog browser'i kapattiktan sonra context kapatilmaya calisildiginda
+    veya Chromium context'i geri donusturduğunde). `None` kaynak sessizce yok
+    sayilir (idempotent)."""
+
+    if closeable is None:
+        return
     try:
-        await browser.close()
+        await closeable.close()
     except Exception as exc:  # noqa: BLE001 - cleanup hatasi bastirilir
-        logger.warning("browser.close() cleanup sirasinda hata (yok sayildi): %s", exc)
+        logger.warning("%s.close() cleanup sirasinda yok sayildi: %s", label, exc)
+
+
+async def _safe_close_browser(browser) -> None:
+    """Browser icin ortak safe-close (bkz. `_safe_close`)."""
+
+    await _safe_close(browser, "browser")
 
 
 EMPTY_PAGE_SNAPSHOT_CODE = "empty_page_snapshot"
@@ -982,7 +998,7 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
                     length,
                     settings.max_response_bytes,
                 )
-                await context.close()
+                await _safe_close(context, "context")
                 return
 
             oversized_subresources[resource_type] = oversized_subresources.get(resource_type, 0) + 1
@@ -1094,7 +1110,7 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
     try:
         features = await _extract_features_with_bounded_readiness(page, capture_height)
     except AnalysisError:
-        await context.close()
+        await _safe_close(context, "context")
         raise
     screenshot_bytes = await page.screenshot(
         type="png",
@@ -1103,7 +1119,7 @@ async def _run_analysis(browser, validated) -> PageFeatureSnapshotV1:
     )
     axe_response = await _run_accessibility_precheck(page, warnings)
 
-    await context.close()
+    await _safe_close(context, "context")
 
     if settings.lite_mode:
         warnings.append(
@@ -1277,8 +1293,11 @@ async def _measure_device_network_profile(
             error=str(exc),
         )
     finally:
-        if context is not None:
-            await context.close()
+        # Idempotent + guvenli kapanis: context zaten kapanmis/kaybolmussa
+        # (ör. watchdog browser'i kapatti -> "Failed to find context with id")
+        # bu bir cleanup hatasidir; yukaridaki basarili olcumu ya da islenen
+        # profil hatasini MASKELEMEMELI ve TUM istegi 502'ye dusurmemelidir.
+        await _safe_close(context, "context")
 
 
 async def analyze_device_network(url: str, profile_keys: list[str]) -> DeviceNetworkAnalysisResponse:
